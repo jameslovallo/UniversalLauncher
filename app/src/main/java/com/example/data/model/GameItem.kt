@@ -16,6 +16,7 @@ data class GameItem(
     val id: String,
     val title: String,
     val type: GameType,
+    val isGame: Boolean = true, // true -> Games Tab (Steam poster grid), false -> Apps Tab
     val packageName: String? = null,
     val activityName: String? = null,
     val launchUrl: String? = null,
@@ -36,7 +37,7 @@ data class GameItem(
     val displayCategory: String
         get() = when (type) {
             GameType.GEFORCE_NOW -> "GeForce NOW"
-            GameType.INSTALLED_APP -> "Installed App"
+            GameType.INSTALLED_APP -> if (isGame) "Android Game" else "Installed App"
             GameType.SHORTCUT -> "Shortcut"
             GameType.CUSTOM_CLOUD -> "Cloud Game"
         }

@@ -99,8 +99,11 @@ class ControllerManager(context: Context) : InputManager.InputDeviceListener {
             KeyEvent.KEYCODE_BUTTON_X -> ControllerAction.CUSTOMIZE_X
             KeyEvent.KEYCODE_BUTTON_Y -> ControllerAction.FAVORITE_Y
 
-            KeyEvent.KEYCODE_BUTTON_L1 -> ControllerAction.PREV_TAB_LB
-            KeyEvent.KEYCODE_BUTTON_R1 -> ControllerAction.NEXT_TAB_RB
+            KeyEvent.KEYCODE_BUTTON_L1,
+            KeyEvent.KEYCODE_BUTTON_L2 -> ControllerAction.PREV_TAB_LB
+
+            KeyEvent.KEYCODE_BUTTON_R1,
+            KeyEvent.KEYCODE_BUTTON_R2 -> ControllerAction.NEXT_TAB_RB
 
             KeyEvent.KEYCODE_BUTTON_START,
             KeyEvent.KEYCODE_MENU -> ControllerAction.MENU_START

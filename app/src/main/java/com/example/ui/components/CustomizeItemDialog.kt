@@ -10,7 +10,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -21,21 +20,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,8 +39,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,7 +54,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -73,38 +67,31 @@ import coil.request.ImageRequest
 import com.example.data.model.GameItem
 import com.example.data.service.ArtworkOption
 import com.example.data.service.SteamGridDbService
-import com.example.ui.theme.ElectricCyan
-import com.example.ui.theme.NeonGfnGreen
-import com.example.ui.theme.SlateBackground
-import com.example.ui.theme.SurfaceCard
-import com.example.ui.theme.SurfaceCardHighlight
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.VoidBlack
 import kotlinx.coroutines.launch
 
 @Composable
-fun ArtworkCustomizerDialog(
-    game: GameItem,
+fun CustomizeItemDialog(
+    item: GameItem,
     steamGridDbApiKey: String?,
-    onSaveArtwork: (posterUrl: String, heroUrl: String?, source: String) -> Unit,
+    onSave: (id: String, newTitle: String, newPosterUrl: String?, newIconUrl: String?) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var title by remember { mutableStateOf(item.title) }
+    var posterUrl by remember { mutableStateOf(item.posterUrl ?: item.iconUrl ?: "") }
     var selectedTab by remember { mutableIntStateOf(0) }
-    var currentPosterUrl by remember { mutableStateOf(game.posterUrl ?: "") }
-    var currentHeroUrl by remember { mutableStateOf(game.heroBannerUrl ?: "") }
-    var searchQuery by remember { mutableStateOf(game.title) }
+    var searchQuery by remember { mutableStateOf(item.title) }
     var customUrlInput by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<ArtworkOption>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
 
-    // Photo picker launcher for picking images from local folders/device gallery
+    // Local photo picker
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            currentPosterUrl = uri.toString()
+            posterUrl = uri.toString()
         }
     }
 
@@ -118,20 +105,17 @@ fun ArtworkCustomizerDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Box(
+        Surface(
             modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xDD000000))
-                .padding(16.dp),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth(0.92f)
+                .fillMaxHeight(0.88f)
+                .clip(RoundedCornerShape(28.dp)),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth(0.92f)
-                    .fillMaxHeight(0.90f)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(SlateBackground)
-                    .border(1.dp, SurfaceCardHighlight, RoundedCornerShape(16.dp))
+                    .fillMaxSize()
                     .padding(20.dp)
             ) {
                 // Header
@@ -142,66 +126,78 @@ fun ArtworkCustomizerDialog(
                 ) {
                     Column {
                         Text(
-                            text = "Customize Artwork",
+                            text = "Customize Name & Icon",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = game.title,
+                            text = item.displayCategory,
                             fontSize = 12.sp,
-                            color = NeonGfnGreen
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
-                    IconButton(onClick = onDismiss, modifier = Modifier.testTag("dialog_close_button")) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+
+                    IconButton(onClick = onDismiss, modifier = Modifier.testTag("customize_close_button")) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Source Tabs: SteamGridDB, Local Folders, Custom URL, Presets
-                val tabs = listOf("SteamGridDB API", "Local Photo / Storage", "Custom Image URL", "Presets")
+                // Title editing field
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Display Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("customize_name_input")
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Source Tabs: SteamGridDB, Local Storage, Custom URL, Presets
+                val tabs = listOf("SteamGridDB", "Local Photo", "Custom URL", "Presets")
                 ScrollableTabRow(
                     selectedTabIndex = selectedTab,
-                    containerColor = SurfaceCard,
-                    contentColor = NeonGfnGreen,
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    contentColor = MaterialTheme.colorScheme.primary,
                     edgePadding = 0.dp,
-                    modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                    divider = {},
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp))
                 ) {
-                    tabs.forEachIndexed { index, title ->
+                    tabs.forEachIndexed { index, label ->
                         Tab(
                             selected = selectedTab == index,
                             onClick = { selectedTab = index },
                             text = {
                                 Text(
-                                    text = title,
+                                    text = label,
                                     fontSize = 12.sp,
-                                    fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (selectedTab == index) NeonGfnGreen else TextSecondary
+                                    fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Medium
                                 )
                             }
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // Tab Content & Live Preview
+                // Picker and Live Preview Columns
                 Row(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Left Column: Source Picker
+                    // Left Column: Source Selection
                     Box(
                         modifier = Modifier
                             .weight(1.3f)
                             .fillMaxHeight()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(SurfaceCard)
-                            .padding(14.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                            .padding(12.dp)
                     ) {
                         when (selectedTab) {
                             0 -> { // SteamGridDB
@@ -213,15 +209,11 @@ fun ArtworkCustomizerDialog(
                                         OutlinedTextField(
                                             value = searchQuery,
                                             onValueChange = { searchQuery = it },
-                                            label = { Text("Game Title on SteamGridDB") },
+                                            placeholder = { Text("Search SteamGridDB...") },
                                             singleLine = true,
-                                            colors = OutlinedTextFieldDefaults.colors(
-                                                focusedBorderColor = ElectricCyan,
-                                                unfocusedBorderColor = SurfaceCardHighlight
-                                            ),
                                             modifier = Modifier.weight(1f)
                                         )
-                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         IconButton(onClick = {
                                             scope.launch {
                                                 isSearching = true
@@ -229,24 +221,15 @@ fun ArtworkCustomizerDialog(
                                                 isSearching = false
                                             }
                                         }) {
-                                            Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = ElectricCyan)
+                                            Icon(Icons.Default.Refresh, contentDescription = "Search", tint = MaterialTheme.colorScheme.primary)
                                         }
                                     }
 
                                     Spacer(modifier = Modifier.height(10.dp))
 
-                                    if (steamGridDbApiKey.isNullOrBlank()) {
-                                        Text(
-                                            text = "Tip: Add your free SteamGridDB API Key in Launcher Settings for live community grids.",
-                                            fontSize = 11.sp,
-                                            color = TextSecondary
-                                        )
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                    }
-
                                     if (isSearching) {
                                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                            CircularProgressIndicator(color = ElectricCyan)
+                                            CircularProgressIndicator()
                                         }
                                     } else {
                                         LazyVerticalGrid(
@@ -256,18 +239,16 @@ fun ArtworkCustomizerDialog(
                                             modifier = Modifier.fillMaxSize()
                                         ) {
                                             items(searchResults) { option ->
-                                                val isSelected = currentPosterUrl == option.fullUrl
+                                                val isSelected = posterUrl == option.fullUrl
                                                 Column(
                                                     modifier = Modifier
-                                                        .clip(RoundedCornerShape(8.dp))
+                                                        .clip(RoundedCornerShape(10.dp))
                                                         .border(
-                                                            width = if (isSelected) 2.dp else 1.dp,
-                                                            color = if (isSelected) NeonGfnGreen else Color.Transparent,
-                                                            shape = RoundedCornerShape(8.dp)
+                                                            width = if (isSelected) 2.5.dp else 1.dp,
+                                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                                            shape = RoundedCornerShape(10.dp)
                                                         )
-                                                        .clickable {
-                                                            currentPosterUrl = option.fullUrl
-                                                        }
+                                                        .clickable { posterUrl = option.fullUrl }
                                                 ) {
                                                     AsyncImage(
                                                         model = option.thumbnailUrl,
@@ -276,14 +257,7 @@ fun ArtworkCustomizerDialog(
                                                         modifier = Modifier
                                                             .fillMaxWidth()
                                                             .aspectRatio(2f / 3f)
-                                                            .clip(RoundedCornerShape(8.dp))
-                                                    )
-                                                    Text(
-                                                        text = option.title,
-                                                        fontSize = 10.sp,
-                                                        color = Color.White,
-                                                        maxLines = 1,
-                                                        modifier = Modifier.padding(2.dp)
+                                                            .clip(RoundedCornerShape(10.dp))
                                                     )
                                                 }
                                             }
@@ -291,7 +265,7 @@ fun ArtworkCustomizerDialog(
                                     }
                                 }
                             }
-                            1 -> { // Local Photo / Storage
+                            1 -> { // Local Photo
                                 Column(
                                     modifier = Modifier.fillMaxSize(),
                                     verticalArrangement = Arrangement.Center,
@@ -300,70 +274,53 @@ fun ArtworkCustomizerDialog(
                                     Icon(
                                         imageVector = Icons.Default.Folder,
                                         contentDescription = null,
-                                        tint = NeonGfnGreen,
+                                        tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(54.dp)
                                     )
-                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Spacer(modifier = Modifier.height(10.dp))
                                     Text(
-                                        text = "Pick Local Poster or Icon",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
+                                        text = "Pick Local Image",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = "Select any picture from device storage, downloads, or gallery.",
-                                        fontSize = 12.sp,
-                                        color = TextSecondary,
-                                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
+                                        text = "Select any picture from device storage",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Spacer(modifier = Modifier.height(14.dp))
                                     Button(
                                         onClick = {
                                             photoPickerLauncher.launch(
                                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                             )
-                                        },
-                                        colors = ButtonDefaults.buttonColors(containerColor = NeonGfnGreen),
-                                        shape = RoundedCornerShape(8.dp)
+                                        }
                                     ) {
-                                        Icon(Icons.Default.Image, contentDescription = null, tint = Color.Black)
+                                        Icon(Icons.Default.Image, contentDescription = null)
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Browse Local Photos", color = Color.Black, fontWeight = FontWeight.Bold)
+                                        Text("Browse Gallery")
                                     }
                                 }
                             }
                             2 -> { // Custom URL
                                 Column(modifier = Modifier.fillMaxSize()) {
-                                    Text(
-                                        text = "Enter Image URL (PNG, JPG, WebP)",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = Color.White
-                                    )
-                                    Spacer(modifier = Modifier.height(10.dp))
                                     OutlinedTextField(
                                         value = customUrlInput,
                                         onValueChange = { customUrlInput = it },
                                         label = { Text("https://example.com/poster.jpg") },
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedBorderColor = NeonGfnGreen,
-                                            unfocusedBorderColor = SurfaceCardHighlight
-                                        ),
                                         modifier = Modifier.fillMaxWidth()
                                     )
-                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Spacer(modifier = Modifier.height(10.dp))
                                     Button(
                                         onClick = {
                                             if (customUrlInput.isNotBlank()) {
-                                                currentPosterUrl = customUrlInput.trim()
+                                                posterUrl = customUrlInput.trim()
                                             }
-                                        },
-                                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
-                                        shape = RoundedCornerShape(8.dp)
+                                        }
                                     ) {
-                                        Icon(Icons.Default.Link, contentDescription = null, tint = Color.Black)
+                                        Icon(Icons.Default.Link, contentDescription = null)
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Apply Image URL", color = Color.Black, fontWeight = FontWeight.Bold)
+                                        Text("Apply Image URL")
                                     }
                                 }
                             }
@@ -375,37 +332,23 @@ fun ArtworkCustomizerDialog(
                                     modifier = Modifier.fillMaxSize()
                                 ) {
                                     items(SteamGridDbService.PRESET_ARTWORKS) { preset ->
-                                        Column(
+                                        AsyncImage(
+                                            model = preset.thumbnailUrl,
+                                            contentDescription = preset.title,
+                                            contentScale = ContentScale.Crop,
                                             modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .clickable {
-                                                    currentPosterUrl = preset.fullUrl
-                                                }
-                                        ) {
-                                            AsyncImage(
-                                                model = preset.thumbnailUrl,
-                                                contentDescription = preset.title,
-                                                contentScale = ContentScale.Crop,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .aspectRatio(2f / 3f)
-                                                    .clip(RoundedCornerShape(8.dp))
-                                            )
-                                            Text(
-                                                text = preset.title,
-                                                fontSize = 10.sp,
-                                                color = Color.White,
-                                                maxLines = 1,
-                                                modifier = Modifier.padding(2.dp)
-                                            )
-                                        }
+                                                .fillMaxWidth()
+                                                .aspectRatio(2f / 3f)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .clickable { posterUrl = preset.fullUrl }
+                                        )
                                     }
                                 }
                             }
                         }
                     }
 
-                    // Right Column: Live Poster & Hero Preview
+                    // Right Column: Live Preview & Save
                     Column(
                         modifier = Modifier
                             .weight(0.7f)
@@ -413,69 +356,51 @@ fun ArtworkCustomizerDialog(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "Live Poster Preview",
+                            text = "Live Preview",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = TextSecondary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Box(
                             modifier = Modifier
-                                .width(130.dp)
-                                .aspectRatio(2f / 3f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .border(2.dp, NeonGfnGreen, RoundedCornerShape(12.dp))
-                                .background(VoidBlack)
+                                .width(120.dp)
+                                .aspectRatio(if (item.isGame) 2f / 3f else 1f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(16.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
                         ) {
-                            if (currentPosterUrl.isNotBlank()) {
+                            if (posterUrl.isNotBlank()) {
                                 AsyncImage(
-                                    model = currentPosterUrl,
-                                    contentDescription = "Poster preview",
+                                    model = posterUrl,
+                                    contentDescription = "Preview",
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             } else {
-                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.Image, contentDescription = null, tint = TextSecondary)
-                                }
+                                Icon(Icons.Default.Image, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
 
                         Spacer(modifier = Modifier.weight(1f))
 
-                        // Revert to original GeForce NOW poster
-                        OutlinedButton(
-                            onClick = {
-                                currentPosterUrl = game.posterUrl ?: ""
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Reset to GFN Default", fontSize = 11.sp, color = TextSecondary)
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Save Artwork Button
                         Button(
                             onClick = {
-                                val source = when (selectedTab) {
-                                    0 -> "STEAMGRIDDB"
-                                    1 -> "LOCAL"
-                                    2 -> "CUSTOM_URL"
-                                    else -> "GFN"
-                                }
-                                onSaveArtwork(currentPosterUrl, currentHeroUrl.ifBlank { null }, source)
-                                onDismiss()
+                                onSave(
+                                    item.id,
+                                    title.trim().ifBlank { item.title },
+                                    if (item.isGame) posterUrl.ifBlank { null } else item.posterUrl,
+                                    if (!item.isGame) posterUrl.ifBlank { null } else item.iconUrl
+                                )
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = NeonGfnGreen),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth().testTag("save_artwork_button")
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("customize_save_button")
                         ) {
-                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.Black)
+                            Icon(Icons.Default.Check, contentDescription = null)
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Save Artwork", color = Color.Black, fontWeight = FontWeight.Bold)
+                            Text("Save", fontWeight = FontWeight.Bold)
                         }
                     }
                 }

@@ -4,8 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,67 +13,52 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.ScrollableTabRow
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.GameItem
-import com.example.ui.components.AddShortcutDialog
-import com.example.ui.components.ArtworkCustomizerDialog
-import com.example.ui.components.ConsoleTopBar
-import com.example.ui.components.ControllerActionBar
-import com.example.ui.components.ControllerKeyBadge
-import com.example.ui.components.GamePosterCard
-import com.example.ui.components.HeroBanner
-import com.example.ui.components.LauncherSettingsDialog
-import com.example.ui.theme.ElectricCyan
-import com.example.ui.theme.NeonGfnGreen
-import com.example.ui.theme.SurfaceCard
-import com.example.ui.theme.SurfaceCardHighlight
-import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.VoidBlack
-import com.example.ui.viewmodel.LauncherCategory
+import com.example.ui.components.AddContentModal
+import com.example.ui.components.AppIconCard
+import com.example.ui.components.CustomizeItemDialog
+import com.example.ui.components.ItemContextMenuSheet
+import com.example.ui.components.SettingsModal
+import com.example.ui.components.SteamGamePosterCard
+import com.example.ui.components.TopNavBar
 import com.example.ui.viewmodel.LauncherViewModel
+import com.example.ui.viewmodel.MainLibraryTab
 import kotlinx.coroutines.launch
 
 @Composable
@@ -83,252 +66,291 @@ fun DashboardScreen(
     viewModel: LauncherViewModel,
     modifier: Modifier = Modifier
 ) {
-    val filteredGames by viewModel.filteredGames.collectAsStateWithLifecycle()
-    val allGames by viewModel.allGames.collectAsStateWithLifecycle()
-    val selectedCategory by viewModel.selectedCategory.collectAsStateWithLifecycle()
+    val currentTab by viewModel.currentTab.collectAsStateWithLifecycle()
+    val gamesList by viewModel.gamesList.collectAsStateWithLifecycle()
+    val appsList by viewModel.appsList.collectAsStateWithLifecycle()
+    val installedApps by viewModel.installedApps.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
-    val focusedGameId by viewModel.focusedGameId.collectAsStateWithLifecycle()
-    val controllerState by viewModel.controllerManager.controllerState.collectAsStateWithLifecycle()
+    val focusedItemId by viewModel.focusedItemId.collectAsStateWithLifecycle()
 
-    val customizingGame by viewModel.customizingGame.collectAsStateWithLifecycle()
-    val showAddDialog by viewModel.showAddShortcutDialog.collectAsStateWithLifecycle()
-    val showSettingsDialog by viewModel.showSettingsDialog.collectAsStateWithLifecycle()
-    val showSearchDialog by viewModel.showSearchDialog.collectAsStateWithLifecycle()
+    val contextMenuItem by viewModel.contextMenuItem.collectAsStateWithLifecycle()
+    val editingItem by viewModel.editingItem.collectAsStateWithLifecycle()
+    val showAddModal by viewModel.showAddModal.collectAsStateWithLifecycle()
+    val addModalSubView by viewModel.addModalSubView.collectAsStateWithLifecycle()
+    val showSettingsModal by viewModel.showSettingsModal.collectAsStateWithLifecycle()
+
+    val iconShape by viewModel.iconShape.collectAsStateWithLifecycle()
+    val useThemedIcons by viewModel.useThemedIcons.collectAsStateWithLifecycle()
     val steamGridDbApiKey by viewModel.steamGridDbApiKey.collectAsStateWithLifecycle()
+
+    var showSearchBar by remember { mutableStateOf(false) }
 
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
 
-    // Determine current focused game (or first game in filtered list)
-    val currentFocusedGame = filteredGames.find { it.id == focusedGameId } ?: filteredGames.firstOrNull()
+    // Filter current list by search query if any
+    val activeList = if (currentTab == MainLibraryTab.GAMES) gamesList else appsList
+    val displayList = if (searchQuery.isBlank()) activeList else activeList.filter {
+        it.title.contains(searchQuery, ignoreCase = true) || it.genre.contains(searchQuery, ignoreCase = true)
+    }
 
-    // When focused game changes via controller, ensure it is scrolled into view
-    LaunchedEffect(focusedGameId) {
-        if (focusedGameId != null) {
-            val index = filteredGames.indexOfFirst { it.id == focusedGameId }
-            if (index >= 0) {
-                scope.launch {
-                    gridState.animateScrollToItem(index)
-                }
+    // Scroll focused item into view when navigating with controller
+    LaunchedEffect(focusedItemId) {
+        if (focusedItemId != null) {
+            val idx = displayList.indexOfFirst { it.id == focusedItemId }
+            if (idx >= 0) {
+                scope.launch { gridState.animateScrollToItem(idx) }
             }
         }
     }
 
-    // Set initial focused game if none selected
-    LaunchedEffect(filteredGames) {
-        if (focusedGameId == null && filteredGames.isNotEmpty()) {
-            viewModel.setFocusedGame(filteredGames.first().id)
-        }
-    }
-
-    Box(modifier = modifier.fillMaxSize().background(VoidBlack)) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // System Top Bar
-            ConsoleTopBar(
-                controllerState = controllerState,
-                isLauncherDefault = false,
-                onOpenSearch = { viewModel.openSearchDialog() },
-                onOpenSettings = { viewModel.openSettingsDialog() },
-                onAddShortcut = { viewModel.openAddShortcutDialog() },
-                onSyncLibrary = { viewModel.syncGfnCatalog() },
-                modifier = Modifier.statusBarsPadding()
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+        ) {
+            // Top Navigation Bar (+ Icon Left, Games/Apps Center, Settings Gear Right)
+            TopNavBar(
+                currentTab = currentTab,
+                gamesCount = gamesList.size,
+                appsCount = appsList.size,
+                onTabSelected = { viewModel.setTab(it) },
+                onOpenAddModal = { viewModel.openAddModal() },
+                onOpenSettings = { viewModel.openSettingsModal() }
             )
 
-            // Dynamic Hero Banner with ambient game backdrop
-            HeroBanner(
-                game = currentFocusedGame,
-                onPlay = { currentFocusedGame?.let { viewModel.launchGame(it) } },
-                onCustomizeArtwork = { currentFocusedGame?.let { viewModel.openArtworkCustomizer(it) } },
-                onToggleFavorite = { currentFocusedGame?.let { viewModel.toggleFavorite(it) } }
-            )
-
-            // Category Filter Tabs with Controller Bumper Badges [LB] and [RB]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ControllerKeyBadge(label = "LB", bgColor = Color(0xFF1E293B), textColor = ElectricCyan)
-                Spacer(modifier = Modifier.width(8.dp))
-
-                val categories = LauncherCategory.values()
-                ScrollableTabRow(
-                    selectedTabIndex = categories.indexOf(selectedCategory),
-                    containerColor = Color.Transparent,
-                    contentColor = NeonGfnGreen,
-                    edgePadding = 0.dp,
-                    divider = {},
-                    modifier = Modifier.weight(1f)
-                ) {
-                    categories.forEach { category ->
-                        val isSelected = selectedCategory == category
-                        Tab(
-                            selected = isSelected,
-                            onClick = { viewModel.selectCategory(category) },
-                            text = {
-                                Text(
-                                    text = category.label,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) NeonGfnGreen else TextSecondary
-                                )
-                            }
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-                ControllerKeyBadge(label = "RB", bgColor = Color(0xFF1E293B), textColor = ElectricCyan)
-            }
-
-            // Search Filter Bar (if searching)
-            AnimatedVisibility(visible = showSearchDialog || searchQuery.isNotEmpty()) {
+            // Optional Search Bar
+            AnimatedVisibility(visible = showSearchBar || searchQuery.isNotEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 4.dp),
+                        .padding(horizontal = 20.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { viewModel.setSearchQuery(it) },
-                        placeholder = { Text("Search GeForce NOW titles, installed apps, genres...") },
-                        leadingIcon = {
-                            Icon(Icons.Default.Search, contentDescription = null, tint = NeonGfnGreen)
+                        placeholder = {
+                            Text(if (currentTab == MainLibraryTab.GAMES) "Search games & cloud titles..." else "Search installed apps...")
                         },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                         trailingIcon = {
                             if (searchQuery.isNotEmpty()) {
                                 IconButton(onClick = { viewModel.setSearchQuery("") }) {
-                                    Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color.White)
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear search")
                                 }
                             }
                         },
                         singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = NeonGfnGreen,
-                            unfocusedBorderColor = SurfaceCardHighlight
-                        ),
-                        modifier = Modifier.fillMaxWidth().testTag("dashboard_search_input")
+                        modifier = Modifier.fillMaxWidth().testTag("search_text_input")
                     )
                 }
             }
 
-            // Game Posters Grid
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                if (filteredGames.isEmpty()) {
-                    // Empty state
-                    Column(
-                        modifier = Modifier.fillMaxSize().padding(32.dp),
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.SportsEsports,
-                            contentDescription = null,
-                            tint = TextMuted,
-                            modifier = Modifier.size(56.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = if (searchQuery.isNotEmpty()) "No games matching \"$searchQuery\"" else "No titles in this section",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Sync GeForce NOW titles or add custom shortcuts to get started.",
-                            fontSize = 12.sp,
-                            color = TextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = { viewModel.syncGfnCatalog() },
-                                colors = ButtonDefaults.buttonColors(containerColor = NeonGfnGreen)
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.Black)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Sync GeForce NOW", color = Color.Black, fontWeight = FontWeight.Bold)
-                            }
-                            Button(
-                                onClick = { viewModel.openAddShortcutDialog() },
-                                colors = ButtonDefaults.buttonColors(containerColor = SurfaceCard)
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = null, tint = Color.White)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Add Shortcut", color = Color.White)
+            // Main Content Area: Responsive Grid (Games: Steam Poster Grid, Apps: App Icon Grid)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                if (displayList.isEmpty()) {
+                    EmptyLibraryState(
+                        isGamesTab = currentTab == MainLibraryTab.GAMES,
+                        searchQuery = searchQuery,
+                        onAddClicked = { viewModel.openAddModal() }
+                    )
+                } else {
+                    if (currentTab == MainLibraryTab.GAMES) {
+                        // Games View: Steam Poster Aspect Ratio (2:3)
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = 135.dp),
+                            state = gridState,
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .navigationBarsPadding()
+                                .testTag("games_poster_grid")
+                        ) {
+                            items(displayList, key = { it.id }) { game ->
+                                SteamGamePosterCard(
+                                    game = game,
+                                    isFocused = game.id == focusedItemId,
+                                    onClick = {
+                                        viewModel.setFocusedItem(game.id)
+                                        viewModel.launchItem(game)
+                                    },
+                                    onLongClick = {
+                                        viewModel.openContextMenu(game)
+                                    }
+                                )
                             }
                         }
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 135.dp),
-                        state = gridState,
-                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        modifier = Modifier.fillMaxSize().testTag("games_poster_grid")
-                    ) {
-                        items(filteredGames, key = { it.id }) { game ->
-                            val isFocused = game.id == focusedGameId
-                            GamePosterCard(
-                                game = game,
-                                isFocused = isFocused,
-                                onClick = {
-                                    if (isFocused) {
-                                        viewModel.launchGame(game)
-                                    } else {
-                                        viewModel.setFocusedGame(game.id)
+                    } else {
+                        // Apps View: App Icons Grid
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = 80.dp),
+                            state = gridState,
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .navigationBarsPadding()
+                                .testTag("apps_icon_grid")
+                        ) {
+                            items(displayList, key = { it.id }) { app ->
+                                AppIconCard(
+                                    app = app,
+                                    iconShape = iconShape,
+                                    useThemedIcons = useThemedIcons,
+                                    isFocused = app.id == focusedItemId,
+                                    onClick = {
+                                        viewModel.setFocusedItem(app.id)
+                                        viewModel.launchItem(app)
+                                    },
+                                    onLongClick = {
+                                        viewModel.openContextMenu(app)
                                     }
-                                },
-                                onCustomizeArtwork = {
-                                    viewModel.openArtworkCustomizer(game)
-                                },
-                                onToggleFavorite = {
-                                    viewModel.toggleFavorite(game)
-                                }
-                            )
+                                )
+                            }
                         }
                     }
                 }
             }
-
-            // Bottom Controller Action Guide Bar
-            ControllerActionBar()
         }
 
-        // Dialogs
-        if (customizingGame != null) {
-            ArtworkCustomizerDialog(
-                game = customizingGame!!,
-                steamGridDbApiKey = steamGridDbApiKey,
-                onSaveArtwork = { posterUrl, heroUrl, source ->
-                    viewModel.saveArtwork(posterUrl, heroUrl, source)
+        // Context Menu Modal (Tap and Hold on any card)
+        if (contextMenuItem != null) {
+            ItemContextMenuSheet(
+                item = contextMenuItem!!,
+                onCustomize = { viewModel.openEditCustomizer(contextMenuItem!!) },
+                onMove = {
+                    if (contextMenuItem!!.isGame) {
+                        viewModel.moveItemToApps(contextMenuItem!!)
+                    } else {
+                        viewModel.moveItemToGames(contextMenuItem!!)
+                    }
                 },
-                onDismiss = { viewModel.closeArtworkCustomizer() }
+                onToggleFavorite = { viewModel.toggleFavorite(contextMenuItem!!) },
+                onLaunch = {
+                    val it = contextMenuItem!!
+                    viewModel.closeContextMenu()
+                    viewModel.launchItem(it)
+                },
+                onDelete = { viewModel.deleteItem(contextMenuItem!!) },
+                onDismiss = { viewModel.closeContextMenu() }
             )
         }
 
-        if (showAddDialog) {
-            AddShortcutDialog(
-                onAdd = { title, url, posterUrl, type ->
-                    viewModel.addCustomShortcut(title, url, posterUrl, type)
+        // Customize Name & Icon Dialog
+        if (editingItem != null) {
+            CustomizeItemDialog(
+                item = editingItem!!,
+                steamGridDbApiKey = steamGridDbApiKey,
+                onSave = { id, newTitle, newPoster, newIcon ->
+                    viewModel.saveItemCustomization(id, newTitle, newPoster, newIcon)
                 },
-                onDismiss = { viewModel.closeAddShortcutDialog() }
+                onDismiss = { viewModel.closeEditCustomizer() }
             )
         }
 
-        if (showSettingsDialog) {
-            LauncherSettingsDialog(
+        // Multi-Step Add Content Modal (+ Button)
+        if (showAddModal) {
+            AddContentModal(
+                subView = addModalSubView,
+                installedApps = installedApps,
+                iconShape = iconShape,
+                useThemedIcons = useThemedIcons,
+                onNavigateSubView = { viewModel.setAddModalSubView(it) },
+                onAddApp = { viewModel.addAppToGames(it) },
+                onAddShortcut = { title, url, poster -> viewModel.addCustomShortcutToGames(title, url, poster) },
+                onAddGfnGame = { viewModel.addGfnGameToGames(it) },
+                onDismiss = { viewModel.closeAddModal() }
+            )
+        }
+
+        // Settings Modal (Gear Icon)
+        if (showSettingsModal) {
+            SettingsModal(
+                iconShape = iconShape,
+                useThemedIcons = useThemedIcons,
                 steamGridDbApiKey = steamGridDbApiKey,
-                onSaveApiKey = { key -> viewModel.saveSteamGridDbApiKey(key) },
+                onSelectIconShape = { viewModel.setIconShape(it) },
+                onToggleThemedIcons = { viewModel.setUseThemedIcons(it) },
+                onSaveApiKey = { viewModel.saveSteamGridDbApiKey(it) },
                 onSetDefaultLauncher = { viewModel.openDefaultLauncherSettings() },
-                onResyncGfn = { viewModel.syncGfnCatalog() },
-                onResyncApps = { viewModel.syncInstalledApps() },
-                onDismiss = { viewModel.closeSettingsDialog() }
+                onSyncLibrary = { viewModel.syncLibrary() },
+                onDismiss = { viewModel.closeSettingsModal() }
             )
+        }
+    }
+}
+
+@Composable
+private fun EmptyLibraryState(
+    isGamesTab: Boolean,
+    searchQuery: String,
+    onAddClicked: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.SportsEsports,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(36.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = if (searchQuery.isNotBlank()) "No results matching \"$searchQuery\""
+            else if (isGamesTab) "Your Games Library is Empty"
+            else "No Applications Found",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = if (isGamesTab) "Tap the + button to add installed apps, shortcuts, or GeForce NOW games."
+            else "Sync installed apps or check app permissions.",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        if (isGamesTab) {
+            Spacer(modifier = Modifier.height(18.dp))
+            Button(
+                onClick = onAddClicked,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Add Content")
+            }
         }
     }
 }

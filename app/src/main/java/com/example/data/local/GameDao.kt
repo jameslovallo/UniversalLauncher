@@ -44,8 +44,17 @@ interface GameDao {
     @Query("UPDATE games SET posterUrl = :posterUrl, heroBannerUrl = :heroUrl, customArtworkSource = :source WHERE id = :id")
     suspend fun updateArtwork(id: String, posterUrl: String, heroUrl: String?, source: String)
 
+    @Query("UPDATE games SET isGame = :isGame WHERE id = :id")
+    suspend fun setIsGame(id: String, isGame: Boolean)
+
+    @Query("UPDATE games SET title = :title, posterUrl = :posterUrl, iconUrl = :iconUrl WHERE id = :id")
+    suspend fun updateTitleAndArtwork(id: String, title: String, posterUrl: String?, iconUrl: String?)
+
     @Query("DELETE FROM games WHERE id = :id")
     suspend fun deleteGameById(id: String)
+
+    @Query("DELETE FROM games WHERE id LIKE 'gfn_%' OR id IN ('shortcut_xbox_cloud', 'shortcut_steam_link')")
+    suspend fun deletePrePopulatedItems()
 
     @Query("SELECT COUNT(*) FROM games")
     suspend fun getCount(): Int

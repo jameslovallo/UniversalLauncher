@@ -51,11 +51,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.ElectricCyan
-import com.example.ui.theme.NeonGfnGreen
-import com.example.ui.theme.SlateBackground
-import com.example.ui.theme.SurfaceCard
-import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.ActiveGameSession
 import com.example.ui.viewmodel.LauncherViewModel
 import com.example.webview.GeForceNowWebView
@@ -111,13 +106,13 @@ fun GameSessionScreen(
                     .size(38.dp)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.75f))
-                    .border(1.dp, NeonGfnGreen.copy(alpha = 0.8f), CircleShape)
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.8f), CircleShape)
                     .testTag("session_menu_toggle")
             ) {
                 Icon(
                     imageVector = if (showHud) Icons.Default.Close else Icons.Default.Menu,
                     contentDescription = "Toggle Game HUD",
-                    tint = NeonGfnGreen,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -135,9 +130,9 @@ fun GameSessionScreen(
         ) {
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xE60F172A))
-                    .border(1.dp, Color(0xFF334155), RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
                     .padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -148,12 +143,12 @@ fun GameSessionScreen(
                         text = session.game.title,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         text = "GeForce NOW Cloud Stream",
                         fontSize = 10.sp,
-                        color = NeonGfnGreen
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
 
@@ -167,7 +162,7 @@ fun GameSessionScreen(
                     Icon(
                         imageVector = if (showTouchControls) Icons.Default.Visibility else Icons.Default.VisibilityOff,
                         contentDescription = "Toggle Virtual Controller",
-                        tint = if (showTouchControls) ElectricCyan else TextSecondary,
+                        tint = if (showTouchControls) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -175,13 +170,13 @@ fun GameSessionScreen(
                 // Exit Session Button
                 Button(
                     onClick = { showExitDialog = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.testTag("session_exit_button")
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = MaterialTheme.colorScheme.onError, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Exit to Dashboard", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("Exit to Dashboard", fontSize = 11.sp, color = MaterialTheme.colorScheme.onError, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -193,14 +188,14 @@ fun GameSessionScreen(
                 title = {
                     Text(
                         text = "Exit Game Session?",
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Bold
                     )
                 },
                 text = {
                     Text(
                         text = "Return to Nexus Launcher dashboard? Your cloud stream session on GeForce NOW will be closed.",
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 },
                 confirmButton = {
@@ -209,17 +204,17 @@ fun GameSessionScreen(
                             showExitDialog = false
                             onExitSession()
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626))
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     ) {
-                        Text("Exit Game", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text("Exit Game", color = MaterialTheme.colorScheme.onError, fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
                     OutlinedButton(onClick = { showExitDialog = false }) {
-                        Text("Keep Playing", color = Color.White)
+                        Text("Keep Playing", color = MaterialTheme.colorScheme.onSurface)
                     }
                 },
-                containerColor = SlateBackground
+                containerColor = MaterialTheme.colorScheme.surface
             )
         }
     }

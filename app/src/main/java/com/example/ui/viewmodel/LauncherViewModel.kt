@@ -7,25 +7,30 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
+import com.example.data.service.GeForceNowService
 import com.example.data.service.InstalledAppsManager
 import com.example.input.ControllerAction
 import com.example.input.ControllerManager
+import com.example.ui.theme.AppIconShape
 import com.example.webview.GamepadJsBridge
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-enum class LauncherCategory(val label: String) {
-    ALL("All Games & Apps"),
-    GEFORCE_NOW("GeForce NOW"),
-    INSTALLED_APPS("Installed Apps"),
-    FAVORITES("Favorites"),
-    RECENT("Recently Played"),
-    SHORTCUTS("Shortcuts")
+enum class MainLibraryTab {
+    GAMES,
+    APPS
+}
+
+enum class AddModalSubView {
+    OPTIONS,
+    ADD_APP,
+    ADD_SHORTCUT,
+    ADD_GFN
 }
 
 data class ActiveGameSession(
@@ -41,106 +46,123 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val prefs = application.getSharedPreferences("nexus_launcher_prefs", Context.MODE_PRIVATE)
 
-    private val _selectedCategory = MutableStateFlow(LauncherCategory.ALL)
-    val selectedCategory: StateFlow<LauncherCategory> = _selectedCategory.asStateFlow()
+    // Main Library Tab: Games vs Apps
+    private val _currentTab = MutableStateFlow(MainLibraryTab.GAMES)
+    val currentTab: StateFlow<MainLibraryTab> = _currentTab.asStateFlow()
 
+    // Search query for filtering within the active tab
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    private val _focusedGameId = MutableStateFlow<String?>(null)
-    val focusedGameId: StateFlow<String?> = _focusedGameId.asStateFlow()
+    // Focused item ID for controller navigation
+    private val _focusedItemId = MutableStateFlow<String?>(null)
+    val focusedItemId: StateFlow<String?> = _focusedItemId.asStateFlow()
 
+    // Fullscreen streaming session
     private val _activeSession = MutableStateFlow<ActiveGameSession?>(null)
     val activeSession: StateFlow<ActiveGameSession?> = _activeSession.asStateFlow()
 
     private val _showTouchControlsInSession = MutableStateFlow(true)
     val showTouchControlsInSession: StateFlow<Boolean> = _showTouchControlsInSession.asStateFlow()
 
-    private val _customizingGame = MutableStateFlow<GameItem?>(null)
-    val customizingGame: StateFlow<GameItem?> = _customizingGame.asStateFlow()
+    // Context Menu for Long Press
+    private val _contextMenuItem = MutableStateFlow<GameItem?>(null)
+    val contextMenuItem: StateFlow<GameItem?> = _contextMenuItem.asStateFlow()
 
-    private val _showAddShortcutDialog = MutableStateFlow(false)
-    val showAddShortcutDialog: StateFlow<Boolean> = _showAddShortcutDialog.asStateFlow()
+    // Item being customized (Name, Icon, Poster)
+    private val _editingItem = MutableStateFlow<GameItem?>(null)
+    val editingItem: StateFlow<GameItem?> = _editingItem.asStateFlow()
 
-    private val _showSettingsDialog = MutableStateFlow(false)
-    val showSettingsDialog: StateFlow<Boolean> = _showSettingsDialog.asStateFlow()
+    // Add Content Modal
+    private val _showAddModal = MutableStateFlow(false)
+    val showAddModal: StateFlow<Boolean> = _showAddModal.asStateFlow()
 
-    private val _showSearchDialog = MutableStateFlow(false)
-    val showSearchDialog: StateFlow<Boolean> = _showSearchDialog.asStateFlow()
+    private val _addModalSubView = MutableStateFlow(AddModalSubView.OPTIONS)
+    val addModalSubView: StateFlow<AddModalSubView> = _addModalSubView.asStateFlow()
+
+    // Settings Modal
+    private val _showSettingsModal = MutableStateFlow(false)
+    val showSettingsModal: StateFlow<Boolean> = _showSettingsModal.asStateFlow()
+
+    // Icon Customization Preferences
+    private val _iconShape = MutableStateFlow(
+        runCatching {
+            AppIconShape.valueOf(prefs.getString("icon_shape", AppIconShape.SQUIRCLE.name)!!)
+        }.getOrDefault(AppIconShape.SQUIRCLE)
+    )
+    val iconShape: StateFlow<AppIconShape> = _iconShape.asStateFlow()
+
+    private val _useThemedIcons = MutableStateFlow(prefs.getBoolean("themed_icons", false))
+    val useThemedIcons: StateFlow<Boolean> = _useThemedIcons.asStateFlow()
 
     private val _steamGridDbApiKey = MutableStateFlow(prefs.getString("sgdb_api_key", ""))
     val steamGridDbApiKey: StateFlow<String?> = _steamGridDbApiKey.asStateFlow()
 
-    val allGames: StateFlow<List<GameItem>> = repository.allGames
+    // Installed apps cache for the Add App modal
+    private val _installedApps = MutableStateFlow<List<GameItem>>(emptyList())
+    val installedApps: StateFlow<List<GameItem>> = _installedApps.asStateFlow()
+
+    // All library items from Room
+    val allItems: StateFlow<List<GameItem>> = repository.allGames
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val filteredGames: StateFlow<List<GameItem>> = combine(
-        allGames,
-        _selectedCategory,
-        _searchQuery
-    ) { games, category, query ->
-        val categoryFiltered = when (category) {
-            LauncherCategory.ALL -> games
-            LauncherCategory.GEFORCE_NOW -> games.filter { it.type == GameType.GEFORCE_NOW }
-            LauncherCategory.INSTALLED_APPS -> games.filter { it.type == GameType.INSTALLED_APP }
-            LauncherCategory.FAVORITES -> games.filter { it.isFavorite }
-            LauncherCategory.RECENT -> games.filter { it.lastPlayedTimestamp > 0 }.sortedByDescending { it.lastPlayedTimestamp }
-            LauncherCategory.SHORTCUTS -> games.filter { it.type == GameType.SHORTCUT || it.type == GameType.CUSTOM_CLOUD }
-        }
+    // Games Tab: poster grid (all cloud games, game apps, shortcuts)
+    val gamesList: StateFlow<List<GameItem>> = allItems.map { list ->
+        list.filter { it.isGame }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-        if (query.isBlank()) {
-            categoryFiltered
-        } else {
-            val q = query.lowercase().trim()
-            categoryFiltered.filter {
-                it.title.lowercase().contains(q) ||
-                        it.genre.lowercase().contains(q) ||
-                        it.tags.lowercase().contains(q) ||
-                        it.publisher.lowercase().contains(q)
-            }
-        }
+    // Apps Tab: all other applications using their icons
+    val appsList: StateFlow<List<GameItem>> = allItems.map { list ->
+        list.filter { !it.isGame }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         viewModelScope.launch {
             repository.initializeLibraryIfEmpty()
+            refreshInstalledAppsList()
         }
     }
 
-    fun selectCategory(category: LauncherCategory) {
-        _selectedCategory.value = category
+    private suspend fun refreshInstalledAppsList() {
+        val apps = installedAppsManager.getInstalledApps()
+        _installedApps.value = apps
+    }
+
+    fun setTab(tab: MainLibraryTab) {
+        _currentTab.value = tab
+        _searchQuery.value = ""
     }
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
     }
 
-    fun setFocusedGame(id: String) {
-        _focusedGameId.value = id
+    fun setFocusedItem(id: String) {
+        _focusedItemId.value = id
     }
 
-    fun launchGame(game: GameItem) {
+    fun launchItem(item: GameItem) {
         viewModelScope.launch {
-            repository.recordPlay(game.id)
+            repository.recordPlay(item.id)
         }
 
-        when (game.type) {
+        when (item.type) {
             GameType.INSTALLED_APP -> {
-                game.packageName?.let { pkg ->
+                item.packageName?.let { pkg ->
                     installedAppsManager.launchApp(pkg)
                 }
             }
             GameType.GEFORCE_NOW,
             GameType.CUSTOM_CLOUD -> {
-                val url = game.launchUrl ?: "https://play.geforcenow.com"
-                _activeSession.value = ActiveGameSession(game, url)
+                val url = item.launchUrl ?: "https://play.geforcenow.com"
+                _activeSession.value = ActiveGameSession(item, url)
             }
             GameType.SHORTCUT -> {
-                val url = game.launchUrl
+                val url = item.launchUrl
                 if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
-                    _activeSession.value = ActiveGameSession(game, url)
-                } else if (game.packageName != null) {
-                    installedAppsManager.launchApp(game.packageName)
+                    _activeSession.value = ActiveGameSession(item, url)
+                } else if (item.packageName != null) {
+                    installedAppsManager.launchApp(item.packageName)
                 }
             }
         }
@@ -154,55 +176,134 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _showTouchControlsInSession.value = !_showTouchControlsInSession.value
     }
 
-    fun openArtworkCustomizer(game: GameItem) {
-        _customizingGame.value = game
+    // Context Menu Handlers
+    fun openContextMenu(item: GameItem) {
+        _contextMenuItem.value = item
     }
 
-    fun closeArtworkCustomizer() {
-        _customizingGame.value = null
+    fun closeContextMenu() {
+        _contextMenuItem.value = null
     }
 
-    fun saveArtwork(posterUrl: String, heroUrl: String?, source: String) {
-        val game = _customizingGame.value ?: return
+    fun moveItemToApps(item: GameItem) {
         viewModelScope.launch {
-            repository.updateArtwork(game.id, posterUrl, heroUrl, source)
+            repository.setIsGame(item.id, false)
+            closeContextMenu()
         }
     }
 
-    fun toggleFavorite(game: GameItem) {
+    fun moveItemToGames(item: GameItem) {
         viewModelScope.launch {
-            repository.toggleFavorite(game.id, game.isFavorite)
+            repository.setIsGame(item.id, true)
+            closeContextMenu()
         }
     }
 
-    fun openAddShortcutDialog() {
-        _showAddShortcutDialog.value = true
-    }
-
-    fun closeAddShortcutDialog() {
-        _showAddShortcutDialog.value = false
-    }
-
-    fun addCustomShortcut(title: String, url: String, posterUrl: String?, type: GameType) {
+    fun toggleFavorite(item: GameItem) {
         viewModelScope.launch {
+            repository.toggleFavorite(item.id, item.isFavorite)
+        }
+    }
+
+    fun deleteItem(item: GameItem) {
+        viewModelScope.launch {
+            repository.deleteGame(item.id)
+            closeContextMenu()
+        }
+    }
+
+    // Customize Name and Icon
+    fun openEditCustomizer(item: GameItem) {
+        _contextMenuItem.value = null
+        _editingItem.value = item
+    }
+
+    fun closeEditCustomizer() {
+        _editingItem.value = null
+    }
+
+    fun saveItemCustomization(id: String, newTitle: String, newPosterUrl: String?, newIconUrl: String?) {
+        viewModelScope.launch {
+            repository.updateTitleAndArtwork(id, newTitle, newPosterUrl, newIconUrl)
+            _editingItem.value = null
+        }
+    }
+
+    // Add Modal Flow
+    fun openAddModal() {
+        _addModalSubView.value = AddModalSubView.OPTIONS
+        _showAddModal.value = true
+    }
+
+    fun setAddModalSubView(view: AddModalSubView) {
+        _addModalSubView.value = view
+    }
+
+    fun closeAddModal() {
+        _showAddModal.value = false
+        _addModalSubView.value = AddModalSubView.OPTIONS
+    }
+
+    fun addAppToGames(app: GameItem) {
+        viewModelScope.launch {
+            val existing = allItems.value.find { it.id == app.id }
+            if (existing != null) {
+                repository.setIsGame(app.id, true)
+            } else {
+                repository.addCustomShortcut(
+                    title = app.title,
+                    url = app.packageName ?: "",
+                    posterUrl = app.iconUrl,
+                    type = GameType.INSTALLED_APP
+                )
+            }
+            closeAddModal()
+            _currentTab.value = MainLibraryTab.GAMES
+        }
+    }
+
+    fun addCustomShortcutToGames(title: String, url: String, posterUrl: String?) {
+        viewModelScope.launch {
+            val type = if (url.contains("geforcenow.com") || url.contains("xbox.com/play")) {
+                GameType.CUSTOM_CLOUD
+            } else {
+                GameType.SHORTCUT
+            }
             repository.addCustomShortcut(title, url, posterUrl, type)
+            closeAddModal()
+            _currentTab.value = MainLibraryTab.GAMES
         }
     }
 
-    fun openSettingsDialog() {
-        _showSettingsDialog.value = true
+    fun addGfnGameToGames(gfnGame: GameItem) {
+        viewModelScope.launch {
+            val userGame = gfnGame.copy(
+                id = "user_gfn_${gfnGame.gfnCmsId ?: System.currentTimeMillis()}",
+                isGame = true
+            )
+            repository.insertUserGame(userGame)
+            closeAddModal()
+            _currentTab.value = MainLibraryTab.GAMES
+        }
     }
 
-    fun closeSettingsDialog() {
-        _showSettingsDialog.value = false
+    // Settings Modal
+    fun openSettingsModal() {
+        _showSettingsModal.value = true
     }
 
-    fun openSearchDialog() {
-        _showSearchDialog.value = true
+    fun closeSettingsModal() {
+        _showSettingsModal.value = false
     }
 
-    fun closeSearchDialog() {
-        _showSearchDialog.value = false
+    fun setIconShape(shape: AppIconShape) {
+        prefs.edit().putString("icon_shape", shape.name).apply()
+        _iconShape.value = shape
+    }
+
+    fun setUseThemedIcons(useThemed: Boolean) {
+        prefs.edit().putBoolean("themed_icons", useThemed).apply()
+        _useThemedIcons.value = useThemed
     }
 
     fun saveSteamGridDbApiKey(key: String) {
@@ -214,113 +315,85 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         installedAppsManager.openHomeSettings()
     }
 
-    fun syncGfnCatalog() {
+    fun syncLibrary() {
         viewModelScope.launch {
             repository.syncGfnCatalog()
-        }
-    }
-
-    fun syncInstalledApps() {
-        viewModelScope.launch {
             repository.syncInstalledApps()
+            refreshInstalledAppsList()
         }
     }
 
-    /**
-     * Dispatch controller action for navigation across items & tabs
-     */
+    // Controller navigation
     fun onControllerAction(action: ControllerAction): Boolean {
-        // If an active cloud game session is open, handle in-game shortcuts
+        // Forward to WebView during active session
         if (_activeSession.value != null) {
-            if (action == ControllerAction.QUICK_SELECT || action == ControllerAction.BACK_B) {
-                // Exit or quick pause menu handled in GameSessionScreen
-                return false
-            }
-            return false // Forward rest to WebView
+            return false
         }
 
-        // If a dialog is open, handle B to dismiss
-        if (_customizingGame.value != null || _showAddShortcutDialog.value || _showSettingsDialog.value || _showSearchDialog.value) {
+        // Close open modals on Back (B)
+        if (_showAddModal.value || _showSettingsModal.value || _editingItem.value != null || _contextMenuItem.value != null) {
             if (action == ControllerAction.BACK_B) {
-                _customizingGame.value = null
-                _showAddShortcutDialog.value = false
-                _showSettingsDialog.value = false
-                _showSearchDialog.value = false
+                if (_addModalSubView.value != AddModalSubView.OPTIONS && _showAddModal.value) {
+                    _addModalSubView.value = AddModalSubView.OPTIONS
+                    return true
+                }
+                closeAddModal()
+                closeSettingsModal()
+                closeEditCustomizer()
+                closeContextMenu()
                 return true
             }
             return false
         }
 
-        val currentList = filteredGames.value
-        if (currentList.isEmpty()) return false
-
-        val currentFocusedId = _focusedGameId.value
-        val currentIndex = currentList.indexOfFirst { it.id == currentFocusedId }.let { if (it >= 0) it else 0 }
-
+        // Bumper navigation: L2 / L1 switches to Games, R2 / R1 switches to Apps
         when (action) {
-            ControllerAction.RIGHT -> {
-                val nextIndex = (currentIndex + 1).coerceAtMost(currentList.lastIndex)
-                _focusedGameId.value = currentList[nextIndex].id
-                return true
-            }
-            ControllerAction.LEFT -> {
-                val prevIndex = (currentIndex - 1).coerceAtLeast(0)
-                _focusedGameId.value = currentList[prevIndex].id
-                return true
-            }
-            ControllerAction.DOWN -> {
-                // Jump 4 cards forward in grid
-                val nextIndex = (currentIndex + 4).coerceAtMost(currentList.lastIndex)
-                _focusedGameId.value = currentList[nextIndex].id
-                return true
-            }
-            ControllerAction.UP -> {
-                // Jump 4 cards back
-                val prevIndex = (currentIndex - 4).coerceAtLeast(0)
-                _focusedGameId.value = currentList[prevIndex].id
-                return true
-            }
-            ControllerAction.CONFIRM_A -> {
-                currentList.getOrNull(currentIndex)?.let { launchGame(it) }
-                return true
-            }
-            ControllerAction.CUSTOMIZE_X -> {
-                currentList.getOrNull(currentIndex)?.let { openArtworkCustomizer(it) }
-                return true
-            }
-            ControllerAction.FAVORITE_Y -> {
-                currentList.getOrNull(currentIndex)?.let { toggleFavorite(it) }
-                return true
-            }
             ControllerAction.PREV_TAB_LB -> {
-                val allCategories = LauncherCategory.values()
-                val currentCategoryIndex = allCategories.indexOf(_selectedCategory.value)
-                val newIndex = if (currentCategoryIndex > 0) currentCategoryIndex - 1 else allCategories.lastIndex
-                _selectedCategory.value = allCategories[newIndex]
+                setTab(MainLibraryTab.GAMES)
                 return true
             }
             ControllerAction.NEXT_TAB_RB -> {
-                val allCategories = LauncherCategory.values()
-                val currentCategoryIndex = allCategories.indexOf(_selectedCategory.value)
-                val newIndex = if (currentCategoryIndex < allCategories.lastIndex) currentCategoryIndex + 1 else 0
-                _selectedCategory.value = allCategories[newIndex]
+                setTab(MainLibraryTab.APPS)
+                return true
+            }
+            ControllerAction.CONFIRM_A -> {
+                val currentList = if (_currentTab.value == MainLibraryTab.GAMES) gamesList.value else appsList.value
+                val item = currentList.find { it.id == _focusedItemId.value } ?: currentList.firstOrNull()
+                item?.let { launchItem(it) }
+                return true
+            }
+            ControllerAction.CUSTOMIZE_X -> {
+                val currentList = if (_currentTab.value == MainLibraryTab.GAMES) gamesList.value else appsList.value
+                val item = currentList.find { it.id == _focusedItemId.value } ?: currentList.firstOrNull()
+                item?.let { openContextMenu(it) }
                 return true
             }
             ControllerAction.MENU_START -> {
-                _showSettingsDialog.value = true
+                openSettingsModal()
                 return true
             }
             ControllerAction.QUICK_SELECT -> {
-                _showSearchDialog.value = true
+                openAddModal()
                 return true
             }
-            ControllerAction.BACK_B -> {
-                if (_searchQuery.value.isNotEmpty()) {
-                    _searchQuery.value = ""
-                    return true
+            ControllerAction.RIGHT,
+            ControllerAction.LEFT,
+            ControllerAction.UP,
+            ControllerAction.DOWN -> {
+                val currentList = if (_currentTab.value == MainLibraryTab.GAMES) gamesList.value else appsList.value
+                if (currentList.isEmpty()) return false
+                val curIndex = currentList.indexOfFirst { it.id == _focusedItemId.value }.let { if (it >= 0) it else 0 }
+                val nextIndex = when (action) {
+                    ControllerAction.RIGHT -> (curIndex + 1).coerceAtMost(currentList.lastIndex)
+                    ControllerAction.LEFT -> (curIndex - 1).coerceAtLeast(0)
+                    ControllerAction.DOWN -> (curIndex + 4).coerceAtMost(currentList.lastIndex)
+                    ControllerAction.UP -> (curIndex - 4).coerceAtLeast(0)
+                    else -> curIndex
                 }
+                _focusedItemId.value = currentList[nextIndex].id
+                return true
             }
+            else -> return false
         }
-        return false
     }
 }

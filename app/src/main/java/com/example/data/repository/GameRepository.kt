@@ -22,41 +22,14 @@ class GameRepository(
     suspend fun getGameById(id: String): GameItem? = gameDao.getGameById(id)
 
     suspend fun initializeLibraryIfEmpty() {
-        val count = gameDao.getCount()
-        if (count == 0) {
-            // Seed with rich default GeForce NOW catalog
-            gameDao.insertGames(GeForceNowService.DEFAULT_GFN_LIBRARY)
-            // Add popular cloud shortcuts
-            val defaultShortcuts = listOf(
-                GameItem(
-                    id = "shortcut_xbox_cloud",
-                    title = "Xbox Cloud Gaming",
-                    type = GameType.SHORTCUT,
-                    launchUrl = "https://www.xbox.com/play",
-                    posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co5v43.jpg",
-                    heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/sc73e7.jpg",
-                    genre = "Cloud Gaming Service",
-                    publisher = "Microsoft",
-                    description = "Stream hundreds of console games on the cloud.",
-                    tags = "Xbox,Cloud,Streaming"
-                ),
-                GameItem(
-                    id = "shortcut_steam_link",
-                    title = "Steam Link",
-                    type = GameType.SHORTCUT,
-                    launchUrl = "steam://open/bigpicture",
-                    posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co2m37.jpg",
-                    heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/sc6q6w.jpg",
-                    genre = "Game Streaming",
-                    publisher = "Valve",
-                    description = "Stream games directly from your PC to your mobile device.",
-                    tags = "Steam,Remote Play,PC"
-                )
-            )
-            gameDao.insertGames(defaultShortcuts)
-        }
-        // Auto-scan installed apps and update
+        // Remove any old pre-populated items so only actual installed Android games remain
+        gameDao.deletePrePopulatedItems()
+        // Auto-scan installed apps and games
         syncInstalledApps()
+    }
+
+    suspend fun insertUserGame(game: GameItem) {
+        gameDao.insertGame(game)
     }
 
     suspend fun syncGfnCatalog() {
@@ -129,6 +102,14 @@ class GameRepository(
 
     suspend fun recordPlay(gameId: String) {
         gameDao.recordPlay(gameId, System.currentTimeMillis())
+    }
+
+    suspend fun setIsGame(id: String, isGame: Boolean) {
+        gameDao.setIsGame(id, isGame)
+    }
+
+    suspend fun updateTitleAndArtwork(id: String, title: String, posterUrl: String?, iconUrl: String?) {
+        gameDao.updateTitleAndArtwork(id, title, posterUrl, iconUrl)
     }
 
     suspend fun deleteGame(gameId: String) {

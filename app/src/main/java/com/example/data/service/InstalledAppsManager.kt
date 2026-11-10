@@ -42,6 +42,13 @@ class InstalledAppsManager(private val context: Context) {
             val pkg = resolveInfo.activityInfo.packageName
             val label = resolveInfo.loadLabel(packageManager).toString()
             val activityName = resolveInfo.activityInfo.name
+            val appInfo = resolveInfo.activityInfo.applicationInfo
+            val isGameApp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                appInfo.category == android.content.pm.ApplicationInfo.CATEGORY_GAME
+            } else {
+                @Suppress("DEPRECATION")
+                (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME) != 0
+            }
 
             // Build android resource URI for app icon
             val iconUri = "android.resource://$pkg/${resolveInfo.activityInfo.iconResource}"
@@ -50,13 +57,14 @@ class InstalledAppsManager(private val context: Context) {
                 id = "app_$pkg",
                 title = label,
                 type = GameType.INSTALLED_APP,
+                isGame = isGameApp,
                 packageName = pkg,
                 activityName = activityName,
                 iconUrl = iconUri,
-                genre = "Installed Application",
+                genre = if (isGameApp) "Installed Game" else "Installed Application",
                 publisher = pkg,
                 description = "Installed Android app ($label)",
-                tags = "Installed,Android,App"
+                tags = if (isGameApp) "Installed,Game,Android" else "Installed,Android,App"
             )
         }.sortedBy { it.title.lowercase() }
     }

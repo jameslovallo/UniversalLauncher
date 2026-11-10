@@ -2,9 +2,10 @@ package com.example.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,21 +18,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,6 +42,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,55 +50,52 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
-import com.example.ui.theme.ElectricCyan
-import com.example.ui.theme.FocusRing
-import com.example.ui.theme.NeonGfnGreen
-import com.example.ui.theme.SurfaceCard
-import com.example.ui.theme.TextSecondary
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun GamePosterCard(
+fun SteamGamePosterCard(
     game: GameItem,
     isFocused: Boolean,
     onClick: () -> Unit,
-    onCustomizeArtwork: () -> Unit,
-    onToggleFavorite: () -> Unit,
+    onLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.08f else 1.0f,
-        animationSpec = tween(durationMillis = 180),
-        label = "card_scale"
+        targetValue = if (isFocused) 1.05f else 1.0f,
+        animationSpec = tween(150),
+        label = "poster_scale"
     )
-
-    val borderColor = if (isFocused) FocusRing else Color.Transparent
-    val elevation = if (isFocused) 16.dp else 4.dp
 
     Column(
         modifier = modifier
-            .width(150.dp)
+            .fillMaxWidth()
             .scale(scale)
-            .clickable(
+            .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClick = onClick
+                onClick = onClick,
+                onLongClick = onLongClick
             )
             .testTag("game_poster_${game.id}"),
-        horizontalAlignment = Alignment.Start
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Poster Box (Standard 2:3 vertical aspect ratio)
+        // Steam Poster Aspect Ratio (2:3)
         Card(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
                 .border(
                     width = if (isFocused) 2.5.dp else 1.dp,
-                    color = if (isFocused) FocusRing else Color(0xFF334155),
-                    shape = RoundedCornerShape(12.dp)
+                    color = if (isFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(16.dp)
                 ),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = SurfaceCard),
-            elevation = CardDefaults.cardElevation(defaultElevation = elevation)
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            ),
+            elevation = CardDefaults.cardElevation(
+                defaultElevation = if (isFocused) 8.dp else 2.dp
+            )
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 val imageUrl = game.posterUrl ?: game.heroBannerUrl ?: game.iconUrl
@@ -118,13 +111,16 @@ fun GamePosterCard(
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    // Fallback placeholder
+                    // Fallback artistic card
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(
                                 Brush.verticalGradient(
-                                    colors = listOf(Color(0xFF1E293B), Color(0xFF0F172A))
+                                    listOf(
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    )
                                 )
                             ),
                         contentAlignment = Alignment.Center
@@ -132,50 +128,49 @@ fun GamePosterCard(
                         Icon(
                             imageVector = when (game.type) {
                                 GameType.GEFORCE_NOW -> Icons.Default.Cloud
-                                GameType.INSTALLED_APP -> Icons.Default.PhoneAndroid
+                                GameType.INSTALLED_APP -> Icons.Default.SportsEsports
                                 GameType.SHORTCUT -> Icons.Default.Link
                                 GameType.CUSTOM_CLOUD -> Icons.Default.Cloud
                             },
                             contentDescription = null,
-                            tint = NeonGfnGreen,
-                            modifier = Modifier.size(44.dp)
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(48.dp)
                         )
                     }
                 }
 
-                // Gradient overlay at the bottom for readability
+                // Vignette at bottom for readable text
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
                             Brush.verticalGradient(
-                                0.6f to Color.Transparent,
-                                1.0f to Color(0xCC000000)
+                                0.65f to Color.Transparent,
+                                1.0f to Color.Black.copy(alpha = 0.65f)
                             )
                         )
                 )
 
-                // Top Badges: Type and Favorite
+                // Top Badge: GFN / Cloud / Shortcut
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Type Badge
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(RoundedCornerShape(8.dp))
                             .background(
                                 when (game.type) {
-                                    GameType.GEFORCE_NOW -> NeonGfnGreen.copy(alpha = 0.9f)
-                                    GameType.INSTALLED_APP -> Color(0xFF3B82F6).copy(alpha = 0.9f)
-                                    GameType.SHORTCUT -> Color(0xFF8B5CF6).copy(alpha = 0.9f)
-                                    GameType.CUSTOM_CLOUD -> ElectricCyan.copy(alpha = 0.9f)
+                                    GameType.GEFORCE_NOW -> MaterialTheme.colorScheme.primary
+                                    GameType.INSTALLED_APP -> MaterialTheme.colorScheme.secondary
+                                    GameType.SHORTCUT -> MaterialTheme.colorScheme.tertiary
+                                    GameType.CUSTOM_CLOUD -> MaterialTheme.colorScheme.primary
                                 }
                             )
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
                     ) {
                         Text(
                             text = when (game.type) {
@@ -184,53 +179,10 @@ fun GamePosterCard(
                                 GameType.SHORTCUT -> "LINK"
                                 GameType.CUSTOM_CLOUD -> "CLOUD"
                             },
-                            fontSize = 9.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Black,
-                            color = Color.Black
+                            color = MaterialTheme.colorScheme.onPrimary
                         )
-                    }
-
-                    // Favorite Button
-                    Box(
-                        modifier = Modifier
-                            .size(26.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.6f))
-                            .clickable { onToggleFavorite() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (game.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                            contentDescription = "Favorite",
-                            tint = if (game.isFavorite) Color(0xFFEF4444) else Color.White,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
-
-                // If focused, show hover play & edit quick actions
-                if (isFocused) {
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(FocusRing)
-                                .clickable { onCustomizeArtwork() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = "Customize Artwork",
-                                tint = Color.Black,
-                                modifier = Modifier.size(15.dp)
-                            )
-                        }
                     }
                 }
             }
@@ -238,21 +190,16 @@ fun GamePosterCard(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Title & Genre
+        // Title
         Text(
             text = game.title,
             fontSize = 13.sp,
-            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Medium,
-            color = if (isFocused) FocusRing else Color.White,
+            fontWeight = FontWeight.SemiBold,
+            color = if (isFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Text(
-            text = game.genre,
-            fontSize = 10.sp,
-            color = TextSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
         )
     }
 }
