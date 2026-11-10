@@ -1,0 +1,6 @@
+{
+  "name": "Nexus Launcher",
+  "description": "Unified game dashboard and launcher with GeForce NOW cloud gaming, controller navigation, installed apps, and SteamGridDB artwork customization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
