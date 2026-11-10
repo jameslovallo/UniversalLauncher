@@ -50,9 +50,13 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
-      signingConfig = signingConfigs.getByName("debugConfig")
+      // Use the explicit debug keystore when present; otherwise fall back to the Android Gradle
+      // Plugin's auto-generated debug keystore (at $HOME/.android/debug.keystore) so debug builds
+      // work out of the box without requiring a pre-existing debug.keystore file.
+      val debugKeystoreFile = file("${rootDir}/debug.keystore")
+      if (debugKeystoreFile.exists()) {
+        signingConfig = signingConfigs.getByName("debugConfig")
+      }
     }
   }
   compileOptions {

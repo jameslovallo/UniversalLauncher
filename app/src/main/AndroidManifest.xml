@@ -5,11 +5,19 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Read Moonlight's Android TV preview channel (game list, launch intents, box art). -->
+    <uses-permission android:name="android.permission.READ_TV_LISTINGS" />
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- Moonlight and its forks (Artemis / Moonlight Noir, unofficial and rooted builds). -->
+        <package android:name="com.limelight" />
+        <package android:name="com.limelight.noir" />
+        <package android:name="com.limelight.unofficial" />
+        <package android:name="com.limelight.noirdebug" />
+        <package android:name="com.limelight.root" />
     </queries>
 
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />

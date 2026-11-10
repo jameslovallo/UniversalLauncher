@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -44,8 +48,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -57,9 +63,12 @@ import com.example.ui.components.ItemContextMenuSheet
 import com.example.ui.components.SettingsModal
 import com.example.ui.components.SteamGamePosterCard
 import com.example.ui.components.TopNavBar
+import com.example.ui.viewmodel.AddModalSubView
 import com.example.ui.viewmodel.LauncherViewModel
 import com.example.ui.viewmodel.MainLibraryTab
 import kotlinx.coroutines.launch
+
+private const val READ_TV_LISTINGS_PERMISSION = "android.permission.READ_TV_LISTINGS"
 
 @Composable
 fun DashboardScreen(
@@ -78,6 +87,7 @@ fun DashboardScreen(
     val showAddModal by viewModel.showAddModal.collectAsStateWithLifecycle()
     val addModalSubView by viewModel.addModalSubView.collectAsStateWithLifecycle()
     val showSettingsModal by viewModel.showSettingsModal.collectAsStateWithLifecycle()
+    val moonlightState by viewModel.moonlightState.collectAsStateWithLifecycle()
 
     val iconShape by viewModel.iconShape.collectAsStateWithLifecycle()
     val useThemedIcons by viewModel.useThemedIcons.collectAsStateWithLifecycle()
@@ -87,6 +97,28 @@ fun DashboardScreen(
 
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
+
+    // Moonlight's TV channel is behind a runtime permission on Android TV. Ask for it the
+    // first time the Moonlight add view opens, then re-run the scan with the answer.
+    val context = LocalContext.current
+    var tvListingsRequested by remember { mutableStateOf(false) }
+    val tvListingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {
+        viewModel.loadMoonlightGames()
+    }
+
+    LaunchedEffect(showAddModal, addModalSubView) {
+        if (showAddModal &&
+            addModalSubView == AddModalSubView.ADD_MOONLIGHT &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !tvListingsRequested &&
+            context.checkSelfPermission(READ_TV_LISTINGS_PERMISSION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            tvListingsRequested = true
+            tvListingsLauncher.launch(READ_TV_LISTINGS_PERMISSION)
+        }
+    }
 
     // Filter current list by search query if any
     val activeList = if (currentTab == MainLibraryTab.GAMES) gamesList else appsList
@@ -268,10 +300,13 @@ fun DashboardScreen(
                 installedApps = installedApps,
                 iconShape = iconShape,
                 useThemedIcons = useThemedIcons,
+                moonlightState = moonlightState,
                 onNavigateSubView = { viewModel.setAddModalSubView(it) },
                 onAddApp = { viewModel.addAppToGames(it) },
                 onAddShortcut = { title, url, poster -> viewModel.addCustomShortcutToGames(title, url, poster) },
                 onAddGfnGame = { viewModel.addGfnGameToGames(it) },
+                onRefreshMoonlight = { viewModel.loadMoonlightGames() },
+                onAddMoonlightGame = { viewModel.addMoonlightGameToGames(it) },
                 onDismiss = { viewModel.closeAddModal() }
             )
         }
@@ -329,7 +364,9 @@ private fun EmptyLibraryState(
             else "No Applications Found",
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
         )
 
         Spacer(modifier = Modifier.height(6.dp))
@@ -338,7 +375,9 @@ private fun EmptyLibraryState(
             text = if (isGamesTab) "Tap the + button to add installed apps, shortcuts, or GeForce NOW games."
             else "Sync installed apps or check app permissions.",
             fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
         )
 
         if (isGamesTab) {

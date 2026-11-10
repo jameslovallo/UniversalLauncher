@@ -3,242 +3,280 @@ package com.example.data.service
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.URLEncoder
+import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 
 object GeForceNowService {
     private const val GFN_BASE_PLAY_URL = "https://play.geforcenow.com"
-    private val httpClient = okhttp3.OkHttpClient.Builder().build()
+    // GFNDB mirrors NVIDIA's public GeForce NOW catalog. All 6,000+ titles are served
+    // as a static JSON index with NVIDIA image URLs that contain the official CMS id.
+    private const val GFNDB_INDEX_URL = "https://gfndb.info/data/index.json"
+    private const val GFNDB_GAME_BASE_URL = "https://gfndb.info/game"
 
-    // Curated GeForce NOW titles with official GFN CMS App IDs and poster images
-    val DEFAULT_GFN_LIBRARY: List<GameItem> = listOf(
-        GameItem(
-            id = "gfn_cyberpunk2077",
-            title = "Cyberpunk 2077",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "100720411",
-            launchUrl = "https://play.geforcenow.com/games?game-id=100720411",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co41ea.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/sc73e7.jpg",
-            genre = "Action RPG, Sci-Fi",
-            publisher = "CD PROJEKT RED",
-            description = "An open-world, action-adventure RPG set in the megalopolis of Night City, where you play as a cyberpunk mercenary.",
-            tags = "Ray Tracing,Cloud,RPG,Open World"
-        ),
-        GameItem(
-            id = "gfn_baldursgate3",
-            title = "Baldur's Gate 3",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "100863911",
-            launchUrl = "https://play.geforcenow.com/games?game-id=100863911",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co670h.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/scdtvi.jpg",
-            genre = "Turn-Based RPG",
-            publisher = "Larian Studios",
-            description = "Gather your party and return to the Forgotten Realms in a tale of fellowship and betrayal, sacrifice and survival.",
-            tags = "RPG,Turn-Based,Story Rich,Co-op"
-        ),
-        GameItem(
-            id = "gfn_witcher3",
-            title = "The Witcher 3: Wild Hunt",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "100277311",
-            launchUrl = "https://play.geforcenow.com/games?game-id=100277311",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co1wyy.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/sc6q6w.jpg",
-            genre = "Action RPG, Fantasy",
-            publisher = "CD PROJEKT RED",
-            description = "As war rages through the Northern Realms, you take on the greatest contract of your life — tracking down the Child of Prophecy.",
-            tags = "Fantasy,Open World,Masterpiece"
-        ),
-        GameItem(
-            id = "gfn_blackmyth_wukong",
-            title = "Black Myth: Wukong",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "101982711",
-            launchUrl = "https://play.geforcenow.com/games?game-id=101982711",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co806g.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/scwugy.jpg",
-            genre = "Action RPG, Souls-like",
-            publisher = "Game Science",
-            description = "An action RPG rooted in Chinese mythology. Set out as the Destined One to venture into the challenges and marvels ahead.",
-            tags = "Souls-like,Action,Mythology"
-        ),
-        GameItem(
-            id = "gfn_fortnite",
-            title = "Fortnite",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "100344511",
-            launchUrl = "https://play.geforcenow.com/games?game-id=100344511",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co5z8o.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/sc6pzn.jpg",
-            genre = "Battle Royale, Shooter",
-            publisher = "Epic Games",
-            description = "Drop into Battle Royale or explore thousands of community-made islands with full touch & controller support.",
-            tags = "Free to Play,Multiplayer,Shooter"
-        ),
-        GameItem(
-            id = "gfn_alanwake2",
-            title = "Alan Wake 2",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "101568411",
-            launchUrl = "https://play.geforcenow.com/games?game-id=101568411",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co6nnl.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/sclw9u.jpg",
-            genre = "Survival Horror, Psychological",
-            publisher = "Epic Games Publishing",
-            description = "A string of ritualistic murders threatens Bright Falls. Saga Anderson investigates, while trapped writer Alan Wake pens his escape.",
-            tags = "Horror,Ray Tracing,Cinematic"
-        ),
-        GameItem(
-            id = "gfn_starfield",
-            title = "Starfield",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "101548111",
-            launchUrl = "https://play.geforcenow.com/games?game-id=101548111",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co6mvt.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/scnv18.jpg",
-            genre = "Space RPG, Exploration",
-            publisher = "Bethesda Softworks",
-            description = "In the year 2330, humanity has ventured beyond our solar system, settling new planets, and living as a spacefaring people.",
-            tags = "Space,Sci-Fi,Exploration"
-        ),
-        GameItem(
-            id = "gfn_forzahorizon5",
-            title = "Forza Horizon 5",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "101183211",
-            launchUrl = "https://play.geforcenow.com/games?game-id=101183211",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co3ofw.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/scb1h1.jpg",
-            genre = "Racing, Open World",
-            publisher = "Xbox Game Studios",
-            description = "Lead breathtaking expeditions across the vibrant and ever-evolving open world landscapes of Mexico.",
-            tags = "Racing,Simulation,Driving"
-        ),
-        GameItem(
-            id = "gfn_apexlegends",
-            title = "Apex Legends",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "100412811",
-            launchUrl = "https://play.geforcenow.com/games?game-id=100412811",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co1rcb.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/sc6pzl.jpg",
-            genre = "Hero Shooter, Battle Royale",
-            publisher = "Electronic Arts",
-            description = "Conquer with character in Apex Legends, a free-to-play Hero shooter where legendary characters battle for glory.",
-            tags = "Shooter,Free to Play,Competitive"
-        ),
-        GameItem(
-            id = "gfn_genshinimpact",
-            title = "Genshin Impact",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "101139711",
-            launchUrl = "https://play.geforcenow.com/games?game-id=101139711",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co2040.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/sc73e8.jpg",
-            genre = "Anime Action RPG",
-            publisher = "HoYoverse",
-            description = "Step into Teyvat, a vast world teeming with life and flowing with elemental energy.",
-            tags = "Anime,Open World,Adventure"
-        ),
-        GameItem(
-            id = "gfn_stalker2",
-            title = "S.T.A.L.K.E.R. 2: Heart of Chornobyl",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "102041911",
-            launchUrl = "https://play.geforcenow.com/games?game-id=102041911",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co8352.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/scwvvh.jpg",
-            genre = "FPS, Post-Apocalyptic",
-            publisher = "GSC Game World",
-            description = "Explore the vast Chornobyl Exclusion Zone full of dangerous enemies, deadly anomalies, and powerful artifacts.",
-            tags = "Survival,Atmospheric,FPS"
-        ),
-        GameItem(
-            id = "gfn_re4remake",
-            title = "Resident Evil 4",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "101344211",
-            launchUrl = "https://play.geforcenow.com/games?game-id=101344211",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co5q06.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/scirrk.jpg",
-            genre = "Action Horror",
-            publisher = "Capcom",
-            description = "Survival is only the beginning. Six years have passed since the disaster in Raccoon City. Leon S. Kennedy tracks the president's kidnapped daughter.",
-            tags = "Horror,Action,Remake"
-        ),
-        GameItem(
-            id = "gfn_deathstranding",
-            title = "Death Stranding Director's Cut",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "101153911",
-            launchUrl = "https://play.geforcenow.com/games?game-id=101153911",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co3u5f.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/sc73e9.jpg",
-            genre = "Action, Sci-Fi",
-            publisher = "505 Games / Kojima Productions",
-            description = "From legendary game creator Hideo Kojima comes a genre-defying experience, now expanded in the definitive Director's Cut.",
-            tags = "Cinematic,Open World,Story"
-        ),
-        GameItem(
-            id = "gfn_destiny2",
-            title = "Destiny 2",
-            type = GameType.GEFORCE_NOW,
-            gfnCmsId = "100378111",
-            launchUrl = "https://play.geforcenow.com/games?game-id=100378111",
-            posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co1r7h.jpg",
-            heroBannerUrl = "https://images.igdb.com/igdb/image/upload/t_1080p/sc73ea.jpg",
-            genre = "Sci-Fi MMO FPS",
-            publisher = "Bungie",
-            description = "Dive into the world of Destiny 2 to explore the mysteries of the solar system and experience responsive first-person shooter combat.",
-            tags = "Shooter,Co-op,Free to Play"
-        )
+    // The catalog index only ships square icons. Each game's detail page carries
+    // the official NVIDIA portrait box-art URL (GAME_BOX_ART_01_<hash>.jpg), so we
+    // resolve that for search results and cache it.
+    private const val MAX_SEARCH_RESULTS = 40
+    private const val MAX_CONCURRENT_ART_FETCHES = 4
+    private val BOX_ART_REGEX = Regex(
+        """https://img\.nvidiagrid\.net/apps/[0-9a-fA-F-]+/ZZ/GAME_BOX_ART_01_[0-9a-fA-F-]+\.(?:jpg|png)"""
     )
 
-    fun createGfnLaunchUrl(cmsId: String?): String {
-        return if (!cmsId.isNullOrBlank()) {
-            "$GFN_BASE_PLAY_URL/games?game-id=$cmsId"
-        } else {
+    // UTM parameters are required by NVIDIA's GFN Deep Linking SDK.
+    private const val UTM_SOURCE = "universal_launcher"
+    private const val UTM_CAMPAIGN = "gfn_catalog"
+
+    private val httpClient = OkHttpClient.Builder().build()
+
+    // Cached catalog so repeated searches don't re-download the full index.
+    private var cachedCatalog: List<GfnCatalogEntry>? = null
+    private var cacheTimestamp: Long = 0L
+    private const val CACHE_TTL_MS: Long = 24 * 60 * 60 * 1000L // 24 hours
+
+    // slug -> resolved box-art URL (per-process cache).
+    private val boxArtCache = ConcurrentHashMap<String, String>()
+
+    /**
+     * Canonical GeForce NOW catalog entry.
+     *
+     * [gfnCmsId] is the official NVIDIA CMS identifier extracted from the icon URL.
+     * [launchUrl] is always derived from [gfnCmsId] via [createGfnLaunchUrl] so the
+     * deep link follows NVIDIA's documented format instead of being fabricated.
+     */
+    data class GfnCatalogEntry(
+        val title: String,
+        val slug: String,
+        val gfnCmsId: String,
+        val iconUrl: String,
+        val developer: String?,
+        val stores: List<String>,
+        val tier: String?,
+        val playType: String?,
+        val gamePass: Boolean
+    ) {
+        fun toGameItem(posterOverride: String? = null): GameItem = GameItem(
+            id = "gfn_$gfnCmsId",
+            title = title,
+            type = GameType.GEFORCE_NOW,
+            gfnCmsId = gfnCmsId,
+            launchUrl = createGfnLaunchUrl(gfnCmsId),
+            posterUrl = posterOverride ?: iconUrl,
+            heroBannerUrl = null,
+            genre = buildGenre(),
+            publisher = developer?.ifBlank { "Unknown" } ?: "Unknown",
+            description = buildDescription(),
+            tags = buildTags(),
+            customArtworkSource = "GFN"
+        )
+
+        private fun buildGenre(): String {
+            val parts = mutableListOf<String>()
+            playType?.lowercase()?.let { parts.add(it) }
+            stores.firstOrNull()?.lowercase()?.let { parts.add(it) }
+            return if (parts.isEmpty()) "GeForce NOW Title" else parts.joinToString(", ")
+        }
+
+        private fun buildDescription(): String {
+            val storeStr = stores.joinToString(", ")
+            val playTypeStr = playType?.lowercase() ?: "unknown"
+            val tierStr = if (tier != null) " ($tier tier)" else ""
+            return "Stream $title on GeForce NOW via $storeStr ($playTypeStr$tierStr)."
+        }
+
+        private fun buildTags(): String {
+            return listOfNotNull(
+                "GeForce NOW",
+                "Cloud",
+                playType,
+                tier,
+                if (gamePass) "Game Pass" else null
+            ).joinToString(", ")
+        }
+    }
+
+    /** Curated GeForce NOW library populated from the live catalog on first use. */
+    val DEFAULT_GFN_LIBRARY: List<GameItem>
+        get() = cachedCatalog?.map { it.toGameItem() } ?: emptyList()
+
+    /**
+     * Build a GeForce NOW deep link following NVIDIA's documented format:
+     * https://play.geforcenow.com/games?game-id=<id>&utm_source=...&utm_campaign=...
+     *
+     * @param gameId the GeForce NOW CMS / game identifier
+     */
+    fun createGfnLaunchUrl(gameId: String?): String {
+        val id = gameId?.trim()
+        return if (id.isNullOrBlank()) {
             GFN_BASE_PLAY_URL
+        } else {
+            "$GFN_BASE_PLAY_URL/games?game-id=$id&utm_source=$UTM_SOURCE&utm_campaign=$UTM_CAMPAIGN"
         }
     }
 
     /**
-     * Search or sync titles from GeForce NOW web catalog.
+     * Fetch and cache the full GeForce NOW catalog from GFNDB's index.
      */
-    suspend fun searchOrSyncCatalog(query: String? = null): List<GameItem> = withContext(Dispatchers.IO) {
-        if (query.isNullOrBlank()) {
-            return@withContext DEFAULT_GFN_LIBRARY
-        }
-        val lowercaseQuery = query.lowercase().trim()
-        val localMatches = DEFAULT_GFN_LIBRARY.filter {
-            it.title.lowercase().contains(lowercaseQuery) ||
-                    it.genre.lowercase().contains(lowercaseQuery) ||
-                    it.tags.lowercase().contains(lowercaseQuery)
-        }
-        if (localMatches.isNotEmpty()) {
-            return@withContext localMatches
+    private suspend fun fetchCatalog(): List<GfnCatalogEntry> = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        if (cachedCatalog != null && now - cacheTimestamp < CACHE_TTL_MS) {
+            return@withContext cachedCatalog!!
         }
 
-        // Generate dynamic GFN Game item for the searched title if not found locally
-        listOf(
-            GameItem(
-                id = "gfn_${query.replace("\\s+".toRegex(), "_").lowercase()}",
-                title = query,
-                type = GameType.GEFORCE_NOW,
-                gfnCmsId = "custom_${System.currentTimeMillis() % 1000000}",
-                launchUrl = "$GFN_BASE_PLAY_URL/mall/#/deal/deeplink?q=${URLEncoder.encode(query, "UTF-8")}",
-                posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co41ea.jpg",
-                genre = "GeForce NOW Title",
-                publisher = "Cloud Streaming",
-                description = "Launch $query on GeForce NOW cloud gaming with full controller support.",
-                tags = "Cloud,GeForce NOW"
-            )
-        )
+        val request = Request.Builder()
+            .url(GFNDB_INDEX_URL)
+            .addHeader("Accept", "application/json")
+            .addHeader("User-Agent", "UniversalLauncher/1.0")
+            .build()
+
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IOException("Unexpected GFNDB response code: ${response.code}")
+            }
+            val body = response.body?.string()
+                ?: throw IOException("Empty GFNDB response body")
+            val jsonArray = JSONArray(body)
+            val entries = mutableListOf<GfnCatalogEntry>()
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                val title = obj.optString("title", "")
+                val slug = obj.optString("slug", "")
+                val iconUrlRaw: String? = obj.optString("icon", "")
+                val iconUrl = iconUrlRaw ?: ""
+
+                // Extract the NVIDIA CMS id from the icon URL path:
+                // https://img.nvidiagrid.net/apps/<UUID>/ZZ/GAME_ICON_01_<...>.png
+                val cmsId = iconUrl.substringAfter("/apps/").substringBefore("/ZZ/")
+
+                val developerRaw: String? = obj.optString("developer")
+                val developer = developerRaw?.takeIf { it.isNotBlank() }
+                val storesArray = obj.optJSONArray("stores")
+                val stores = mutableListOf<String>()
+                if (storesArray != null) {
+                    for (j in 0 until storesArray.length()) {
+                        stores.add(storesArray.getString(j))
+                    }
+                }
+                val tierRaw: String? = obj.optString("tier")
+                val tier = tierRaw?.takeIf { it.isNotBlank() }
+                val playTypeRaw: String? = obj.optString("playType")
+                val playType = playTypeRaw?.takeIf { it.isNotBlank() }
+                val gamePass = obj.optBoolean("gp", false)
+
+                if (title.isNotBlank() && cmsId.isNotBlank()) {
+                    entries.add(
+                        GfnCatalogEntry(
+                            title = title,
+                            slug = slug,
+                            gfnCmsId = cmsId,
+                            iconUrl = iconUrl,
+                            developer = developer,
+                            stores = stores,
+                            tier = tier,
+                            playType = playType,
+                            gamePass = gamePass
+                        )
+                    )
+                }
+            }
+            cachedCatalog = entries
+            cacheTimestamp = now
+            return@use entries
+        }
+    }
+
+    /**
+     * Search titles from the live GeForce NOW catalog.
+     *
+     * The GFNDB index only contains square icons, so the real portrait box art is
+     * resolved from each matched title's detail page (bounded + cached).
+     *
+     * Resolution order:
+     * 1. Live catalog match (title / developer / store / slug) — accurate art + deep link.
+     * 2. Not found — returns an empty list rather than fabricating artwork or deep links.
+     */
+    suspend fun searchOrSyncCatalog(query: String? = null): List<GameItem> = withContext(Dispatchers.IO) {
+        val catalog = fetchCatalog()
+
+        val matches = if (query.isNullOrBlank()) {
+            catalog
+        } else {
+            val lowercaseQuery = query.lowercase().trim()
+            catalog.filter { entry ->
+                entry.title.lowercase().contains(lowercaseQuery) ||
+                        entry.slug.lowercase().contains(lowercaseQuery) ||
+                        entry.developer?.lowercase()?.contains(lowercaseQuery) == true ||
+                        entry.stores.any { it.lowercase().contains(lowercaseQuery) }
+            }
+        }
+
+        if (matches.isEmpty()) {
+            // The title is not in the GeForce NOW catalog. Return empty so the caller can
+            // surface an honest "not found" state instead of showing fabricated art/links.
+            return@withContext emptyList()
+        }
+
+        // Keep the payload bounded: resolving art is one small request per title.
+        val limited = matches.take(MAX_SEARCH_RESULTS)
+        val semaphore = Semaphore(MAX_CONCURRENT_ART_FETCHES)
+        coroutineScope {
+            limited.map { entry ->
+                async {
+                    semaphore.withPermit {
+                        entry.toGameItem(posterOverride = fetchBoxArtUrl(entry.slug))
+                    }
+                }
+            }.awaitAll()
+        }
+    }
+
+    /**
+     * Resolve the official box art for a GeForce NOW game already stored in the library.
+     * Used to backfill entries that were saved with the square catalog icon.
+     */
+    suspend fun resolveBoxArtForCmsId(cmsId: String?): String? = withContext(Dispatchers.IO) {
+        val id = cmsId?.trim()
+        if (id.isNullOrBlank()) return@withContext null
+        try {
+            val catalog = fetchCatalog()
+            val entry = catalog.firstOrNull { it.gfnCmsId == id } ?: return@withContext null
+            fetchBoxArtUrl(entry.slug)
+        } catch (e: IOException) {
+            null
+        }
+    }
+
+    /**
+     * Read the GFNDB game detail page and extract NVIDIA's portrait box-art URL.
+     * Cached per slug; returns null when unavailable so callers fall back to the icon.
+     */
+    private suspend fun fetchBoxArtUrl(slug: String): String? {
+        if (slug.isBlank()) return null
+        boxArtCache[slug]?.let { return it }
+        return try {
+            val request = Request.Builder()
+                .url("$GFNDB_GAME_BASE_URL/$slug/")
+                .addHeader("Accept", "text/html")
+                .addHeader("User-Agent", "UniversalLauncher/1.0")
+                .build()
+            httpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use null
+                val html = response.body?.string() ?: return@use null
+                val boxArt = BOX_ART_REGEX.find(html)?.value
+                if (boxArt != null) boxArtCache[slug] = boxArt
+                boxArt
+            }
+        } catch (e: IOException) {
+            null
+        }
     }
 }

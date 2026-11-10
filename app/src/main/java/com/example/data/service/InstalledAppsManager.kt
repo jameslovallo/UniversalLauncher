@@ -88,6 +88,52 @@ class InstalledAppsManager(private val context: Context) {
     }
 
     /**
+     * Open a URL in a real browser (or the service's native app).
+     *
+     * GeForce NOW refuses to stream inside an embedded WebView: its web client only
+     * allows full browsers, and Android WebView ships no Widevine CDM for protected
+     * media. Handing the deep link to Chrome keeps streaming working.
+     *
+     * Preference order: native GeForce NOW app -> Chrome -> any browser.
+     */
+    fun openExternally(url: String): Boolean {
+        val uri = Uri.parse(url)
+        for (targetPackage in listOf("com.nvidia.geforcenow", "com.android.chrome", null)) {
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (targetPackage != null) setPackage(targetPackage)
+            }
+            try {
+                context.startActivity(intent)
+                return true
+            } catch (_: Exception) {
+                // Target is not installed or cannot handle the link; try the next one.
+            }
+        }
+        return false
+    }
+
+    /**
+     * Launch a game from a persisted `intent:` URI.
+     *
+     * Moonlight-style shortcuts are stored as serialized intents because their launch
+     * target is an exported activity (`ShortcutTrampoline`) rather than the launcher
+     * activity. Persisting the intent keeps the tile working after this app is no longer
+     * the default launcher, unlike pinned shortcuts.
+     */
+    fun launchIntentUri(uriString: String): Boolean {
+        return try {
+            val intent = Intent.parseUri(uriString, Intent.URI_INTENT_SCHEME)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
      * Open system settings to configure default Home/Launcher app.
      */
     fun openHomeSettings() {

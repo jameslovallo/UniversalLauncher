@@ -52,6 +52,23 @@ class GameRepository(
         }
     }
 
+    /**
+     * Older GFN entries were saved with the square catalog icon as their poster.
+     * Resolve and store the real portrait box art for any such entries.
+     */
+    suspend fun backfillGfnArtwork() {
+        val gfnGames = gameDao.getGamesByTypeNow(GameType.GEFORCE_NOW)
+        val needsArtwork = gfnGames.filter { game ->
+            val isDefaultArt = game.customArtworkSource == null || game.customArtworkSource == "GFN"
+            val poster = game.posterUrl
+            isDefaultArt && (poster.isNullOrBlank() || poster.contains("GAME_ICON_01"))
+        }
+        for (game in needsArtwork) {
+            val boxArt = GeForceNowService.resolveBoxArtForCmsId(game.gfnCmsId) ?: continue
+            gameDao.updateArtwork(game.id, boxArt, game.heroBannerUrl, "GFN")
+        }
+    }
+
     suspend fun syncInstalledApps() {
         val installed = installedAppsManager.getInstalledApps()
         for (app in installed) {

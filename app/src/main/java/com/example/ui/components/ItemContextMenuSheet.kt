@@ -79,7 +79,7 @@ fun ItemContextMenuSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                val previewImage = item.iconUrl ?: item.posterUrl ?: item.heroBannerUrl
+                val previewImage = item.posterUrl ?: item.heroBannerUrl ?: item.iconUrl
                 Box(
                     modifier = Modifier
                         .size(54.dp)

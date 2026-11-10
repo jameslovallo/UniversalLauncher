@@ -9,10 +9,10 @@ import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
 import com.example.data.service.GeForceNowService
 import com.example.data.service.InstalledAppsManager
+import com.example.data.service.MoonlightService
 import com.example.input.ControllerAction
 import com.example.input.ControllerManager
 import com.example.ui.theme.AppIconShape
-import com.example.webview.GamepadJsBridge
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -30,19 +30,23 @@ enum class AddModalSubView {
     OPTIONS,
     ADD_APP,
     ADD_SHORTCUT,
-    ADD_GFN
+    ADD_GFN,
+    ADD_MOONLIGHT
 }
 
-data class ActiveGameSession(
-    val game: GameItem,
-    val playUrl: String
+data class MoonlightUiState(
+    val isLoading: Boolean = false,
+    val games: List<GameItem> = emptyList(),
+    val message: String? = null,
+    val shortcutsBlocked: Boolean = false,
+    val hasScanned: Boolean = false
 )
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = GameRepository.create(application)
     private val installedAppsManager = InstalledAppsManager(application)
+    private val moonlightService = MoonlightService(application)
     val controllerManager = ControllerManager(application)
-    val gamepadBridge = GamepadJsBridge()
 
     private val prefs = application.getSharedPreferences("nexus_launcher_prefs", Context.MODE_PRIVATE)
 
@@ -57,13 +61,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // Focused item ID for controller navigation
     private val _focusedItemId = MutableStateFlow<String?>(null)
     val focusedItemId: StateFlow<String?> = _focusedItemId.asStateFlow()
-
-    // Fullscreen streaming session
-    private val _activeSession = MutableStateFlow<ActiveGameSession?>(null)
-    val activeSession: StateFlow<ActiveGameSession?> = _activeSession.asStateFlow()
-
-    private val _showTouchControlsInSession = MutableStateFlow(true)
-    val showTouchControlsInSession: StateFlow<Boolean> = _showTouchControlsInSession.asStateFlow()
 
     // Context Menu for Long Press
     private val _contextMenuItem = MutableStateFlow<GameItem?>(null)
@@ -102,6 +99,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _installedApps = MutableStateFlow<List<GameItem>>(emptyList())
     val installedApps: StateFlow<List<GameItem>> = _installedApps.asStateFlow()
 
+    // Moonlight game import (TV channel + pinned shortcuts)
+    private val _moonlightState = MutableStateFlow(MoonlightUiState())
+    val moonlightState: StateFlow<MoonlightUiState> = _moonlightState.asStateFlow()
+
     // All library items from Room
     val allItems: StateFlow<List<GameItem>> = repository.allGames
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -120,6 +121,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             repository.initializeLibraryIfEmpty()
             refreshInstalledAppsList()
+            repository.backfillGfnArtwork()
         }
     }
 
@@ -152,28 +154,33 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     installedAppsManager.launchApp(pkg)
                 }
             }
-            GameType.GEFORCE_NOW,
+            GameType.GEFORCE_NOW -> {
+                val url = item.launchUrl ?: GeForceNowService.createGfnLaunchUrl(item.gfnCmsId)
+                // GeForce NOW cannot stream in an embedded browser (browser allowlist and
+                // no Widevine), so hand the deep link to the native app or a real browser.
+                installedAppsManager.openExternally(url)
+            }
             GameType.CUSTOM_CLOUD -> {
                 val url = item.launchUrl ?: "https://play.geforcenow.com"
-                _activeSession.value = ActiveGameSession(item, url)
+                installedAppsManager.openExternally(url)
             }
             GameType.SHORTCUT -> {
                 val url = item.launchUrl
-                if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
-                    _activeSession.value = ActiveGameSession(item, url)
-                } else if (item.packageName != null) {
-                    installedAppsManager.launchApp(item.packageName)
+                when {
+                    url == null -> item.packageName?.let { installedAppsManager.launchApp(it) }
+                    url.startsWith("intent:") -> {
+                        // Moonlight-style persisted launch intent. If the target activity is
+                        // gone, at least open the app so the user can pick the game there.
+                        if (!installedAppsManager.launchIntentUri(url)) {
+                            item.packageName?.let { installedAppsManager.launchApp(it) }
+                        }
+                    }
+                    url.startsWith("http://") || url.startsWith("https://") ->
+                        installedAppsManager.openExternally(url)
+                    else -> item.packageName?.let { installedAppsManager.launchApp(it) }
                 }
             }
         }
-    }
-
-    fun closeActiveSession() {
-        _activeSession.value = null
-    }
-
-    fun toggleTouchControlsInSession() {
-        _showTouchControlsInSession.value = !_showTouchControlsInSession.value
     }
 
     // Context Menu Handlers
@@ -237,6 +244,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setAddModalSubView(view: AddModalSubView) {
         _addModalSubView.value = view
+        if (view == AddModalSubView.ADD_MOONLIGHT) {
+            loadMoonlightGames()
+        }
     }
 
     fun closeAddModal() {
@@ -277,13 +287,84 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun addGfnGameToGames(gfnGame: GameItem) {
         viewModelScope.launch {
+            // Never persist the square catalog icon as a poster: if the search result
+            // fell back to it, resolve the real box art before saving.
+            val poster = gfnGame.posterUrl
+            val needsBoxArt = poster.isNullOrBlank() || poster.contains("GAME_ICON_01")
+            val resolvedPoster = if (needsBoxArt) {
+                GeForceNowService.resolveBoxArtForCmsId(gfnGame.gfnCmsId) ?: poster
+            } else {
+                poster
+            }
             val userGame = gfnGame.copy(
                 id = "user_gfn_${gfnGame.gfnCmsId ?: System.currentTimeMillis()}",
+                posterUrl = resolvedPoster,
                 isGame = true
             )
             repository.insertUserGame(userGame)
             closeAddModal()
             _currentTab.value = MainLibraryTab.GAMES
+        }
+    }
+
+    /**
+     * Scan Moonlight's TV channel and pinned shortcuts. Called when the Moonlight sub-view
+     * opens and again after the TV-listings permission dialog resolves.
+     */
+    fun loadMoonlightGames() {
+        if (_moonlightState.value.isLoading) return
+        viewModelScope.launch {
+            _moonlightState.value = _moonlightState.value.copy(
+                isLoading = true,
+                message = null
+            )
+            val result = moonlightService.scan()
+            _moonlightState.value = MoonlightUiState(
+                isLoading = false,
+                games = result.games,
+                message = moonlightMessage(result),
+                shortcutsBlocked = result.shortcutsBlocked,
+                hasScanned = true
+            )
+        }
+    }
+
+    /** Persist a Moonlight game as a direct-launch tile (stable id, so re-adding is safe). */
+    fun addMoonlightGameToGames(game: GameItem) {
+        viewModelScope.launch {
+            val id = "user_${game.id}"
+            val existing = allItems.value.find { it.id == id }
+            if (existing != null) {
+                repository.setIsGame(id, true)
+            } else {
+                repository.insertUserGame(game.copy(id = id, isGame = true))
+            }
+            closeAddModal()
+            _currentTab.value = MainLibraryTab.GAMES
+        }
+    }
+
+    private fun moonlightMessage(result: MoonlightService.ScanResult): String? {
+        if (!result.installed) {
+            return "Moonlight isn't installed on this device."
+        }
+        if (result.unsupportedAndroidVersion) {
+            return "Moonlight's game shortcuts need Android 8.0 or newer. Add a custom shortcut instead."
+        }
+        if (result.games.isNotEmpty()) {
+            return null
+        }
+        return when {
+            result.shortcutsBlocked && !result.tvProviderAvailable ->
+                "Make Universal Launcher the default Home app so it can read Moonlight's game shortcuts, then tap Refresh."
+            result.shortcutsBlocked && result.tvListingsDenied ->
+                "Grant TV listings access to read Moonlight's game channel, or make this launcher the default Home app to import its shortcuts."
+            result.shortcutsBlocked ->
+                "Moonlight hasn't listed any games yet. Make this launcher the default Home app to import its shortcuts, then tap Refresh."
+            result.tvListingsDenied && result.tvProviderAvailable ->
+                "Grant TV listings access to read Moonlight's game channel, or pin games in Moonlight, then tap Refresh."
+            else ->
+                "Moonlight hasn't listed any games yet. Launch a game in Moonlight once, then tap Refresh."
         }
     }
 
@@ -325,11 +406,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     // Controller navigation
     fun onControllerAction(action: ControllerAction): Boolean {
-        // Forward to WebView during active session
-        if (_activeSession.value != null) {
-            return false
-        }
-
         // Close open modals on Back (B)
         if (_showAddModal.value || _showSettingsModal.value || _editingItem.value != null || _contextMenuItem.value != null) {
             if (action == ControllerAction.BACK_B) {

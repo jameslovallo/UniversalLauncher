@@ -23,6 +23,9 @@ interface GameDao {
     @Query("SELECT * FROM games WHERE type = :type ORDER BY title ASC")
     fun getGamesByType(type: GameType): Flow<List<GameItem>>
 
+    @Query("SELECT * FROM games WHERE type = :type")
+    suspend fun getGamesByTypeNow(type: GameType): List<GameItem>
+
     @Query("SELECT * FROM games WHERE id = :id LIMIT 1")
     suspend fun getGameById(id: String): GameItem?
 

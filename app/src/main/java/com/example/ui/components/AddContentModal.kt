@@ -34,19 +34,24 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -66,44 +71,48 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.GameItem
 import com.example.data.service.GeForceNowService
 import com.example.ui.theme.AppIconShape
 import com.example.ui.viewmodel.AddModalSubView
+import com.example.ui.viewmodel.MoonlightUiState
+import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddContentModal(
     subView: AddModalSubView,
     installedApps: List<GameItem>,
     iconShape: AppIconShape,
     useThemedIcons: Boolean,
+    moonlightState: MoonlightUiState,
     onNavigateSubView: (AddModalSubView) -> Unit,
     onAddApp: (GameItem) -> Unit,
     onAddShortcut: (title: String, url: String, posterUrl: String?) -> Unit,
     onAddGfnGame: (GameItem) -> Unit,
+    onRefreshMoonlight: () -> Unit,
+    onAddMoonlightGame: (GameItem) -> Unit,
     onDismiss: () -> Unit
 ) {
-    Dialog(
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // The root menu is short, so let the sheet wrap it. Sub-views (app grid, search
+    // results) need the taller sheet so their lists have room to scroll.
+    val isOptionsView = subView == AddModalSubView.OPTIONS
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
-        Surface(
+        Column(
             modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .fillMaxHeight(0.88f)
-                .clip(RoundedCornerShape(28.dp)),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
+                .fillMaxWidth()
+                .then(if (isOptionsView) Modifier else Modifier.fillMaxHeight(0.88f))
+                .padding(20.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp)
-            ) {
                 // Header with dynamic title and navigation
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -123,10 +132,11 @@ fun AddContentModal(
 
                         Text(
                             text = when (subView) {
-                                AddModalSubView.OPTIONS -> "Add Content"
+                                AddModalSubView.OPTIONS -> "Add a Game"
                                 AddModalSubView.ADD_APP -> "Add Installed App"
                                 AddModalSubView.ADD_SHORTCUT -> "Add Custom Shortcut"
                                 AddModalSubView.ADD_GFN -> "Add GeForce NOW Title"
+                                AddModalSubView.ADD_MOONLIGHT -> "Add Moonlight Game"
                             },
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
@@ -146,14 +156,15 @@ fun AddContentModal(
                     targetState = subView,
                     transitionSpec = { fadeIn() togetherWith fadeOut() },
                     label = "modal_view_anim",
-                    modifier = Modifier.weight(1f)
+                    modifier = if (isOptionsView) Modifier.fillMaxWidth() else Modifier.weight(1f)
                 ) { targetView ->
                     when (targetView) {
                         AddModalSubView.OPTIONS -> {
                           OptionsSelectView(
                               onSelectApp = { onNavigateSubView(AddModalSubView.ADD_APP) },
                               onSelectShortcut = { onNavigateSubView(AddModalSubView.ADD_SHORTCUT) },
-                              onSelectGfn = { onNavigateSubView(AddModalSubView.ADD_GFN) }
+                              onSelectGfn = { onNavigateSubView(AddModalSubView.ADD_GFN) },
+                              onSelectMoonlight = { onNavigateSubView(AddModalSubView.ADD_MOONLIGHT) }
                           )
                         }
                         AddModalSubView.ADD_APP -> {
@@ -174,10 +185,16 @@ fun AddContentModal(
                               onGameSelected = onAddGfnGame
                           )
                         }
+                        AddModalSubView.ADD_MOONLIGHT -> {
+                          AddMoonlightGameView(
+                              state = moonlightState,
+                              onRefresh = onRefreshMoonlight,
+                              onGameSelected = onAddMoonlightGame
+                          )
+                        }
                     }
                 }
             }
-        }
     }
 }
 
@@ -185,11 +202,12 @@ fun AddContentModal(
 private fun OptionsSelectView(
     onSelectApp: () -> Unit,
     onSelectShortcut: () -> Unit,
-    onSelectGfn: () -> Unit
+    onSelectGfn: () -> Unit,
+    onSelectMoonlight: () -> Unit
 ) {
     Column(
         modifier = Modifier
-            .fillMaxSize()
+            .fillMaxWidth()
             .padding(vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -197,8 +215,6 @@ private fun OptionsSelectView(
         OptionCard(
             icon = Icons.Default.Apps,
             title = "Installed Application",
-            description = "Browse all installed apps on your device and add them directly to your Games view",
-            badge = "App Grid",
             onClick = onSelectApp,
             testTag = "option_add_app"
         )
@@ -206,8 +222,6 @@ private fun OptionsSelectView(
         OptionCard(
             icon = Icons.Default.Link,
             title = "Custom Web / Cloud Shortcut",
-            description = "Add URL links, remote play services, or custom gaming shortcuts with custom posters",
-            badge = "Shortcut",
             onClick = onSelectShortcut,
             testTag = "option_add_shortcut"
         )
@@ -215,10 +229,15 @@ private fun OptionsSelectView(
         OptionCard(
             icon = Icons.Default.Cloud,
             title = "GeForce NOW Game",
-            description = "Search the GeForce NOW library and add games with deep links for full-screen cloud streaming",
-            badge = "GeForce NOW",
             onClick = onSelectGfn,
             testTag = "option_add_gfn"
+        )
+
+        OptionCard(
+            icon = Icons.Default.SportsEsports,
+            title = "Moonlight Game",
+            onClick = onSelectMoonlight,
+            testTag = "option_add_moonlight"
         )
     }
 }
@@ -227,8 +246,6 @@ private fun OptionsSelectView(
 private fun OptionCard(
     icon: ImageVector,
     title: String,
-    description: String,
-    badge: String,
     onClick: () -> Unit,
     testTag: String
 ) {
@@ -265,36 +282,13 @@ private fun OptionCard(
 
             Spacer(modifier = Modifier.width(16.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = title,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = badge,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = description,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            Text(
+                text = title,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }
@@ -352,11 +346,11 @@ private fun AddAppGridView(
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center
                     ) {
-                        val iconUrl = app.iconUrl ?: app.posterUrl
-                        if (!iconUrl.isNullOrBlank()) {
+                        val imageUrl = app.posterUrl ?: app.iconUrl
+                        if (!imageUrl.isNullOrBlank()) {
                             AsyncImage(
                                 model = ImageRequest.Builder(LocalContext.current)
-                                    .data(iconUrl)
+                                    .data(imageUrl)
                                     .crossfade(true)
                                     .build(),
                                 contentDescription = app.title,
@@ -492,14 +486,175 @@ private fun PresetPill(label: String, onClick: () -> Unit) {
 }
 
 @Composable
+private fun AddMoonlightGameView(
+    state: MoonlightUiState,
+    onRefresh: () -> Unit,
+    onGameSelected: (GameItem) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Games published by Moonlight",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            TextButton(onClick = onRefresh, enabled = !state.isLoading) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Refresh")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        when {
+            state.isLoading -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Reading Moonlight's game list...",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            state.games.isEmpty() -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SportsEsports,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = state.message ?: "No Moonlight games found.",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+            else -> {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 120.dp),
+                    contentPadding = PaddingValues(vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxSize().testTag("moonlight_poster_grid")
+                ) {
+                    items(state.games, key = { it.id }) { game ->
+                        Column(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onGameSelected(game) }
+                                .padding(4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(2f / 3f),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    if (!game.posterUrl.isNullOrBlank()) {
+                                        AsyncImage(
+                                            model = game.posterUrl,
+                                            contentDescription = game.title,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.SportsEsports,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(40.dp)
+                                            )
+                                        }
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(6.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(MaterialTheme.colorScheme.primary)
+                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "ML",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimary
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            Text(
+                                text = game.title,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center
+                            )
+                            Text(
+                                text = game.publisher,
+                                fontSize = 9.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun AddGfnSearchView(
     onGameSelected: (GameItem) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    var gfnTitles by remember { mutableStateOf(GeForceNowService.DEFAULT_GFN_LIBRARY) }
+    var gfnTitles by remember { mutableStateOf<List<GameItem>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(searchQuery) {
+        // Debounce so typing doesn't trigger a burst of catalog/artwork requests.
+        isLoading = true
+        if (searchQuery.isNotBlank()) delay(300)
         gfnTitles = GeForceNowService.searchOrSyncCatalog(searchQuery)
+        isLoading = false
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -521,64 +676,108 @@ private fun AddGfnSearchView(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 120.dp),
-            contentPadding = PaddingValues(vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize().testTag("gfn_poster_grid")
-        ) {
-            items(gfnTitles, key = { it.id }) { gfnGame ->
-                Column(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
-                        .clickable { onGameSelected(gfnGame) }
-                        .padding(4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Card(
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Loading GeForce NOW titles & box art...",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else if (searchQuery.isNotBlank() && gfnTitles.isEmpty()) {
+            // Honest empty state: the title was not found in the GeForce NOW catalog.
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Cloud,
+                    contentDescription = "No results",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "No GeForce NOW title matching \"$searchQuery\"",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Try a different game title, or add a custom shortcut instead.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 120.dp),
+                contentPadding = PaddingValues(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize().testTag("gfn_poster_grid")
+            ) {
+                items(gfnTitles, key = { it.id }) { gfnGame ->
+                    Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(2f / 3f),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onGameSelected(gfnGame) }
+                            .padding(4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            AsyncImage(
-                                model = gfnGame.posterUrl ?: gfnGame.heroBannerUrl,
-                                contentDescription = gfnGame.title,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(6.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(MaterialTheme.colorScheme.primary)
-                                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = "GFN",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimary
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(2f / 3f),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                AsyncImage(
+                                    model = gfnGame.posterUrl ?: gfnGame.heroBannerUrl,
+                                    contentDescription = gfnGame.title,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
                                 )
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(6.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(MaterialTheme.colorScheme.primary)
+                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "GFN",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                }
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Text(
+                            text = gfnGame.title,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
                     }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Text(
-                        text = gfnGame.title,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center
-                    )
                 }
             }
         }
