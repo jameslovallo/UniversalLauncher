@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -33,8 +35,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -44,23 +46,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.AppIconShape
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.example.data.model.GameItem
+import com.example.ui.theme.FavoritesLayout
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsModal(
-    iconShape: AppIconShape,
-    useThemedIcons: Boolean,
+    favoritesLayout: FavoritesLayout,
     steamGridDbApiKey: String?,
-    onSelectIconShape: (AppIconShape) -> Unit,
-    onToggleThemedIcons: (Boolean) -> Unit,
+    hiddenItems: List<GameItem>,
+    onSelectFavoritesLayout: (FavoritesLayout) -> Unit,
     onSaveApiKey: (String) -> Unit,
     onSetDefaultLauncher: () -> Unit,
     onSyncLibrary: () -> Unit,
+    onUnhideItem: (GameItem) -> Unit,
     onDismiss: () -> Unit
 ) {
     var apiKeyInput by remember { mutableStateOf(steamGridDbApiKey ?: "") }
@@ -99,93 +107,33 @@ fun SettingsModal(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // Icon Theme & Shape Customization
+                // Favorites Home Layout
                 Text(
-                    text = "App Icon Customization",
+                    text = "Favorites Layout",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    text = "Customize the icon shape and theme styling across the Apps view",
+                    text = "Choose how the clock, date, and favorite apps appear on the home view",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Icon Shape Selection - Clean, responsive layout for mobile & wide screens
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    val allShapes = AppIconShape.values()
-                    val firstRowShapes = allShapes.take(3)
-                    val secondRowShapes = allShapes.drop(3)
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        firstRowShapes.forEach { shape ->
-                            ShapeCard(
-                                shape = shape,
-                                isSelected = iconShape == shape,
-                                onSelect = { onSelectIconShape(shape) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        secondRowShapes.forEach { shape ->
-                            ShapeCard(
-                                shape = shape,
-                                isSelected = iconShape == shape,
-                                onSelect = { onSelectIconShape(shape) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        // Spacer to balance the grid if row count differs
-                        if (secondRowShapes.size < firstRowShapes.size) {
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Themed Monochromatic Icons Toggle
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Material You Themed Icons",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Tint app icons to match system dynamic colors",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    FavoritesLayout.values().forEach { layoutOption ->
+                        FavoritesLayoutCard(
+                            layout = layoutOption,
+                            isSelected = favoritesLayout == layoutOption,
+                            onSelect = { onSelectFavoritesLayout(layoutOption) },
+                            modifier = Modifier.weight(1f)
                         )
                     }
-                    Switch(
-                        checked = useThemedIcons,
-                        onCheckedChange = { onToggleThemedIcons(it) },
-                        modifier = Modifier.testTag("toggle_themed_icons")
-                    )
                 }
 
                 Spacer(modifier = Modifier.height(18.dp))
@@ -258,13 +206,117 @@ fun SettingsModal(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Resync Library & Apps")
                 }
+
+                Spacer(modifier = Modifier.height(18.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(18.dp))
+
+                // Hidden Apps & Games restore list
+                Text(
+                    text = "Hidden Apps",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Items hidden from the library. Restore them any time.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                if (hiddenItems.isEmpty()) {
+                    Text(
+                        text = "Nothing hidden yet.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("hidden_items_empty")
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().testTag("hidden_items_list"),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        hiddenItems.forEach { item ->
+                            HiddenItemRow(
+                                item = item,
+                                onRestore = { onUnhideItem(item) }
+                            )
+                        }
+                    }
+                }
             }
     }
 }
 
 @Composable
-private fun ShapeCard(
-    shape: AppIconShape,
+private fun HiddenItemRow(
+    item: GameItem,
+    onRestore: () -> Unit
+) {
+    val context = LocalContext.current
+    val imageUrl = item.iconUrl ?: item.posterUrl
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+            .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!imageUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(imageUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(38.dp).clip(CircleShape)
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.VisibilityOff,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Text(
+            text = item.title,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+
+        TextButton(
+            onClick = onRestore,
+            modifier = Modifier.testTag("restore_hidden_${item.id}")
+        ) {
+            Text("Restore", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun FavoritesLayoutCard(
+    layout: FavoritesLayout,
     isSelected: Boolean,
     onSelect: () -> Unit,
     modifier: Modifier = Modifier
@@ -279,32 +331,29 @@ private fun ShapeCard(
         modifier = modifier
             .border(
                 width = if (isSelected) 2.dp else 0.dp,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent,
+                color = if (isSelected) MaterialTheme.colorScheme.primary
+                else androidx.compose.ui.graphics.Color.Transparent,
                 shape = RoundedCornerShape(14.dp)
             )
-            .testTag("shape_${shape.name.lowercase()}")
+            .testTag("favorites_layout_${layout.name.lowercase()}")
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp, horizontal = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(vertical = 14.dp, horizontal = 12.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(shape.toComposeShape())
-                    .background(
-                        if (isSelected) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                    )
-            )
-            Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = shape.label,
-                fontSize = 12.sp,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                text = layout.label,
+                fontSize = 14.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
                 color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = layout.description,
+                fontSize = 11.sp,
+                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
                 else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }

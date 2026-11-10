@@ -67,6 +67,7 @@ import coil.request.ImageRequest
 import com.example.data.model.GameItem
 import com.example.data.service.ArtworkOption
 import com.example.data.service.SteamGridDbService
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -83,7 +84,7 @@ fun CustomizeItemDialog(
     var searchQuery by remember { mutableStateOf(item.title) }
     var customUrlInput by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<ArtworkOption>>(emptyList()) }
-    var isSearching by remember { mutableStateOf(false) }
+    var isSearching by remember { mutableStateOf(true) }
 
     val scope = rememberCoroutineScope()
 
@@ -97,8 +98,16 @@ fun CustomizeItemDialog(
     }
 
     LaunchedEffect(searchQuery) {
+        val query = searchQuery.trim()
+        if (query.isBlank()) {
+            searchResults = emptyList()
+            isSearching = false
+            return@LaunchedEffect
+        }
         isSearching = true
-        searchResults = SteamGridDbService.searchArtwork(searchQuery, steamGridDbApiKey)
+        // Debounce typing so a search is only issued once the title settles.
+        delay(350)
+        searchResults = SteamGridDbService.searchArtwork(query, steamGridDbApiKey)
         isSearching = false
     }
 
@@ -154,8 +163,8 @@ fun CustomizeItemDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Source Tabs: SteamGridDB, Local Storage, Custom URL, Presets
-                val tabs = listOf("SteamGridDB", "Local Photo", "Custom URL", "Presets")
+                // Source Tabs: SteamGridDB, Local Storage, Custom URL
+                val tabs = listOf("SteamGridDB", "Local Photo", "Custom URL")
                 ScrollableTabRow(
                     selectedTabIndex = selectedTab,
                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -228,6 +237,31 @@ fun CustomizeItemDialog(
                                     if (isSearching) {
                                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                             CircularProgressIndicator()
+                                        }
+                                    } else if (searchResults.isEmpty()) {
+                                        Column(
+                                            modifier = Modifier.fillMaxSize(),
+                                            verticalArrangement = Arrangement.Center,
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Image,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(36.dp)
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Text(
+                                                text = "No artwork found",
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = "Try a different title, or add a local photo.",
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
                                         }
                                     } else {
                                         LazyVerticalGrid(
@@ -319,27 +353,6 @@ fun CustomizeItemDialog(
                                         Icon(Icons.Default.Link, contentDescription = null)
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text("Apply Image URL")
-                                    }
-                                }
-                            }
-                            3 -> { // Presets
-                                LazyVerticalGrid(
-                                    columns = GridCells.Fixed(2),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.fillMaxSize()
-                                ) {
-                                    items(SteamGridDbService.PRESET_ARTWORKS) { preset ->
-                                        AsyncImage(
-                                            model = preset.thumbnailUrl,
-                                            contentDescription = preset.title,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .aspectRatio(2f / 3f)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .clickable { posterUrl = preset.fullUrl }
-                                        )
                                     }
                                 }
                             }

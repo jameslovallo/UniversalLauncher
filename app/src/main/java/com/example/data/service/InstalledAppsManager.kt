@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.net.Uri
 import android.os.Build
+import android.provider.AlarmClock
+import android.provider.CalendarContract
 import android.provider.Settings
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
@@ -126,6 +128,37 @@ class InstalledAppsManager(private val context: Context) {
         return try {
             val intent = Intent.parseUri(uriString, Intent.URI_INTENT_SCHEME)
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Open the device's clock app (used by the favorites clock). */
+    fun openClock(): Boolean {
+        return try {
+            val intent = Intent(AlarmClock.ACTION_SHOW_ALARMS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Open the device's calendar app at today (used by the favorites date). */
+    fun openCalendar(): Boolean {
+        return try {
+            val today = System.currentTimeMillis().toString()
+            val uri = CalendarContract.CONTENT_URI.buildUpon()
+                .appendPath("time")
+                .appendPath(today)
+                .build()
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
             context.startActivity(intent)
             true
         } catch (_: Exception) {

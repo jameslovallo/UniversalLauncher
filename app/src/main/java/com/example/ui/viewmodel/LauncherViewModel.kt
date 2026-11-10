@@ -12,7 +12,7 @@ import com.example.data.service.InstalledAppsManager
 import com.example.data.service.MoonlightService
 import com.example.input.ControllerAction
 import com.example.input.ControllerManager
-import com.example.ui.theme.AppIconShape
+import com.example.ui.theme.FavoritesLayout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -22,8 +22,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 enum class MainLibraryTab {
-    GAMES,
-    APPS
+    APPS,
+    GAMES
 }
 
 enum class AddModalSubView {
@@ -51,12 +51,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val prefs = application.getSharedPreferences("nexus_launcher_prefs", Context.MODE_PRIVATE)
 
     // Main Library Tab: Games vs Apps
-    private val _currentTab = MutableStateFlow(MainLibraryTab.GAMES)
+    private val _currentTab = MutableStateFlow(MainLibraryTab.APPS)
     val currentTab: StateFlow<MainLibraryTab> = _currentTab.asStateFlow()
 
     // Search query for filtering within the active tab
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    // Incremented whenever the Apps tab is (re)selected so the UI can return to the
+    // favorites home even when the tab value itself did not change.
+    private val _appsHomeReset = MutableStateFlow(0)
+    val appsHomeReset: StateFlow<Int> = _appsHomeReset.asStateFlow()
 
     // Focused item ID for controller navigation
     private val _focusedItemId = MutableStateFlow<String?>(null)
@@ -70,6 +75,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _editingItem = MutableStateFlow<GameItem?>(null)
     val editingItem: StateFlow<GameItem?> = _editingItem.asStateFlow()
 
+    // Favorite long-press menu and drag-to-reorder editor
+    private val _favoriteActionItem = MutableStateFlow<GameItem?>(null)
+    val favoriteActionItem: StateFlow<GameItem?> = _favoriteActionItem.asStateFlow()
+
+    private val _showFavoritesEditor = MutableStateFlow(false)
+    val showFavoritesEditor: StateFlow<Boolean> = _showFavoritesEditor.asStateFlow()
+
     // Add Content Modal
     private val _showAddModal = MutableStateFlow(false)
     val showAddModal: StateFlow<Boolean> = _showAddModal.asStateFlow()
@@ -81,16 +93,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _showSettingsModal = MutableStateFlow(false)
     val showSettingsModal: StateFlow<Boolean> = _showSettingsModal.asStateFlow()
 
-    // Icon Customization Preferences
-    private val _iconShape = MutableStateFlow(
+    // Favorites home layout. Text list is the default.
+    private val _favoritesLayout = MutableStateFlow(
         runCatching {
-            AppIconShape.valueOf(prefs.getString("icon_shape", AppIconShape.SQUIRCLE.name)!!)
-        }.getOrDefault(AppIconShape.SQUIRCLE)
+            FavoritesLayout.valueOf(
+                prefs.getString("favorites_layout", FavoritesLayout.TEXT.name)!!
+            )
+        }.getOrDefault(FavoritesLayout.TEXT)
     )
-    val iconShape: StateFlow<AppIconShape> = _iconShape.asStateFlow()
-
-    private val _useThemedIcons = MutableStateFlow(prefs.getBoolean("themed_icons", false))
-    val useThemedIcons: StateFlow<Boolean> = _useThemedIcons.asStateFlow()
+    val favoritesLayout: StateFlow<FavoritesLayout> = _favoritesLayout.asStateFlow()
 
     private val _steamGridDbApiKey = MutableStateFlow(prefs.getString("sgdb_api_key", ""))
     val steamGridDbApiKey: StateFlow<String?> = _steamGridDbApiKey.asStateFlow()
@@ -112,16 +123,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         list.filter { it.isGame }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Apps Tab: all other applications using their icons
+    // Apps Tab: all non-game applications, alphabetised for counts and controller use
     val appsList: StateFlow<List<GameItem>> = allItems.map { list ->
-        list.filter { !it.isGame }
+        list.filter { !it.isGame }.sortedBy { it.title.lowercase() }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Favorites home: favorited apps in the user's custom order
+    val favoriteApps: StateFlow<List<GameItem>> = repository.favoriteApps
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Full app list shown after swiping up: no favorites and no games
+    val libraryApps: StateFlow<List<GameItem>> = allItems.map { list ->
+        list.filter { !it.isGame && !it.isFavorite }.sortedBy { it.title.lowercase() }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Hidden items for the Settings restore list
+    val hiddenItems: StateFlow<List<GameItem>> = repository.hiddenGames
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         viewModelScope.launch {
             repository.initializeLibraryIfEmpty()
             refreshInstalledAppsList()
             repository.backfillGfnArtwork()
+            repository.matchMissingGamePosters()
         }
     }
 
@@ -133,6 +158,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setTab(tab: MainLibraryTab) {
         _currentTab.value = tab
         _searchQuery.value = ""
+        // Each tab starts with no focused row so the Apps tab always opens on favorites.
+        _focusedItemId.value = null
+        if (tab == MainLibraryTab.APPS) {
+            _appsHomeReset.value += 1
+        }
     }
 
     fun setSearchQuery(query: String) {
@@ -141,6 +171,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setFocusedItem(id: String) {
         _focusedItemId.value = id
+    }
+
+    fun clearFocus() {
+        _focusedItemId.value = null
+    }
+
+    /** True when the Games tab is rendered as a single horizontal row (compact landscape). */
+    private var gamesRowMode = false
+
+    fun setGamesRowMode(enabled: Boolean) {
+        gamesRowMode = enabled
     }
 
     fun launchItem(item: GameItem) {
@@ -202,20 +243,79 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun moveItemToGames(item: GameItem) {
         viewModelScope.launch {
             repository.setIsGame(item.id, true)
+            repository.ensureAutoPoster(item.copy(isGame = true))
             closeContextMenu()
         }
     }
 
     fun toggleFavorite(item: GameItem) {
         viewModelScope.launch {
+            val addingToFavorites = !item.isFavorite
             repository.toggleFavorite(item.id, item.isFavorite)
+            if (addingToFavorites) {
+                // New favorites go to the end of the favorites view.
+                repository.setFavoriteOrder(item.id, repository.nextFavoriteOrder())
+            }
         }
+    }
+
+    fun reorderFavorites(items: List<GameItem>) {
+        viewModelScope.launch {
+            repository.saveFavoriteOrder(items)
+        }
+    }
+
+    fun removeFavorite(item: GameItem) {
+        viewModelScope.launch {
+            repository.toggleFavorite(item.id, true)
+        }
+    }
+
+    fun openFavoriteActions(item: GameItem) {
+        _favoriteActionItem.value = item
+    }
+
+    fun closeFavoriteActions() {
+        _favoriteActionItem.value = null
+    }
+
+    fun openFavoritesEditor() {
+        _favoriteActionItem.value = null
+        _showFavoritesEditor.value = true
+    }
+
+    fun closeFavoritesEditor() {
+        _showFavoritesEditor.value = false
+    }
+
+    fun openClockApp() {
+        installedAppsManager.openClock()
+    }
+
+    fun openCalendarApp() {
+        installedAppsManager.openCalendar()
     }
 
     fun deleteItem(item: GameItem) {
         viewModelScope.launch {
             repository.deleteGame(item.id)
             closeContextMenu()
+        }
+    }
+
+    fun hideItem(item: GameItem) {
+        viewModelScope.launch {
+            repository.setHidden(item.id, true)
+            if (_focusedItemId.value == item.id) {
+                _focusedItemId.value = null
+            }
+            closeContextMenu()
+        }
+    }
+
+    fun unhideItem(item: GameItem) {
+        viewModelScope.launch {
+            repository.setHidden(item.id, false)
         }
     }
 
@@ -256,16 +356,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun addAppToGames(app: GameItem) {
         viewModelScope.launch {
-            val existing = allItems.value.find { it.id == app.id }
+            // Read from the database rather than the filtered list so apps that were
+            // previously hidden can be restored by adding them again.
+            val existing = repository.getGameById(app.id)
             if (existing != null) {
+                repository.setHidden(app.id, false)
                 repository.setIsGame(app.id, true)
+                repository.ensureAutoPoster(existing.copy(isGame = true))
             } else {
-                repository.addCustomShortcut(
-                    title = app.title,
-                    url = app.packageName ?: "",
-                    posterUrl = app.iconUrl,
-                    type = GameType.INSTALLED_APP
-                )
+                // Preserve the package/activity so the tile actually launches, and let the
+                // repository resolve a portrait poster instead of reusing the square icon.
+                val game = app.copy(isGame = true)
+                repository.insertUserGame(game)
+                repository.ensureAutoPoster(game)
             }
             closeAddModal()
             _currentTab.value = MainLibraryTab.GAMES
@@ -333,8 +436,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun addMoonlightGameToGames(game: GameItem) {
         viewModelScope.launch {
             val id = "user_${game.id}"
-            val existing = allItems.value.find { it.id == id }
+            val existing = repository.getGameById(id)
             if (existing != null) {
+                repository.setHidden(id, false)
                 repository.setIsGame(id, true)
             } else {
                 repository.insertUserGame(game.copy(id = id, isGame = true))
@@ -377,14 +481,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _showSettingsModal.value = false
     }
 
-    fun setIconShape(shape: AppIconShape) {
-        prefs.edit().putString("icon_shape", shape.name).apply()
-        _iconShape.value = shape
-    }
-
-    fun setUseThemedIcons(useThemed: Boolean) {
-        prefs.edit().putBoolean("themed_icons", useThemed).apply()
-        _useThemedIcons.value = useThemed
+    fun setFavoritesLayout(layout: FavoritesLayout) {
+        prefs.edit().putString("favorites_layout", layout.name).apply()
+        _favoritesLayout.value = layout
     }
 
     fun saveSteamGridDbApiKey(key: String) {
@@ -401,13 +500,28 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             repository.syncGfnCatalog()
             repository.syncInstalledApps()
             refreshInstalledAppsList()
+            repository.matchMissingGamePosters()
         }
     }
+
+    /**
+     * Items the directional pad moves through: the games grid, or favorites followed by
+     * the complete app list on the Apps tab.
+     */
+    private fun currentTabItems(): List<GameItem> =
+        if (_currentTab.value == MainLibraryTab.GAMES) {
+            gamesList.value
+        } else {
+            favoriteApps.value + libraryApps.value
+        }
 
     // Controller navigation
     fun onControllerAction(action: ControllerAction): Boolean {
         // Close open modals on Back (B)
-        if (_showAddModal.value || _showSettingsModal.value || _editingItem.value != null || _contextMenuItem.value != null) {
+        if (_showAddModal.value || _showSettingsModal.value || _editingItem.value != null ||
+            _contextMenuItem.value != null || _favoriteActionItem.value != null ||
+            _showFavoritesEditor.value
+        ) {
             if (action == ControllerAction.BACK_B) {
                 if (_addModalSubView.value != AddModalSubView.OPTIONS && _showAddModal.value) {
                     _addModalSubView.value = AddModalSubView.OPTIONS
@@ -417,29 +531,31 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 closeSettingsModal()
                 closeEditCustomizer()
                 closeContextMenu()
+                closeFavoriteActions()
+                closeFavoritesEditor()
                 return true
             }
             return false
         }
 
-        // Bumper navigation: L2 / L1 switches to Games, R2 / R1 switches to Apps
+        // Bumper navigation: Apps is the first tab, Games the second.
         when (action) {
             ControllerAction.PREV_TAB_LB -> {
-                setTab(MainLibraryTab.GAMES)
-                return true
-            }
-            ControllerAction.NEXT_TAB_RB -> {
                 setTab(MainLibraryTab.APPS)
                 return true
             }
+            ControllerAction.NEXT_TAB_RB -> {
+                setTab(MainLibraryTab.GAMES)
+                return true
+            }
             ControllerAction.CONFIRM_A -> {
-                val currentList = if (_currentTab.value == MainLibraryTab.GAMES) gamesList.value else appsList.value
+                val currentList = currentTabItems()
                 val item = currentList.find { it.id == _focusedItemId.value } ?: currentList.firstOrNull()
                 item?.let { launchItem(it) }
                 return true
             }
             ControllerAction.CUSTOMIZE_X -> {
-                val currentList = if (_currentTab.value == MainLibraryTab.GAMES) gamesList.value else appsList.value
+                val currentList = currentTabItems()
                 val item = currentList.find { it.id == _focusedItemId.value } ?: currentList.firstOrNull()
                 item?.let { openContextMenu(it) }
                 return true
@@ -456,14 +572,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             ControllerAction.LEFT,
             ControllerAction.UP,
             ControllerAction.DOWN -> {
-                val currentList = if (_currentTab.value == MainLibraryTab.GAMES) gamesList.value else appsList.value
+                val currentList = currentTabItems()
                 if (currentList.isEmpty()) return false
+                val isAppsTab = _currentTab.value == MainLibraryTab.APPS
+                // In compact landscape the Games tab is a single horizontal row, so
+                // every direction steps one poster instead of jumping a grid column.
+                val step = if (isAppsTab || gamesRowMode) 1 else 4
                 val curIndex = currentList.indexOfFirst { it.id == _focusedItemId.value }.let { if (it >= 0) it else 0 }
                 val nextIndex = when (action) {
                     ControllerAction.RIGHT -> (curIndex + 1).coerceAtMost(currentList.lastIndex)
                     ControllerAction.LEFT -> (curIndex - 1).coerceAtLeast(0)
-                    ControllerAction.DOWN -> (curIndex + 4).coerceAtMost(currentList.lastIndex)
-                    ControllerAction.UP -> (curIndex - 4).coerceAtLeast(0)
+                    ControllerAction.DOWN ->
+                        (curIndex + step).coerceAtMost(currentList.lastIndex)
+                    ControllerAction.UP ->
+                        (curIndex - step).coerceAtLeast(0)
                     else -> curIndex
                 }
                 _focusedItemId.value = currentList[nextIndex].id

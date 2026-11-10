@@ -32,7 +32,10 @@ data class GameItem(
     val playCount: Int = 0,
     val customArtworkSource: String? = null, // "GFN", "STEAMGRIDDB", "IGDB", "LOCAL", "CUSTOM_URL"
     val tags: String = "",
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+    val isHidden: Boolean = false,
+    // Position within the favorites view. Lower values appear first.
+    val favoriteOrder: Int = 0
 ) {
     val displayCategory: String
         get() = when (type) {

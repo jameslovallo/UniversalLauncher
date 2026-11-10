@@ -75,7 +75,6 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.GameItem
 import com.example.data.service.GeForceNowService
-import com.example.ui.theme.AppIconShape
 import com.example.ui.viewmodel.AddModalSubView
 import com.example.ui.viewmodel.MoonlightUiState
 import kotlinx.coroutines.delay
@@ -85,8 +84,6 @@ import kotlinx.coroutines.delay
 fun AddContentModal(
     subView: AddModalSubView,
     installedApps: List<GameItem>,
-    iconShape: AppIconShape,
-    useThemedIcons: Boolean,
     moonlightState: MoonlightUiState,
     onNavigateSubView: (AddModalSubView) -> Unit,
     onAddApp: (GameItem) -> Unit,
@@ -170,8 +167,6 @@ fun AddContentModal(
                         AddModalSubView.ADD_APP -> {
                           AddAppGridView(
                               apps = installedApps,
-                              iconShape = iconShape,
-                              useThemedIcons = useThemedIcons,
                               onAppSelected = onAddApp
                           )
                         }
@@ -296,8 +291,6 @@ private fun OptionCard(
 @Composable
 private fun AddAppGridView(
     apps: List<GameItem>,
-    iconShape: AppIconShape,
-    useThemedIcons: Boolean,
     onAppSelected: (GameItem) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -342,7 +335,7 @@ private fun AddAppGridView(
                     Box(
                         modifier = Modifier
                             .size(60.dp)
-                            .clip(iconShape.toComposeShape())
+                            .clip(RoundedCornerShape(16.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center
                     ) {
@@ -388,38 +381,6 @@ private fun AddShortcutFormView(
     var posterUrl by remember { mutableStateOf("") }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Text(
-            text = "Popular Cloud & Streaming Presets",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.primary
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            PresetPill("Xbox Cloud") {
-                title = "Xbox Cloud Gaming"
-                url = "https://www.xbox.com/play"
-                posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co5v43.jpg"
-            }
-            PresetPill("Amazon Luna") {
-                title = "Amazon Luna"
-                url = "https://luna.amazon.com"
-                posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co2m37.jpg"
-            }
-            PresetPill("Discord") {
-                title = "Discord"
-                url = "https://discord.com/app"
-                posterUrl = "https://images.igdb.com/igdb/image/upload/t_cover_big/co41ea.jpg"
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
         OutlinedTextField(
             value = title,
             onValueChange = { title = it },
@@ -464,24 +425,6 @@ private fun AddShortcutFormView(
             Spacer(modifier = Modifier.width(8.dp))
             Text("Add Shortcut to Games", fontWeight = FontWeight.Bold)
         }
-    }
-}
-
-@Composable
-private fun PresetPill(label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-    ) {
-        Text(
-            text = label,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 

@@ -7,7 +7,14 @@ import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.service.GeForceNowService
 import com.example.data.service.InstalledAppsManager
+import com.example.data.service.SteamGridDbService
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class GameRepository(
     private val gameDao: GameDao,
@@ -15,7 +22,13 @@ class GameRepository(
 ) {
     val allGames: Flow<List<GameItem>> = gameDao.getAllGames()
     val favoriteGames: Flow<List<GameItem>> = gameDao.getFavoriteGames()
+    val favoriteApps: Flow<List<GameItem>> = gameDao.getFavoriteApps()
     val recentGames: Flow<List<GameItem>> = gameDao.getRecentGames()
+    val hiddenGames: Flow<List<GameItem>> = gameDao.getHiddenGames()
+
+    // Serialises poster matching so startup sync and user actions cannot fetch the same
+    // missing artwork more than once at a time.
+    private val posterMatchMutex = Mutex()
 
     fun getGamesByType(type: GameType): Flow<List<GameItem>> = gameDao.getGamesByType(type)
 
@@ -87,6 +100,64 @@ class GameRepository(
         }
     }
 
+    /**
+     * Installed games are detected without any artwork. Resolve a real portrait poster for
+     * each one once, in small parallel batches, and store it as SteamGridDB artwork. Items
+     * that already have artwork (including user-chosen artwork) are never touched.
+     */
+    suspend fun matchMissingGamePosters() {
+        if (posterMatchMutex.isLocked) return
+        posterMatchMutex.withLock {
+            val missing = gameDao.getInstalledGamesMissingPoster()
+            if (missing.isEmpty()) return
+            missing.chunked(3).forEach { batch ->
+                coroutineScope {
+                    batch.map { game ->
+                        async {
+                            val poster = SteamGridDbService.findPosterForGame(game.title)
+                                ?: return@async
+                            // Re-check after the network call so a user-chosen poster set in
+                            // the meantime is never overwritten.
+                            val fresh = gameDao.getGameById(game.id) ?: return@async
+                            if (!fresh.posterUrl.isNullOrBlank() ||
+                                !fresh.customArtworkSource.isNullOrBlank()
+                            ) {
+                                return@async
+                            }
+                            gameDao.updateArtwork(
+                                fresh.id,
+                                poster,
+                                fresh.heroBannerUrl,
+                                "STEAMGRIDDB"
+                            )
+                        }
+                    }.awaitAll()
+                }
+                delay(120)
+            }
+        }
+    }
+
+    /**
+     * Match a single item on demand, e.g. when the user moves an installed app into the
+     * Games tab. Safe to call repeatedly; no-ops when the item already has artwork.
+     */
+    suspend fun ensureAutoPoster(item: GameItem) {
+        if (!item.isGame || item.type != GameType.INSTALLED_APP) return
+        if (!item.posterUrl.isNullOrBlank() || !item.customArtworkSource.isNullOrBlank()) return
+
+        posterMatchMutex.withLock {
+            val fresh = gameDao.getGameById(item.id) ?: return
+            if (!fresh.isGame || !fresh.posterUrl.isNullOrBlank() ||
+                !fresh.customArtworkSource.isNullOrBlank()
+            ) {
+                return
+            }
+            val poster = SteamGridDbService.findPosterForGame(fresh.title) ?: return
+            gameDao.updateArtwork(fresh.id, poster, fresh.heroBannerUrl, "STEAMGRIDDB")
+        }
+    }
+
     suspend fun addCustomShortcut(
         title: String,
         url: String,
@@ -117,12 +188,31 @@ class GameRepository(
         gameDao.setFavorite(gameId, !currentStatus)
     }
 
+    /** The next free position at the end of the favorites view. */
+    suspend fun nextFavoriteOrder(): Int =
+        (gameDao.getFavoriteAppsNow().maxOfOrNull { it.favoriteOrder } ?: -1) + 1
+
+    suspend fun setFavoriteOrder(gameId: String, order: Int) {
+        gameDao.setFavoriteOrder(gameId, order)
+    }
+
+    /** Persists the visual order of the favorites view after a drag. */
+    suspend fun saveFavoriteOrder(items: List<GameItem>) {
+        items.forEachIndexed { index, item ->
+            gameDao.setFavoriteOrder(item.id, index)
+        }
+    }
+
     suspend fun recordPlay(gameId: String) {
         gameDao.recordPlay(gameId, System.currentTimeMillis())
     }
 
     suspend fun setIsGame(id: String, isGame: Boolean) {
         gameDao.setIsGame(id, isGame)
+    }
+
+    suspend fun setHidden(id: String, isHidden: Boolean) {
+        gameDao.setHidden(id, isHidden)
     }
 
     suspend fun updateTitleAndArtwork(id: String, title: String, posterUrl: String?, iconUrl: String?) {

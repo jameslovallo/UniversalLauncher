@@ -1,7 +1,6 @@
 package com.example.ui.theme
 
 import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -44,7 +43,9 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    // A lean-back launcher reads best on a dark Material surface, and it guarantees the
+    // Games view fades to a dark background instead of a light one.
+    darkTheme: Boolean = true,
     dynamicColor: Boolean = true, // Material You automatically matches system colors on Android 12+
     content: @Composable () -> Unit
 ) {

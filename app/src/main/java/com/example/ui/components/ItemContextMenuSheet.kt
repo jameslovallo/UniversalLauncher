@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -53,6 +54,7 @@ fun ItemContextMenuSheet(
     onMove: () -> Unit,
     onToggleFavorite: () -> Unit,
     onLaunch: () -> Unit,
+    onHide: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -161,7 +163,7 @@ fun ItemContextMenuSheet(
             ContextMenuItemRow(
                 icon = Icons.Default.PlayArrow,
                 title = if (item.isGame) "Launch game" else "Open app",
-                subtitle = if (item.type == com.example.data.model.GameType.GEFORCE_NOW) "Stream on GeForce NOW in embedded web view" else "Launch application",
+                subtitle = if (item.type == com.example.data.model.GameType.GEFORCE_NOW) "Open this title in GeForce NOW" else "Launch application",
                 onClick = onLaunch,
                 testTag = "context_menu_launch"
             )
@@ -175,11 +177,20 @@ fun ItemContextMenuSheet(
                 testTag = "context_menu_favorite"
             )
 
-            // Action 5: Remove
+            // Action 5: Hide from the library (restorable from Settings)
+            ContextMenuItemRow(
+                icon = Icons.Default.VisibilityOff,
+                title = "Hide from library",
+                subtitle = "Restore it later from Settings",
+                onClick = onHide,
+                testTag = "context_menu_hide"
+            )
+
+            // Action 6: Remove
             ContextMenuItemRow(
                 icon = Icons.Default.Delete,
                 title = "Remove from library",
-                subtitle = "Hide or delete this shortcut",
+                subtitle = "Delete this shortcut permanently",
                 isDestructive = true,
                 onClick = onDelete,
                 testTag = "context_menu_delete"
