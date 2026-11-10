@@ -9,7 +9,6 @@ import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
 import com.example.data.service.GeForceNowService
 import com.example.data.service.InstalledAppsManager
-import com.example.data.service.MoonlightService
 import com.example.input.ControllerAction
 import com.example.input.ControllerManager
 import com.example.ui.theme.FavoritesLayout
@@ -28,24 +27,22 @@ enum class MainLibraryTab {
 
 enum class AddModalSubView {
     OPTIONS,
-    ADD_APP,
-    ADD_SHORTCUT,
     ADD_GFN,
-    ADD_MOONLIGHT
+    ADD_WEB_URL
 }
 
-data class MoonlightUiState(
-    val isLoading: Boolean = false,
-    val games: List<GameItem> = emptyList(),
-    val message: String? = null,
-    val shortcutsBlocked: Boolean = false,
-    val hasScanned: Boolean = false
+/** Stock Moonlight and its common forks. */
+private val MOONLIGHT_PACKAGES = listOf(
+    "com.limelight",
+    "com.limelight.noir",
+    "com.limelight.unofficial",
+    "com.limelight.noirdebug",
+    "com.limelight.root"
 )
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = GameRepository.create(application)
     private val installedAppsManager = InstalledAppsManager(application)
-    private val moonlightService = MoonlightService(application)
     val controllerManager = ControllerManager(application)
 
     private val prefs = application.getSharedPreferences("nexus_launcher_prefs", Context.MODE_PRIVATE)
@@ -106,14 +103,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _steamGridDbApiKey = MutableStateFlow(prefs.getString("sgdb_api_key", ""))
     val steamGridDbApiKey: StateFlow<String?> = _steamGridDbApiKey.asStateFlow()
 
-    // Installed apps cache for the Add App modal
-    private val _installedApps = MutableStateFlow<List<GameItem>>(emptyList())
-    val installedApps: StateFlow<List<GameItem>> = _installedApps.asStateFlow()
-
-    // Moonlight game import (TV channel + pinned shortcuts)
-    private val _moonlightState = MutableStateFlow(MoonlightUiState())
-    val moonlightState: StateFlow<MoonlightUiState> = _moonlightState.asStateFlow()
-
     // All library items from Room
     val allItems: StateFlow<List<GameItem>> = repository.allGames
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -144,15 +133,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     init {
         viewModelScope.launch {
             repository.initializeLibraryIfEmpty()
-            refreshInstalledAppsList()
             repository.backfillGfnArtwork()
             repository.matchMissingGamePosters()
         }
-    }
-
-    private suspend fun refreshInstalledAppsList() {
-        val apps = installedAppsManager.getInstalledApps()
-        _installedApps.value = apps
     }
 
     fun setTab(tab: MainLibraryTab) {
@@ -205,13 +188,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val url = item.launchUrl ?: "https://play.geforcenow.com"
                 installedAppsManager.openExternally(url)
             }
-            GameType.SHORTCUT -> {
+            GameType.SHORTCUT, GameType.MOONLIGHT -> {
                 val url = item.launchUrl
                 when {
                     url == null -> item.packageName?.let { installedAppsManager.launchApp(it) }
                     url.startsWith("intent:") -> {
-                        // Moonlight-style persisted launch intent. If the target activity is
-                        // gone, at least open the app so the user can pick the game there.
+                        // Persisted launch intent (Moonlight-style). If the target activity
+                        // is gone, at least open the app so the user can pick the game there.
                         if (!installedAppsManager.launchIntentUri(url)) {
                             item.packageName?.let { installedAppsManager.launchApp(it) }
                         }
@@ -237,6 +220,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             repository.setIsGame(item.id, false)
             closeContextMenu()
+            setTab(MainLibraryTab.APPS)
         }
     }
 
@@ -245,6 +229,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             repository.setIsGame(item.id, true)
             repository.ensureAutoPoster(item.copy(isGame = true))
             closeContextMenu()
+            setTab(MainLibraryTab.GAMES)
         }
     }
 
@@ -256,6 +241,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 // New favorites go to the end of the favorites view.
                 repository.setFavoriteOrder(item.id, repository.nextFavoriteOrder())
             }
+            closeContextMenu()
         }
     }
 
@@ -344,9 +330,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setAddModalSubView(view: AddModalSubView) {
         _addModalSubView.value = view
-        if (view == AddModalSubView.ADD_MOONLIGHT) {
-            loadMoonlightGames()
-        }
     }
 
     fun closeAddModal() {
@@ -354,25 +337,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _addModalSubView.value = AddModalSubView.OPTIONS
     }
 
-    fun addAppToGames(app: GameItem) {
-        viewModelScope.launch {
-            // Read from the database rather than the filtered list so apps that were
-            // previously hidden can be restored by adding them again.
-            val existing = repository.getGameById(app.id)
-            if (existing != null) {
-                repository.setHidden(app.id, false)
-                repository.setIsGame(app.id, true)
-                repository.ensureAutoPoster(existing.copy(isGame = true))
-            } else {
-                // Preserve the package/activity so the tile actually launches, and let the
-                // repository resolve a portrait poster instead of reusing the square icon.
-                val game = app.copy(isGame = true)
-                repository.insertUserGame(game)
-                repository.ensureAutoPoster(game)
-            }
-            closeAddModal()
-            _currentTab.value = MainLibraryTab.GAMES
+    /** Open the Play Store games section. */
+    fun openPlayStore() {
+        installedAppsManager.openPlayStore()
+        closeAddModal()
+    }
+
+    /** Open Moonlight if installed, otherwise its Play Store listing. */
+    fun openMoonlight() {
+        val packageName = MOONLIGHT_PACKAGES.firstOrNull { installedAppsManager.isPackageInstalled(it) }
+        if (packageName != null) {
+            installedAppsManager.launchApp(packageName)
+        } else {
+            installedAppsManager.openExternally(
+                "https://play.google.com/store/search?q=moonlight%20game%20streaming"
+            )
         }
+        closeAddModal()
     }
 
     fun addCustomShortcutToGames(title: String, url: String, posterUrl: String?) {
@@ -410,68 +391,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /**
-     * Scan Moonlight's TV channel and pinned shortcuts. Called when the Moonlight sub-view
-     * opens and again after the TV-listings permission dialog resolves.
-     */
-    fun loadMoonlightGames() {
-        if (_moonlightState.value.isLoading) return
-        viewModelScope.launch {
-            _moonlightState.value = _moonlightState.value.copy(
-                isLoading = true,
-                message = null
-            )
-            val result = moonlightService.scan()
-            _moonlightState.value = MoonlightUiState(
-                isLoading = false,
-                games = result.games,
-                message = moonlightMessage(result),
-                shortcutsBlocked = result.shortcutsBlocked,
-                hasScanned = true
-            )
-        }
-    }
-
-    /** Persist a Moonlight game as a direct-launch tile (stable id, so re-adding is safe). */
-    fun addMoonlightGameToGames(game: GameItem) {
-        viewModelScope.launch {
-            val id = "user_${game.id}"
-            val existing = repository.getGameById(id)
-            if (existing != null) {
-                repository.setHidden(id, false)
-                repository.setIsGame(id, true)
-            } else {
-                repository.insertUserGame(game.copy(id = id, isGame = true))
-            }
-            closeAddModal()
-            _currentTab.value = MainLibraryTab.GAMES
-        }
-    }
-
-    private fun moonlightMessage(result: MoonlightService.ScanResult): String? {
-        if (!result.installed) {
-            return "Moonlight isn't installed on this device."
-        }
-        if (result.unsupportedAndroidVersion) {
-            return "Moonlight's game shortcuts need Android 8.0 or newer. Add a custom shortcut instead."
-        }
-        if (result.games.isNotEmpty()) {
-            return null
-        }
-        return when {
-            result.shortcutsBlocked && !result.tvProviderAvailable ->
-                "Make Universal Launcher the default Home app so it can read Moonlight's game shortcuts, then tap Refresh."
-            result.shortcutsBlocked && result.tvListingsDenied ->
-                "Grant TV listings access to read Moonlight's game channel, or make this launcher the default Home app to import its shortcuts."
-            result.shortcutsBlocked ->
-                "Moonlight hasn't listed any games yet. Make this launcher the default Home app to import its shortcuts, then tap Refresh."
-            result.tvListingsDenied && result.tvProviderAvailable ->
-                "Grant TV listings access to read Moonlight's game channel, or pin games in Moonlight, then tap Refresh."
-            else ->
-                "Moonlight hasn't listed any games yet. Launch a game in Moonlight once, then tap Refresh."
-        }
-    }
-
     // Settings Modal
     fun openSettingsModal() {
         _showSettingsModal.value = true
@@ -499,7 +418,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             repository.syncGfnCatalog()
             repository.syncInstalledApps()
-            refreshInstalledAppsList()
             repository.matchMissingGamePosters()
         }
     }

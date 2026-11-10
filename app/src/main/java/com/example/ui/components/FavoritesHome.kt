@@ -32,7 +32,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -176,13 +175,13 @@ fun FavoritesHome(
                 modifier = Modifier.fillMaxWidth()
             )
         } else if (isTextLayout) {
-            // Text list: small icon inline and vertically centred with each app name,
+            // Text list: icon inline and vertically centred with each app name,
             // all left justified.
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("favorites_text_list"),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
                 horizontalAlignment = Alignment.Start
             ) {
                 favorites.forEach { app ->
@@ -227,30 +226,30 @@ private fun FavoriteTextRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(21.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
             )
-            .padding(vertical = 6.dp, horizontal = 4.dp)
+            .padding(vertical = 9.dp, horizontal = 6.dp)
             .testTag("favorite_app_${app.id}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .size(28.dp)
+                .size(42.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
-            FavoriteIcon(app = app, size = 26.dp)
+            FavoriteIcon(app = app, size = 39.dp)
         }
 
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(18.dp))
 
         Text(
             text = app.title,
-            fontSize = 16.sp,
+            fontSize = 24.sp,
             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
             color = if (isFocused) MaterialTheme.colorScheme.primary
             else MaterialTheme.colorScheme.onSurface,
@@ -351,7 +350,6 @@ private fun FavoriteIcon(app: GameItem, size: Dp) {
 @Composable
 fun FavoriteActionsSheet(
     item: GameItem,
-    onOpen: () -> Unit,
     onEditFavorites: () -> Unit,
     onRemoveFavorite: () -> Unit,
     onDismiss: () -> Unit
@@ -411,17 +409,8 @@ fun FavoriteActionsSheet(
             Spacer(modifier = Modifier.height(8.dp))
 
             FavoriteActionRow(
-                icon = Icons.Default.PlayArrow,
-                title = "Open app",
-                subtitle = "Launch ${item.title}",
-                onClick = onOpen,
-                testTag = "favorite_action_open"
-            )
-
-            FavoriteActionRow(
                 icon = Icons.Default.Edit,
                 title = "Edit favorites",
-                subtitle = "Drag to reorder your favorites",
                 onClick = onEditFavorites,
                 testTag = "favorite_action_edit"
             )
@@ -429,7 +418,6 @@ fun FavoriteActionsSheet(
             FavoriteActionRow(
                 icon = Icons.Default.Favorite,
                 title = "Remove from favorites",
-                subtitle = "Hide it from the favorites view",
                 onClick = onRemoveFavorite,
                 isDestructive = true,
                 testTag = "favorite_action_remove"
@@ -651,7 +639,6 @@ fun EditFavoritesSheet(
 private fun FavoriteActionRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
-    subtitle: String,
     onClick: () -> Unit,
     testTag: String,
     isDestructive: Boolean = false
@@ -693,11 +680,6 @@ private fun FavoriteActionRow(
                 fontWeight = FontWeight.SemiBold,
                 color = if (isDestructive) MaterialTheme.colorScheme.error
                 else MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = subtitle,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

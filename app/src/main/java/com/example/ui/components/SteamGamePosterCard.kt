@@ -127,6 +127,7 @@ fun SteamGamePosterCard(
                                 GameType.INSTALLED_APP -> Icons.Default.SportsEsports
                                 GameType.SHORTCUT -> Icons.Default.Link
                                 GameType.CUSTOM_CLOUD -> Icons.Default.Cloud
+                                GameType.MOONLIGHT -> Icons.Default.SportsEsports
                             },
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,

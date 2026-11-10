@@ -5,8 +5,6 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- Read Moonlight's Android TV preview channel (game list, launch intents, box art). -->
-    <uses-permission android:name="android.permission.READ_TV_LISTINGS" />
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />

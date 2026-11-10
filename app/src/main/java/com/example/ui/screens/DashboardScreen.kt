@@ -1,10 +1,6 @@
 package com.example.ui.screens
 
-import android.content.pm.PackageManager
 import android.content.res.Configuration
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -52,6 +48,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -95,8 +92,6 @@ import com.example.ui.viewmodel.LauncherViewModel
 import com.example.ui.viewmodel.MainLibraryTab
 import kotlinx.coroutines.launch
 
-private const val READ_TV_LISTINGS_PERMISSION = "android.permission.READ_TV_LISTINGS"
-
 @Composable
 fun DashboardScreen(
     viewModel: LauncherViewModel,
@@ -107,7 +102,6 @@ fun DashboardScreen(
     val favoriteApps by viewModel.favoriteApps.collectAsStateWithLifecycle()
     val libraryApps by viewModel.libraryApps.collectAsStateWithLifecycle()
     val appsHomeReset by viewModel.appsHomeReset.collectAsStateWithLifecycle()
-    val installedApps by viewModel.installedApps.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val focusedItemId by viewModel.focusedItemId.collectAsStateWithLifecycle()
 
@@ -116,7 +110,6 @@ fun DashboardScreen(
     val showAddModal by viewModel.showAddModal.collectAsStateWithLifecycle()
     val addModalSubView by viewModel.addModalSubView.collectAsStateWithLifecycle()
     val showSettingsModal by viewModel.showSettingsModal.collectAsStateWithLifecycle()
-    val moonlightState by viewModel.moonlightState.collectAsStateWithLifecycle()
     val hiddenItems by viewModel.hiddenItems.collectAsStateWithLifecycle()
     val favoriteActionItem by viewModel.favoriteActionItem.collectAsStateWithLifecycle()
     val showFavoritesEditor by viewModel.showFavoritesEditor.collectAsStateWithLifecycle()
@@ -143,28 +136,6 @@ fun DashboardScreen(
         viewModel.setGamesRowMode(isCompactLandscape)
     }
 
-    // Moonlight's TV channel is behind a runtime permission on Android TV. Ask for it the
-    // first time the Moonlight add view opens, then re-run the scan with the answer.
-    val context = LocalContext.current
-    var tvListingsRequested by remember { mutableStateOf(false) }
-    val tvListingsLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) {
-        viewModel.loadMoonlightGames()
-    }
-
-    LaunchedEffect(showAddModal, addModalSubView) {
-        if (showAddModal &&
-            addModalSubView == AddModalSubView.ADD_MOONLIGHT &&
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            !tvListingsRequested &&
-            context.checkSelfPermission(READ_TV_LISTINGS_PERMISSION) != PackageManager.PERMISSION_GRANTED
-        ) {
-            tvListingsRequested = true
-            tvListingsLauncher.launch(READ_TV_LISTINGS_PERMISSION)
-        }
-    }
-
     // Filter each page by the search query. Keeping both lists separate means swiping
     // between pages shows the correct results even before the tab state catches up.
     fun matchesQuery(item: GameItem): Boolean =
@@ -174,6 +145,9 @@ fun DashboardScreen(
     val gamesDisplay = if (searchQuery.isBlank()) gamesList else gamesList.filter { matchesQuery(it) }
     // The complete app list excludes favorites and games.
     val libraryDisplay = if (searchQuery.isBlank()) libraryApps else libraryApps.filter { matchesQuery(it) }
+    // Flattened letter headers + rows. LazyColumn indices include the headers, so focus and
+    // letter-rail jumps use the same list.
+    val appListEntries = remember(libraryDisplay) { buildAppListEntries(libraryDisplay) }
 
     // Horizontal pager: page 0 = Apps, page 1 = Games. It stays in sync with the tab
     // selected in the top navigation bar in both directions.
@@ -245,7 +219,9 @@ fun DashboardScreen(
                     appsPagerState.animateScrollToPage(0)
                 }
             } else {
-                val idx = libraryDisplay.indexOfFirst { it.id == focusedId }
+                val idx = appListEntries.indexOfFirst {
+                    it is AppListEntry.App && it.item.id == focusedId
+                }
                 if (idx >= 0) {
                     if (appsPagerState.currentPage != 1) {
                         appsPagerState.animateScrollToPage(1)
@@ -383,7 +359,7 @@ fun DashboardScreen(
                                 EmptyAppDrawerState(hasFavorites = favoriteApps.isNotEmpty())
                             } else {
                                 AppsAlphabeticalList(
-                                    apps = libraryDisplay,
+                                    entries = appListEntries,
                                     focusedItemId = focusedItemId,
                                     listState = appsListState,
                                     onAppClick = { app ->
@@ -394,8 +370,8 @@ fun DashboardScreen(
                                         viewModel.openContextMenu(app)
                                     },
                                     onLetterSelected = { letter ->
-                                        val index = libraryDisplay.indexOfFirst {
-                                            alphabetSection(it.title) == letter
+                                        val index = appListEntries.indexOfFirst {
+                                            it is AppListEntry.Letter && it.letter == letter
                                         }
                                         if (index >= 0) {
                                             scope.launch { appsListState.animateScrollToItem(index) }
@@ -422,25 +398,16 @@ fun DashboardScreen(
                     }
                 },
                 onToggleFavorite = { viewModel.toggleFavorite(contextMenuItem!!) },
-                onLaunch = {
-                    val it = contextMenuItem!!
-                    viewModel.closeContextMenu()
-                    viewModel.launchItem(it)
-                },
                 onHide = { viewModel.hideItem(contextMenuItem!!) },
                 onDelete = { viewModel.deleteItem(contextMenuItem!!) },
                 onDismiss = { viewModel.closeContextMenu() }
             )
         }
 
-        // Long-press menu for favorites (Open, Edit favorites, Remove)
+        // Long-press menu for favorites (Edit favorites, Remove)
         favoriteActionItem?.let { favorite ->
             FavoriteActionsSheet(
                 item = favorite,
-                onOpen = {
-                    viewModel.closeFavoriteActions()
-                    viewModel.launchItem(favorite)
-                },
                 onEditFavorites = { viewModel.openFavoritesEditor() },
                 onRemoveFavorite = {
                     viewModel.removeFavorite(favorite)
@@ -476,14 +443,11 @@ fun DashboardScreen(
         if (showAddModal) {
             AddContentModal(
                 subView = addModalSubView,
-                installedApps = installedApps,
-                moonlightState = moonlightState,
                 onNavigateSubView = { viewModel.setAddModalSubView(it) },
-                onAddApp = { viewModel.addAppToGames(it) },
+                onOpenPlayStore = { viewModel.openPlayStore() },
+                onOpenMoonlight = { viewModel.openMoonlight() },
                 onAddShortcut = { title, url, poster -> viewModel.addCustomShortcutToGames(title, url, poster) },
                 onAddGfnGame = { viewModel.addGfnGameToGames(it) },
-                onRefreshMoonlight = { viewModel.loadMoonlightGames() },
-                onAddMoonlightGame = { viewModel.addMoonlightGameToGames(it) },
                 onDismiss = { viewModel.closeAddModal() }
             )
         }
@@ -584,18 +548,42 @@ private fun GamesPosterGrid(
     }
 }
 
+private sealed interface AppListEntry {
+    data class Letter(val letter: String) : AppListEntry
+    data class App(val item: GameItem) : AppListEntry
+}
+
+/** Flatten the sorted app list into letter headers and rows. */
+private fun buildAppListEntries(apps: List<GameItem>): List<AppListEntry> {
+    val entries = ArrayList<AppListEntry>(apps.size + 8)
+    var section: String? = null
+    for (app in apps) {
+        val letter = alphabetSection(app.title)
+        if (letter != section) {
+            entries += AppListEntry.Letter(letter)
+            section = letter
+        }
+        entries += AppListEntry.App(app)
+    }
+    return entries
+}
+
 @Composable
 private fun AppsAlphabeticalList(
-    apps: List<GameItem>,
+    entries: List<AppListEntry>,
     focusedItemId: String?,
     listState: LazyListState,
     onAppClick: (GameItem) -> Unit,
     onAppLongClick: (GameItem) -> Unit,
     onLetterSelected: (String) -> Unit
 ) {
-    val letters = remember(apps) { apps.map { alphabetSection(it.title) }.distinct() }
-    val activeLetter = remember(apps, focusedItemId) {
-        apps.firstOrNull { it.id == focusedItemId }?.let { alphabetSection(it.title) }
+    val letters = remember(entries) {
+        entries.filterIsInstance<AppListEntry.Letter>().map { it.letter }
+    }
+    val activeLetter = remember(entries, focusedItemId) {
+        entries.filterIsInstance<AppListEntry.App>()
+            .firstOrNull { it.item.id == focusedItemId }
+            ?.let { alphabetSection(it.item.title) }
     }
 
     Row(
@@ -612,13 +600,20 @@ private fun AppsAlphabeticalList(
                 .fillMaxHeight()
                 .testTag("apps_list")
         ) {
-            items(apps, key = { it.id }) { app ->
-                AppListRow(
-                    app = app,
-                    isFocused = app.id == focusedItemId,
-                    onClick = { onAppClick(app) },
-                    onLongClick = { onAppLongClick(app) }
-                )
+            entries.forEach { entry ->
+                when (entry) {
+                    is AppListEntry.Letter -> item(key = "section_${entry.letter}") {
+                        AppLetterHeader(letter = entry.letter)
+                    }
+                    is AppListEntry.App -> item(key = entry.item.id) {
+                        AppListRow(
+                            app = entry.item,
+                            isFocused = entry.item.id == focusedItemId,
+                            onClick = { onAppClick(entry.item) },
+                            onLongClick = { onAppLongClick(entry.item) }
+                        )
+                    }
+                }
             }
         }
 
@@ -626,6 +621,29 @@ private fun AppsAlphabeticalList(
             letters = letters,
             activeLetter = activeLetter,
             onLetterSelected = onLetterSelected
+        )
+    }
+}
+
+@Composable
+private fun AppLetterHeader(letter: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.92f))
+            .padding(start = 6.dp, top = 12.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = letter,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            modifier = Modifier.weight(1f)
         )
     }
 }
@@ -644,7 +662,7 @@ private fun AppListRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(21.dp))
             .background(
                 if (isFocused) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
                 else Color.Transparent
@@ -653,13 +671,13 @@ private fun AppListRow(
                 onClick = onClick,
                 onLongClick = onLongClick
             )
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .padding(horizontal = 6.dp, vertical = 9.dp)
             .testTag("app_row_${app.id}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .size(52.dp)
+                .size(42.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
@@ -681,16 +699,16 @@ private fun AppListRow(
                     imageVector = Icons.Default.Apps,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(21.dp)
                 )
             }
         }
 
-        Spacer(modifier = Modifier.width(14.dp))
+        Spacer(modifier = Modifier.width(18.dp))
 
         Text(
             text = app.title,
-            fontSize = 16.sp,
+            fontSize = 24.sp,
             fontWeight = if (isFocused) FontWeight.SemiBold else FontWeight.Normal,
             color = if (isFocused) MaterialTheme.colorScheme.primary
             else MaterialTheme.colorScheme.onSurface,

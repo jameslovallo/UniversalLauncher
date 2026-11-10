@@ -20,7 +20,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,7 +52,6 @@ fun ItemContextMenuSheet(
     onCustomize: () -> Unit,
     onMove: () -> Unit,
     onToggleFavorite: () -> Unit,
-    onLaunch: () -> Unit,
     onHide: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
@@ -135,7 +133,6 @@ fun ItemContextMenuSheet(
             ContextMenuItemRow(
                 icon = Icons.Default.Edit,
                 title = "Customize name and icon",
-                subtitle = "Change title, box art, SteamGridDB poster, or local image",
                 onClick = onCustomize,
                 testTag = "context_menu_customize"
             )
@@ -145,7 +142,6 @@ fun ItemContextMenuSheet(
                 ContextMenuItemRow(
                     icon = Icons.Default.Apps,
                     title = "Move to Apps",
-                    subtitle = "Display in the Apps library tab with app icon",
                     onClick = onMove,
                     testTag = "context_menu_move_to_apps"
                 )
@@ -153,35 +149,25 @@ fun ItemContextMenuSheet(
                 ContextMenuItemRow(
                     icon = Icons.Default.SportsEsports,
                     title = "Move to Games",
-                    subtitle = "Display in the Games library tab with poster box art",
                     onClick = onMove,
                     testTag = "context_menu_move_to_games"
                 )
             }
 
-            // Action 3: Launch
-            ContextMenuItemRow(
-                icon = Icons.Default.PlayArrow,
-                title = if (item.isGame) "Launch game" else "Open app",
-                subtitle = if (item.type == com.example.data.model.GameType.GEFORCE_NOW) "Open this title in GeForce NOW" else "Launch application",
-                onClick = onLaunch,
-                testTag = "context_menu_launch"
-            )
-
-            // Action 4: Favorite toggle
-            ContextMenuItemRow(
-                icon = if (item.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                title = if (item.isFavorite) "Remove from favorites" else "Add to favorites",
-                subtitle = "Pin to top of your library",
-                onClick = onToggleFavorite,
-                testTag = "context_menu_favorite"
-            )
+            // Action 3: Favorite toggle (apps only; games are ordered by recency)
+            if (!item.isGame) {
+                ContextMenuItemRow(
+                    icon = if (item.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    title = if (item.isFavorite) "Remove from favorites" else "Add to favorites",
+                    onClick = onToggleFavorite,
+                    testTag = "context_menu_favorite"
+                )
+            }
 
             // Action 5: Hide from the library (restorable from Settings)
             ContextMenuItemRow(
                 icon = Icons.Default.VisibilityOff,
                 title = "Hide from library",
-                subtitle = "Restore it later from Settings",
                 onClick = onHide,
                 testTag = "context_menu_hide"
             )
@@ -190,7 +176,6 @@ fun ItemContextMenuSheet(
             ContextMenuItemRow(
                 icon = Icons.Default.Delete,
                 title = "Remove from library",
-                subtitle = "Delete this shortcut permanently",
                 isDestructive = true,
                 onClick = onDelete,
                 testTag = "context_menu_delete"
@@ -205,7 +190,6 @@ fun ItemContextMenuSheet(
 private fun ContextMenuItemRow(
     icon: ImageVector,
     title: String,
-    subtitle: String,
     onClick: () -> Unit,
     testTag: String,
     isDestructive: Boolean = false
@@ -245,11 +229,6 @@ private fun ContextMenuItemRow(
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = if (isDestructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = subtitle,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

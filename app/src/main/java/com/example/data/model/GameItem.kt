@@ -7,7 +7,8 @@ enum class GameType {
     GEFORCE_NOW,
     INSTALLED_APP,
     SHORTCUT,
-    CUSTOM_CLOUD
+    CUSTOM_CLOUD,
+    MOONLIGHT
 }
 
 @Entity(tableName = "games")
@@ -43,5 +44,6 @@ data class GameItem(
             GameType.INSTALLED_APP -> if (isGame) "Android Game" else "Installed App"
             GameType.SHORTCUT -> "Shortcut"
             GameType.CUSTOM_CLOUD -> "Cloud Game"
+            GameType.MOONLIGHT -> "Moonlight"
         }
 }

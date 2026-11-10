@@ -74,18 +74,37 @@ class InstalledAppsManager(private val context: Context) {
     /**
      * Launch an installed app by package name.
      */
-    fun launchApp(packageName: String): Boolean {
-        return try {
-            val intent = packageManager.getLaunchIntentForPackage(packageName)
-            if (intent != null) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
-                true
-            } else {
-                false
-            }
-        } catch (e: Exception) {
+    fun launchApp(packageName: String): Boolean = try {
+        val intent = packageManager.getLaunchIntentForPackage(packageName)
+        if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            true
+        } else {
             false
+        }
+    } catch (_: Exception) {
+        false
+    }
+
+    fun isPackageInstalled(packageName: String): Boolean = try {
+        packageManager.getPackageInfo(packageName, 0)
+        true
+    } catch (_: PackageManager.NameNotFoundException) {
+        false
+    }
+
+    /** Open the Play Store games section, falling back to the web store. */
+    fun openPlayStore(): Boolean {
+        val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=games")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            setPackage("com.android.vending")
+        }
+        return try {
+            context.startActivity(market)
+            true
+        } catch (_: Exception) {
+            openExternally("https://play.google.com/store/apps/category/GAME")
         }
     }
 

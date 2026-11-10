@@ -29,14 +29,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Nightlight
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -50,7 +49,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -64,7 +62,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -76,21 +73,17 @@ import coil.request.ImageRequest
 import com.example.data.model.GameItem
 import com.example.data.service.GeForceNowService
 import com.example.ui.viewmodel.AddModalSubView
-import com.example.ui.viewmodel.MoonlightUiState
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddContentModal(
     subView: AddModalSubView,
-    installedApps: List<GameItem>,
-    moonlightState: MoonlightUiState,
     onNavigateSubView: (AddModalSubView) -> Unit,
-    onAddApp: (GameItem) -> Unit,
+    onOpenPlayStore: () -> Unit,
+    onOpenMoonlight: () -> Unit,
     onAddShortcut: (title: String, url: String, posterUrl: String?) -> Unit,
     onAddGfnGame: (GameItem) -> Unit,
-    onRefreshMoonlight: () -> Unit,
-    onAddMoonlightGame: (GameItem) -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -130,10 +123,8 @@ fun AddContentModal(
                         Text(
                             text = when (subView) {
                                 AddModalSubView.OPTIONS -> "Add a Game"
-                                AddModalSubView.ADD_APP -> "Add Installed App"
-                                AddModalSubView.ADD_SHORTCUT -> "Add Custom Shortcut"
-                                AddModalSubView.ADD_GFN -> "Add GeForce NOW Title"
-                                AddModalSubView.ADD_MOONLIGHT -> "Add Moonlight Game"
+                                AddModalSubView.ADD_GFN -> "Add GeForce Now Game"
+                                AddModalSubView.ADD_WEB_URL -> "Add Web URL"
                             },
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
@@ -158,19 +149,13 @@ fun AddContentModal(
                     when (targetView) {
                         AddModalSubView.OPTIONS -> {
                           OptionsSelectView(
-                              onSelectApp = { onNavigateSubView(AddModalSubView.ADD_APP) },
-                              onSelectShortcut = { onNavigateSubView(AddModalSubView.ADD_SHORTCUT) },
+                              onSelectPlayStore = onOpenPlayStore,
                               onSelectGfn = { onNavigateSubView(AddModalSubView.ADD_GFN) },
-                              onSelectMoonlight = { onNavigateSubView(AddModalSubView.ADD_MOONLIGHT) }
+                              onSelectMoonlight = onOpenMoonlight,
+                              onSelectWebUrl = { onNavigateSubView(AddModalSubView.ADD_WEB_URL) }
                           )
                         }
-                        AddModalSubView.ADD_APP -> {
-                          AddAppGridView(
-                              apps = installedApps,
-                              onAppSelected = onAddApp
-                          )
-                        }
-                        AddModalSubView.ADD_SHORTCUT -> {
+                        AddModalSubView.ADD_WEB_URL -> {
                           AddShortcutFormView(
                               onAddShortcut = onAddShortcut
                           )
@@ -178,13 +163,6 @@ fun AddContentModal(
                         AddModalSubView.ADD_GFN -> {
                           AddGfnSearchView(
                               onGameSelected = onAddGfnGame
-                          )
-                        }
-                        AddModalSubView.ADD_MOONLIGHT -> {
-                          AddMoonlightGameView(
-                              state = moonlightState,
-                              onRefresh = onRefreshMoonlight,
-                              onGameSelected = onAddMoonlightGame
                           )
                         }
                     }
@@ -195,10 +173,10 @@ fun AddContentModal(
 
 @Composable
 private fun OptionsSelectView(
-    onSelectApp: () -> Unit,
-    onSelectShortcut: () -> Unit,
+    onSelectPlayStore: () -> Unit,
     onSelectGfn: () -> Unit,
-    onSelectMoonlight: () -> Unit
+    onSelectMoonlight: () -> Unit,
+    onSelectWebUrl: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -208,31 +186,31 @@ private fun OptionsSelectView(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         OptionCard(
-            icon = Icons.Default.Apps,
-            title = "Installed Application",
-            onClick = onSelectApp,
-            testTag = "option_add_app"
-        )
-
-        OptionCard(
-            icon = Icons.Default.Link,
-            title = "Custom Web / Cloud Shortcut",
-            onClick = onSelectShortcut,
-            testTag = "option_add_shortcut"
+            icon = Icons.Default.Storefront,
+            title = "Play Store",
+            onClick = onSelectPlayStore,
+            testTag = "option_play_store"
         )
 
         OptionCard(
             icon = Icons.Default.Cloud,
-            title = "GeForce NOW Game",
+            title = "GeForce Now",
             onClick = onSelectGfn,
             testTag = "option_add_gfn"
         )
 
         OptionCard(
-            icon = Icons.Default.SportsEsports,
-            title = "Moonlight Game",
+            icon = Icons.Default.Nightlight,
+            title = "Moonlight",
             onClick = onSelectMoonlight,
             testTag = "option_add_moonlight"
+        )
+
+        OptionCard(
+            icon = Icons.Default.Link,
+            title = "Web URL",
+            onClick = onSelectWebUrl,
+            testTag = "option_add_web_url"
         )
     }
 }
@@ -289,90 +267,6 @@ private fun OptionCard(
 }
 
 @Composable
-private fun AddAppGridView(
-    apps: List<GameItem>,
-    onAppSelected: (GameItem) -> Unit
-) {
-    var searchQuery by remember { mutableStateOf("") }
-    val filteredApps = if (searchQuery.isBlank()) apps else apps.filter {
-        it.title.contains(searchQuery, ignoreCase = true)
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text("Filter installed apps...") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            trailingIcon = {
-                if (searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { searchQuery = "" }) {
-                        Icon(Icons.Default.Clear, contentDescription = "Clear")
-                    }
-                }
-            },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().testTag("add_app_search")
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 88.dp),
-            contentPadding = PaddingValues(vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize().testTag("installed_apps_grid")
-        ) {
-            items(filteredApps, key = { it.id }) { app ->
-                Column(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable { onAppSelected(app) }
-                        .padding(6.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(60.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val imageUrl = app.posterUrl ?: app.iconUrl
-                        if (!imageUrl.isNullOrBlank()) {
-                            AsyncImage(
-                                model = ImageRequest.Builder(LocalContext.current)
-                                    .data(imageUrl)
-                                    .crossfade(true)
-                                    .build(),
-                                contentDescription = app.title,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.size(60.dp)
-                            )
-                        } else {
-                            Icon(Icons.Default.Apps, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        text = app.title,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun AddShortcutFormView(
     onAddShortcut: (title: String, url: String, posterUrl: String?) -> Unit
 ) {
@@ -424,162 +318,6 @@ private fun AddShortcutFormView(
             Icon(Icons.Default.Add, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Add Shortcut to Games", fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-private fun AddMoonlightGameView(
-    state: MoonlightUiState,
-    onRefresh: () -> Unit,
-    onGameSelected: (GameItem) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Games published by Moonlight",
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            TextButton(onClick = onRefresh, enabled = !state.isLoading) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Refresh")
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        when {
-            state.isLoading -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = "Reading Moonlight's game list...",
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-            state.games.isEmpty() -> {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.SportsEsports,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(48.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = state.message ?: "No Moonlight games found.",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-            else -> {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 120.dp),
-                    contentPadding = PaddingValues(vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxSize().testTag("moonlight_poster_grid")
-                ) {
-                    items(state.games, key = { it.id }) { game ->
-                        Column(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { onGameSelected(game) }
-                                .padding(4.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(2f / 3f),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                            ) {
-                                Box(modifier = Modifier.fillMaxSize()) {
-                                    if (!game.posterUrl.isNullOrBlank()) {
-                                        AsyncImage(
-                                            model = game.posterUrl,
-                                            contentDescription = game.title,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    } else {
-                                        Box(
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.SportsEsports,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(40.dp)
-                                            )
-                                        }
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.TopEnd)
-                                            .padding(6.dp)
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(MaterialTheme.colorScheme.primary)
-                                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = "ML",
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onPrimary
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            Text(
-                                text = game.title,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center
-                            )
-                            Text(
-                                text = game.publisher,
-                                fontSize = 9.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-                }
-            }
         }
     }
 }

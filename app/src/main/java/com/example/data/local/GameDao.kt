@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface GameDao {
-    @Query("SELECT * FROM games WHERE isHidden = 0 ORDER BY isPinned DESC, lastPlayedTimestamp DESC, title ASC")
+    @Query("SELECT * FROM games WHERE isHidden = 0 ORDER BY lastPlayedTimestamp DESC, title ASC")
     fun getAllGames(): Flow<List<GameItem>>
 
     @Query("SELECT * FROM games WHERE isFavorite = 1 AND isHidden = 0 ORDER BY lastPlayedTimestamp DESC, title ASC")
