@@ -38,15 +38,21 @@ class ControllerManager(context: Context) : InputManager.InputDeviceListener {
     private val _controllerState = MutableStateFlow(ControllerState())
     val controllerState: StateFlow<ControllerState> = _controllerState.asStateFlow()
 
-    private var lastNavigationTime = 0L
-    private val navigationThrottleMs = 130L
-    private val joystickDeadzone = 0.55f
-    private val joystickReleaseZone = 0.35f
 
-    // The direction the stick is currently deflected towards. A direction is emitted once
-    // per deflection; the stick must return near neutral before it can fire again. This
-    // stops a noisy analog stick from stepping several items for one push.
+    // Analog thumbstick & D-pad state
     private var activeDirection: ControllerAction? = null
+    private var stickEngagedTime = 0L
+    private var lastRepeatTime = 0L
+
+    // Deadzones: 0.35f engage deadzone is responsive and standard across Android gamepads;
+    // release threshold at 0.20f gives clean hysteresis without requiring stick centering.
+    private val joystickDeadzone = 0.35f
+    private val joystickReleaseZone = 0.20f
+
+    // Repeat timing: initial step is immediate; holding stick triggers first repeat after
+    // initialDelayMs (300ms) and subsequent repeats every repeatIntervalMs (110ms).
+    private val initialDelayMs = 300L
+    private val repeatIntervalMs = 110L
 
     init {
         inputManager.registerInputDeviceListener(this, Handler(Looper.getMainLooper()))
@@ -124,19 +130,24 @@ class ControllerManager(context: Context) : InputManager.InputDeviceListener {
             action == ControllerAction.LEFT || action == ControllerAction.RIGHT
         if (isNavigation) {
             val now = System.currentTimeMillis()
-            if (now - lastNavigationTime < navigationThrottleMs) {
-                return null
+            // Support D-pad auto-repeat smoothly using repeat interval
+            if (event.repeatCount > 0) {
+                if (now - lastRepeatTime < repeatIntervalMs) {
+                    return null
+                }
+                lastRepeatTime = now
+            } else {
+                lastRepeatTime = now
             }
-            lastNavigationTime = now
         }
         return action
     }
 
     /**
-     * Handle analog stick (Left Stick / Hat) motion events for navigation.
-     *
-     * Uses hysteresis (a larger engage threshold than the release threshold) and emits
-     * only when the stick moves into a new direction, so one push steps one item.
+     * Handle analog stick (Left Stick / Hat) motion events with console-grade navigation:
+     * - Immediate advance on first tilt
+     * - Smooth, continuous repeat when held past 300ms at 110ms cadence
+     * - Radial deadzone and clean hysteresis to avoid stuck or dropped inputs
      */
     fun handleMotionEvent(event: MotionEvent): ControllerAction? {
         if ((event.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK &&
@@ -145,41 +156,54 @@ class ControllerManager(context: Context) : InputManager.InputDeviceListener {
             return null
         }
 
+        // Try primary stick axes (AXIS_X, AXIS_Y) or fallback to D-pad hat axes
         val rawX = event.getAxisValue(MotionEvent.AXIS_X)
         val rawY = event.getAxisValue(MotionEvent.AXIS_Y)
         val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
         val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
 
-        val x = if (abs(hatX) > 0.5f) hatX else rawX
-        val y = if (abs(hatY) > 0.5f) hatY else rawY
+        val x = if (abs(hatX) > 0.2f) hatX else rawX
+        val y = if (abs(hatY) > 0.2f) hatY else rawY
         val absX = abs(x)
         val absY = abs(y)
-        val magnitude = maxOf(absX, absY)
+        val magnitude = kotlin.math.hypot(absX, absY)
 
+        val now = System.currentTimeMillis()
+
+        // Stick returned near center: clear direction latch
         if (magnitude < joystickReleaseZone) {
-            // Break hysteresis once the stick is back near neutral.
             activeDirection = null
+            stickEngagedTime = 0L
             return null
         }
-        if (magnitude < joystickDeadzone) {
-            // Inside the hysteresis band: keep the current direction latched.
-            return null
-        }
-        // One step per deflection. Wait for the stick to return near neutral before
-        // another direction can fire, even if the angle drifts while held.
-        if (activeDirection != null) return null
 
+        // Inside deadzone / neutral boundary
+        if (magnitude < joystickDeadzone) {
+            return null
+        }
+
+        // Determine dominant direction
         val direction = if (absX >= absY) {
             if (x > 0f) ControllerAction.RIGHT else ControllerAction.LEFT
         } else {
             if (y > 0f) ControllerAction.DOWN else ControllerAction.UP
         }
 
-        val now = System.currentTimeMillis()
-        if (now - lastNavigationTime < navigationThrottleMs) return null
+        // New deflection direction: fire immediately
+        if (direction != activeDirection) {
+            activeDirection = direction
+            stickEngagedTime = now
+            lastRepeatTime = now
+            return direction
+        }
 
-        activeDirection = direction
-        lastNavigationTime = now
-        return direction
+        // Same direction held: fire auto-repeat if held beyond initial delay
+        val heldDuration = now - stickEngagedTime
+        if (heldDuration >= initialDelayMs && (now - lastRepeatTime) >= repeatIntervalMs) {
+            lastRepeatTime = now
+            return direction
+        }
+
+        return null
     }
 }

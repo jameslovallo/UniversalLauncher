@@ -166,6 +166,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (count > 0) gamesColumnCount = count
     }
 
+    /** Actual column count of the Apps icon grid / favorites, used for 2D directional navigation. */
+    private var appsColumnCount = 4
+
+    fun setAppsColumnCount(count: Int) {
+        if (count > 0) appsColumnCount = count
+    }
+
     fun launchItem(item: GameItem) {
         viewModelScope.launch {
             repository.recordPlay(item.id)
@@ -525,9 +532,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val currentList = currentTabItems()
                 if (currentList.isEmpty()) return false
                 val isAppsTab = _currentTab.value == MainLibraryTab.APPS
-                // In compact landscape the Games tab is a single horizontal row, so
-                // every direction steps one poster instead of jumping a grid column.
-                val step = if (isAppsTab || gamesRowMode) 1 else gamesColumnCount
+                val isIconsLayout = _favoritesLayout.value == FavoritesLayout.ICONS
+                // 2D grid navigation: Up/Down moves a full row (column count). Left/Right moves 1 item.
+                val step = when {
+                    isAppsTab && isIconsLayout -> maxOf(1, appsColumnCount)
+                    isAppsTab -> 1 // Text layout is a vertical single list on phones
+                    gamesRowMode -> 1 // Compact landscape horizontal row
+                    else -> maxOf(1, gamesColumnCount) // Poster grid
+                }
                 val hasFocus = currentList.any { it.id == _focusedItemId.value }
                 val curIndex = currentList.indexOfFirst { it.id == _focusedItemId.value }
                     .let { if (it >= 0) it else 0 }

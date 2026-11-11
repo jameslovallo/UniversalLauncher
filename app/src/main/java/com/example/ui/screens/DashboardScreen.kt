@@ -391,6 +391,7 @@ fun DashboardScreen(
                                     showFocusEffects = controllerState.isConnected,
                                     listState = appsListState,
                                     gridState = appsGridState,
+                                    onColumnCountChanged = { viewModel.setAppsColumnCount(it) },
                                     onAppClick = { app ->
                                         viewModel.setFocusedItem(app.id)
                                         viewModel.launchItem(app)
@@ -617,6 +618,7 @@ private fun AppsAlphabeticalList(
     showFocusEffects: Boolean,
     listState: LazyListState,
     gridState: LazyGridState,
+    onColumnCountChanged: (Int) -> Unit = {},
     onAppClick: (GameItem) -> Unit,
     onAppLongClick: (GameItem) -> Unit,
     onLetterSelected: (String) -> Unit
@@ -639,25 +641,36 @@ private fun AppsAlphabeticalList(
         modifier = Modifier.fillMaxSize()
     ) {
         if (layout == FavoritesLayout.ICONS) {
-            // Icon grid drawer: the same tiles as the favorites grid, left justified.
-            // Cells are packed edge to edge; the former gaps live inside each tile's
-            // clickable content padding so the whole cell is a touch target.
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 78.dp),
-                state = gridState,
-                contentPadding = PaddingValues(
-                    start = 12.dp,
-                    end = 0.dp,
-                    top = 8.dp,
-                    bottom = 16.dp + navigationBarInset
-                ),
-                verticalArrangement = Arrangement.spacedBy(0.dp),
-                horizontalArrangement = Arrangement.spacedBy(0.dp),
+            BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .testTag("apps_grid")
             ) {
+                val availableWidth = maxWidth - 12.dp
+                val tileMinSize = 78.dp
+                val columns = maxOf(3, (availableWidth / tileMinSize).toInt())
+
+                LaunchedEffect(columns) {
+                    onColumnCountChanged(columns)
+                }
+
+                // Icon grid drawer: cells are packed edge to edge; gaps live inside each
+                // tile's clickable content padding so the whole cell is an easy touch target.
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(columns),
+                    state = gridState,
+                    contentPadding = PaddingValues(
+                        start = 12.dp,
+                        end = 0.dp,
+                        top = 8.dp,
+                        bottom = 16.dp + navigationBarInset
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                    horizontalArrangement = Arrangement.spacedBy(0.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("apps_grid")
+                ) {
                 entries.forEach { entry ->
                     when (entry) {
                         is AppListEntry.Letter -> item(
@@ -681,6 +694,7 @@ private fun AppsAlphabeticalList(
                     }
                 }
             }
+        }
         } else {
             LazyColumn(
                 state = listState,
