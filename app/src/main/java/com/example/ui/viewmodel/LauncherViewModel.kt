@@ -9,6 +9,7 @@ import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
 import com.example.data.service.GeForceNowService
 import com.example.data.service.InstalledAppsManager
+import com.example.data.service.MOONLIGHT_PACKAGES
 import com.example.input.ControllerAction
 import com.example.input.ControllerManager
 import com.example.ui.theme.FavoritesLayout
@@ -30,15 +31,6 @@ enum class AddModalSubView {
     ADD_GFN,
     ADD_WEB_URL
 }
-
-/** Stock Moonlight and its common forks. */
-private val MOONLIGHT_PACKAGES = listOf(
-    "com.limelight",
-    "com.limelight.noir",
-    "com.limelight.unofficial",
-    "com.limelight.noirdebug",
-    "com.limelight.root"
-)
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = GameRepository.create(application)
@@ -197,18 +189,27 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
             GameType.SHORTCUT, GameType.MOONLIGHT -> {
                 val url = item.launchUrl
+                val pkg = item.packageName
+                val shortcutId = item.activityName
+                // Pinned shortcuts launch through LauncherApps so the publisher's intent
+                // (including extras) is preserved. Anything else falls back to the stored
+                // serialized intent or a plain app launch.
+                val launchedAsPinnedShortcut =
+                    pkg != null && shortcutId != null &&
+                        installedAppsManager.launchPinnedShortcut(pkg, shortcutId)
                 when {
-                    url == null -> item.packageName?.let { installedAppsManager.launchApp(it) }
+                    launchedAsPinnedShortcut -> Unit
+                    url == null -> pkg?.let { installedAppsManager.launchApp(it) }
                     url.startsWith("intent:") -> {
                         // Persisted launch intent (Moonlight-style). If the target activity
                         // is gone, at least open the app so the user can pick the game there.
                         if (!installedAppsManager.launchIntentUri(url)) {
-                            item.packageName?.let { installedAppsManager.launchApp(it) }
+                            pkg?.let { installedAppsManager.launchApp(it) }
                         }
                     }
                     url.startsWith("http://") || url.startsWith("https://") ->
                         installedAppsManager.openExternally(url)
-                    else -> item.packageName?.let { installedAppsManager.launchApp(it) }
+                    else -> pkg?.let { installedAppsManager.launchApp(it) }
                 }
             }
         }
@@ -303,12 +304,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun deleteItem(item: GameItem) {
         viewModelScope.launch {
             // Native apps in the Apps tab get a real uninstall prompt; shortcuts and
-            // other library entries are simply removed. The row is dropped either way,
-            // and a cancelled uninstall will be restored by the next app sync.
+            // other library entries are simply removed. Deleting records a tombstone so
+            // the app sync cannot bring the tile back on the next launch.
             if (item.type == GameType.INSTALLED_APP && !item.isGame) {
                 item.packageName?.let { installedAppsManager.uninstallApp(it) }
             }
             repository.deleteGame(item.id)
+            if (_focusedItemId.value == item.id) {
+                _focusedItemId.value = null
+            }
             closeContextMenu()
         }
     }

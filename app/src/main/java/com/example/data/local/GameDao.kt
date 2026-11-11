@@ -11,27 +11,28 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface GameDao {
-    @Query("SELECT * FROM games WHERE isHidden = 0 ORDER BY lastPlayedTimestamp DESC, title ASC")
+    @Query("SELECT * FROM games WHERE isHidden = 0 AND isDeleted = 0 ORDER BY lastPlayedTimestamp DESC, title ASC")
     fun getAllGames(): Flow<List<GameItem>>
 
-    @Query("SELECT * FROM games WHERE isFavorite = 1 AND isHidden = 0 ORDER BY lastPlayedTimestamp DESC, title ASC")
+    @Query("SELECT * FROM games WHERE isFavorite = 1 AND isHidden = 0 AND isDeleted = 0 ORDER BY lastPlayedTimestamp DESC, title ASC")
     fun getFavoriteGames(): Flow<List<GameItem>>
 
-    @Query("SELECT * FROM games WHERE isFavorite = 1 AND isGame = 0 AND isHidden = 0 ORDER BY favoriteOrder ASC, title ASC")
+    @Query("SELECT * FROM games WHERE isFavorite = 1 AND isGame = 0 AND isHidden = 0 AND isDeleted = 0 ORDER BY favoriteOrder ASC, title ASC")
     fun getFavoriteApps(): Flow<List<GameItem>>
 
-    @Query("SELECT * FROM games WHERE isFavorite = 1 AND isGame = 0 AND isHidden = 0 ORDER BY favoriteOrder ASC, title ASC")
+    @Query("SELECT * FROM games WHERE isFavorite = 1 AND isGame = 0 AND isHidden = 0 AND isDeleted = 0 ORDER BY favoriteOrder ASC, title ASC")
     suspend fun getFavoriteAppsNow(): List<GameItem>
 
-    @Query("SELECT * FROM games WHERE lastPlayedTimestamp > 0 AND isHidden = 0 ORDER BY lastPlayedTimestamp DESC LIMIT 20")
+    @Query("SELECT * FROM games WHERE lastPlayedTimestamp > 0 AND isHidden = 0 AND isDeleted = 0 ORDER BY lastPlayedTimestamp DESC LIMIT 20")
     fun getRecentGames(): Flow<List<GameItem>>
 
-    @Query("SELECT * FROM games WHERE type = :type AND isHidden = 0 ORDER BY title ASC")
+    @Query("SELECT * FROM games WHERE type = :type AND isHidden = 0 AND isDeleted = 0 ORDER BY title ASC")
     fun getGamesByType(type: GameType): Flow<List<GameItem>>
 
-    @Query("SELECT * FROM games WHERE isHidden = 1 ORDER BY title ASC")
+    @Query("SELECT * FROM games WHERE isHidden = 1 AND isDeleted = 0 ORDER BY title ASC")
     fun getHiddenGames(): Flow<List<GameItem>>
 
+    // Intentionally unfiltered: maintenance code needs to see tombstones (deleted rows).
     @Query("SELECT * FROM games WHERE type = :type")
     suspend fun getGamesByTypeNow(type: GameType): List<GameItem>
 
@@ -59,7 +60,7 @@ interface GameDao {
     @Query("UPDATE games SET posterUrl = :posterUrl, heroBannerUrl = :heroUrl, customArtworkSource = :source WHERE id = :id")
     suspend fun updateArtwork(id: String, posterUrl: String, heroUrl: String?, source: String)
 
-    @Query("SELECT * FROM games WHERE type = 'INSTALLED_APP' AND isGame = 1 AND isHidden = 0 AND (posterUrl IS NULL OR posterUrl = '') AND (customArtworkSource IS NULL OR customArtworkSource = '')")
+    @Query("SELECT * FROM games WHERE type IN ('INSTALLED_APP', 'SHORTCUT') AND isGame = 1 AND isHidden = 0 AND isDeleted = 0 AND (posterUrl IS NULL OR posterUrl = '') AND (customArtworkSource IS NULL OR customArtworkSource = '')")
     suspend fun getInstalledGamesMissingPoster(): List<GameItem>
 
     @Query("UPDATE games SET isHidden = :isHidden WHERE id = :id")
@@ -74,7 +75,12 @@ interface GameDao {
     @Query("DELETE FROM games WHERE id = :id")
     suspend fun deleteGameById(id: String)
 
-    @Query("DELETE FROM games WHERE id LIKE 'gfn_%' OR id IN ('shortcut_xbox_cloud', 'shortcut_steam_link')")
+    /** Explicit user deletion. Kept as a tombstone so syncs cannot re-add the item. */
+    @Query("UPDATE games SET isDeleted = 1, isFavorite = 0, favoriteOrder = 0 WHERE id = :id")
+    suspend fun markDeleted(id: String)
+
+    // Never touch tombstones: a deleted catalog game must stay deleted across launches.
+    @Query("DELETE FROM games WHERE (id LIKE 'gfn_%' OR id IN ('shortcut_xbox_cloud', 'shortcut_steam_link')) AND isDeleted = 0")
     suspend fun deletePrePopulatedItems()
 
     @Query("SELECT COUNT(*) FROM games")

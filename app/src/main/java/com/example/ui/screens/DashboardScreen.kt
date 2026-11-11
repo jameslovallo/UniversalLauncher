@@ -372,6 +372,8 @@ fun DashboardScreen(
                                 onLongPressFavorite = { app ->
                                     viewModel.openFavoriteActions(app)
                                 },
+                                onOpenClock = { viewModel.openClockApp() },
+                                onOpenCalendar = { viewModel.openCalendarApp() },
                                 onPullDown = { viewModel.expandNotificationShade() }
                             )
                         } else {
@@ -631,12 +633,14 @@ private fun AppsAlphabeticalList(
     ) {
         if (layout == FavoritesLayout.ICONS) {
             // Icon grid drawer: the same tiles as the favorites grid, left justified.
+            // Cells are packed edge to edge; the former gaps live inside each tile's
+            // clickable content padding so the whole cell is a touch target.
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 78.dp),
                 state = gridState,
                 contentPadding = PaddingValues(start = 12.dp, end = 0.dp, top = 8.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
@@ -651,19 +655,16 @@ private fun AppsAlphabeticalList(
                             AppLetterHeader(letter = entry.letter)
                         }
                         is AppListEntry.App -> item(key = entry.item.id) {
-                            Box(
-                                modifier = Modifier.fillMaxWidth(),
-                                contentAlignment = Alignment.CenterStart
-                            ) {
-                                AppIconTile(
-                                    app = entry.item,
-                                    isFocused = entry.item.id == focusedItemId,
-                                    showFocusEffects = showFocusEffects,
-                                    testTag = "app_row_${entry.item.id}",
-                                    onClick = { onAppClick(entry.item) },
-                                    onLongClick = { onAppLongClick(entry.item) }
-                                )
-                            }
+                            AppIconTile(
+                                app = entry.item,
+                                isFocused = entry.item.id == focusedItemId,
+                                showFocusEffects = showFocusEffects,
+                                testTag = "app_row_${entry.item.id}",
+                                onClick = { onAppClick(entry.item) },
+                                onLongClick = { onAppLongClick(entry.item) },
+                                contentPadding = PaddingValues(horizontal = 5.dp, vertical = 10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
                     }
                 }
@@ -672,7 +673,7 @@ private fun AppsAlphabeticalList(
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
@@ -691,6 +692,7 @@ private fun AppsAlphabeticalList(
                                 testTag = "app_row_${entry.item.id}",
                                 onClick = { onAppClick(entry.item) },
                                 onLongClick = { onAppLongClick(entry.item) },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
@@ -797,8 +799,8 @@ private fun AlphabetRail(
                 val isActive = letter == highlightedLetter
                 Text(
                     text = letter,
-                    fontSize = 9.sp,
-                    lineHeight = 11.sp,
+                    fontSize = 10.sp,
+                    lineHeight = 13.sp,
                     fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
                     color = if (isActive) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant,

@@ -2,6 +2,7 @@ package com.example.data.service
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.net.Uri
@@ -94,6 +95,13 @@ class InstalledAppsManager(private val context: Context) {
         false
     }
 
+    /**
+     * (publisher, shortcut id) for every shortcut pinned to this launcher, or null when
+     * the pinned list cannot be read.
+     */
+    fun getPinnedShortcutKeys(): Set<Pair<String, String>>? =
+        PinnedShortcutImporter.pinnedShortcutKeys(context)
+
     /** Open the Play Store games section, falling back to the web store. */
     fun openPlayStore(): Boolean {
         val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=games")).apply {
@@ -133,6 +141,28 @@ class InstalledAppsManager(private val context: Context) {
             }
         }
         return false
+    }
+
+    /**
+     * Launch a pinned shortcut through the launcher APIs. This preserves the publisher's
+     * original intent, including extras that cannot be serialised into a URI.
+     */
+    fun launchPinnedShortcut(packageName: String, shortcutId: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1) return false
+        return try {
+            val launcherApps = context.getSystemService(LauncherApps::class.java)
+                ?: return false
+            launcherApps.startShortcut(
+                packageName,
+                shortcutId,
+                null,
+                null,
+                android.os.Process.myUserHandle()
+            )
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**
@@ -201,18 +231,27 @@ class InstalledAppsManager(private val context: Context) {
 
     /**
      * Launch the system uninstall flow for an installed package.
+     *
+     * Apps targeting API 28+ must hold [android.Manifest.permission.REQUEST_DELETE_PACKAGES]
+     * to use the uninstall intents; without it the intent fails with a SecurityException.
+     * The app-info page is used as a last resort so the user can still uninstall.
      */
-    fun uninstallApp(packageName: String) {
-        try {
-            val intent = Intent(
-                Intent.ACTION_DELETE,
-                Uri.parse("package:$packageName")
-            ).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    fun uninstallApp(packageName: String): Boolean {
+        val packageUri = Uri.parse("package:$packageName")
+        @Suppress("DEPRECATION")
+        val uninstallIntent = Intent(Intent.ACTION_UNINSTALL_PACKAGE, packageUri)
+        val deleteIntent = Intent(Intent.ACTION_DELETE, packageUri)
+        for (base in listOf(uninstallIntent, deleteIntent)) {
+            val intent = Intent(base).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                context.startActivity(intent)
+                return true
+            } catch (_: Exception) {
+                // Try the next uninstall action, then fall back to app info.
             }
-            context.startActivity(intent)
-        } catch (_: Exception) {
         }
+        openAppInfo(packageName)
+        return false
     }
 
     /**

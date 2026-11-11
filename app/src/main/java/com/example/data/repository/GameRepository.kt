@@ -7,6 +7,7 @@ import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.service.GeForceNowService
 import com.example.data.service.InstalledAppsManager
+import com.example.data.service.PinnedShortcutImporter
 import com.example.data.service.SteamGridDbService
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -39,6 +40,27 @@ class GameRepository(
         gameDao.deletePrePopulatedItems()
         // Auto-scan installed apps and games
         syncInstalledApps()
+        // Pinned shortcuts that the publisher removed or the user unpinned should not
+        // linger as dead tiles.
+        removeStalePinnedShortcuts()
+    }
+
+    /**
+     * Drops pinned-shortcut tiles whose system shortcut no longer exists. Skipped when the
+     * pinned list cannot be read (for example while another launcher is the default one).
+     */
+    suspend fun removeStalePinnedShortcuts() {
+        val pinned = installedAppsManager.getPinnedShortcutKeys() ?: return
+        gameDao.getGamesByTypeNow(GameType.SHORTCUT)
+            .filter { it.id.startsWith(PinnedShortcutImporter.ID_PREFIX) }
+            .forEach { item ->
+                val key = item.packageName?.let { pkg ->
+                    item.activityName?.let { shortcutId -> pkg to shortcutId }
+                }
+                if (key == null || key !in pinned) {
+                    gameDao.deleteGameById(item.id)
+                }
+            }
     }
 
     suspend fun insertUserGame(game: GameItem) {
@@ -72,9 +94,9 @@ class GameRepository(
     suspend fun backfillGfnArtwork() {
         val gfnGames = gameDao.getGamesByTypeNow(GameType.GEFORCE_NOW)
         val needsArtwork = gfnGames.filter { game ->
-            val isDefaultArt = game.customArtworkSource == null || game.customArtworkSource == "GFN"
-            val poster = game.posterUrl
-            isDefaultArt && (poster.isNullOrBlank() || poster.contains("GAME_ICON_01"))
+            !game.isDeleted &&
+            (game.customArtworkSource == null || game.customArtworkSource == "GFN") &&
+            (game.posterUrl.isNullOrBlank() || game.posterUrl.contains("GAME_ICON_01"))
         }
         for (game in needsArtwork) {
             val boxArt = GeForceNowService.resolveBoxArtForCmsId(game.gfnCmsId) ?: continue
@@ -84,11 +106,17 @@ class GameRepository(
 
     suspend fun syncInstalledApps() {
         val installed = installedAppsManager.getInstalledApps()
+        val installedIds = installed.mapTo(HashSet()) { it.id }
+        // A tombstone whose package is gone entirely can be dropped: if the user ever
+        // reinstalls it, the app should show up in the library again from scratch.
+        gameDao.getGamesByTypeNow(GameType.INSTALLED_APP)
+            .filter { it.isDeleted && it.id !in installedIds }
+            .forEach { gameDao.deleteGameById(it.id) }
         for (app in installed) {
             val existing = gameDao.getGameById(app.id)
             if (existing == null) {
                 gameDao.insertGame(app)
-            } else {
+            } else if (!existing.isDeleted) {
                 val updated = existing.copy(
                     title = app.title,
                     packageName = app.packageName,
@@ -143,7 +171,9 @@ class GameRepository(
      * Games tab. Safe to call repeatedly; no-ops when the item already has artwork.
      */
     suspend fun ensureAutoPoster(item: GameItem) {
-        if (!item.isGame || item.type != GameType.INSTALLED_APP) return
+        if (!item.isGame) return
+        // Installed games and pinned game shortcuts both start without box art.
+        if (item.type != GameType.INSTALLED_APP && item.type != GameType.SHORTCUT) return
         if (!item.posterUrl.isNullOrBlank() || !item.customArtworkSource.isNullOrBlank()) return
 
         posterMatchMutex.withLock {
@@ -222,7 +252,9 @@ class GameRepository(
     }
 
     suspend fun deleteGame(gameId: String) {
-        gameDao.deleteGameById(gameId)
+        // Keep the row as a tombstone instead of removing it, otherwise the installed-app
+        // and catalog syncs re-add the tile on the next launcher start.
+        gameDao.markDeleted(gameId)
     }
 
     companion object {

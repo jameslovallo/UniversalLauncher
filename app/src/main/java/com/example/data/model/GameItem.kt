@@ -35,6 +35,9 @@ data class GameItem(
     val tags: String = "",
     val isPinned: Boolean = false,
     val isHidden: Boolean = false,
+    // Explicitly deleted from the library by the user. The row is kept as a tombstone so
+    // the installed-app and catalog syncs cannot resurrect it on the next launch.
+    val isDeleted: Boolean = false,
     // Position within the favorites view. Lower values appear first.
     val favoriteOrder: Int = 0
 ) {

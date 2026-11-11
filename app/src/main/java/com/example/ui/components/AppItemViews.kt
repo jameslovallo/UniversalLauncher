@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -40,7 +41,8 @@ import com.example.data.model.GameItem
 
 /**
  * A single left-aligned app row. Shared by the favorites home and the complete app
- * list so both layouts stay visually identical.
+ * list so both layouts stay visually identical. The whole row is the touch target;
+ * [contentPadding] lets the caller grow that target into the gaps between rows.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -51,6 +53,7 @@ fun AppTextRow(
     testTag: String,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    contentPadding: PaddingValues = PaddingValues(horizontal = 6.dp, vertical = 9.dp),
     modifier: Modifier = Modifier
 ) {
     val focused = isFocused && showFocusEffects
@@ -66,7 +69,7 @@ fun AppTextRow(
                 onClick = onClick,
                 onLongClick = onLongClick
             )
-            .padding(vertical = 9.dp, horizontal = 6.dp)
+            .padding(contentPadding)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -95,7 +98,8 @@ fun AppTextRow(
 /**
  * A single app icon tile. Shared by the favorites grid and the icon-style app drawer.
  * There is no outline or backdrop behind the icon; focus only scales the tile when a
- * controller is connected.
+ * controller is connected. The tile fills whatever size the caller gives it, so the
+ * whole grid cell is tappable rather than just the icon and label.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -106,6 +110,7 @@ fun AppIconTile(
     testTag: String,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    contentPadding: PaddingValues = PaddingValues(vertical = 6.dp),
     modifier: Modifier = Modifier
 ) {
     val focused = isFocused && showFocusEffects
@@ -117,14 +122,13 @@ fun AppIconTile(
 
     Column(
         modifier = modifier
-            .width(78.dp)
             .scale(scale)
             .clip(RoundedCornerShape(16.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
             )
-            .padding(vertical = 6.dp)
+            .padding(contentPadding)
             .testTag(testTag),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {

@@ -1,9 +1,12 @@
 package com.example.ui.components
 
+import android.content.res.Configuration
+import android.text.format.DateFormat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +14,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -39,10 +43,12 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -50,6 +56,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -59,6 +67,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.data.model.GameItem
 import com.example.ui.theme.FavoritesLayout
+import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 
 /**
@@ -78,6 +90,8 @@ fun FavoritesHome(
     showFocusEffects: Boolean,
     onLaunchFavorite: (GameItem) -> Unit,
     onLongPressFavorite: (GameItem) -> Unit,
+    onOpenClock: () -> Unit,
+    onOpenCalendar: () -> Unit,
     onPullDown: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -85,35 +99,68 @@ fun FavoritesHome(
     val contentAlignment = if (isTextLayout) Alignment.Start else Alignment.CenterHorizontally
     val textAlign = if (isTextLayout) TextAlign.Start else TextAlign.Center
 
+    // The clock and date are only shown in portrait: in landscape the space is needed
+    // for the favorites themselves.
+    val context = LocalContext.current
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1_000L)
+        }
+    }
+
+    val is24Hour = remember { DateFormat.is24HourFormat(context) }
+    val timeFormatter = remember(is24Hour) {
+        SimpleDateFormat(if (is24Hour) "HH:mm" else "h:mm", Locale.getDefault())
+    }
+    val dateFormatter = remember {
+        SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
+    }
+    val nowDate = Date(now)
+
     Column(
         modifier = modifier
             .fillMaxSize()
             // Before the padding, so the whole home screen is a pull-down surface.
             .pointerInput(onPullDown) {
                 // A short downward drag on the home screen expands the notification
-                // shade. Upward drags are left to the parent pager (opens the drawer).
+                // shade. Crucial: this uses Compose's touch-slop axis locking, so the
+                // gesture is only claimed once it is clearly a downward drag. Horizontal
+                // swipes and upward drags are left to the pagers.
                 val triggerDistance = 64.dp.toPx()
-                val touchSlop = viewConfiguration.touchSlop
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    var totalDy = 0f
-                    var isVertical = false
+                    var totalPull = 0f
+
+                    awaitVerticalTouchSlopOrCancellation(down.id) { change, overSlop ->
+                        val dy = change.position.y - down.position.y
+                        val dx = change.position.x - down.position.x
+                        // Claim only downward, vertically dominant drags. If anything
+                        // else consumed the movement, the detector cancels itself.
+                        if (dy > 0f && dy > abs(dx)) {
+                            change.consume()
+                            totalPull = overSlop
+                        }
+                    } ?: return@awaitEachGesture
+
                     var fired = false
+                    if (totalPull >= triggerDistance) {
+                        fired = true
+                        onPullDown()
+                    }
+
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) break
-                        totalDy += change.position.y - change.previousPosition.y
-                        if (!isVertical && abs(totalDy) > touchSlop) {
-                            isVertical = true
-                            if (totalDy < 0f) return@awaitEachGesture
-                        }
-                        if (isVertical && totalDy > 0f) {
-                            change.consume()
-                            if (!fired && totalDy >= triggerDistance) {
-                                fired = true
-                                onPullDown()
-                            }
+                        totalPull += change.position.y - change.previousPosition.y
+                        change.consume()
+                        if (!fired && totalPull >= triggerDistance) {
+                            fired = true
+                            onPullDown()
                         }
                     }
                 }
@@ -122,6 +169,38 @@ fun FavoritesHome(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = contentAlignment
     ) {
+        if (!isLandscape) {
+            Text(
+                text = timeFormatter.format(nowDate),
+                fontSize = 64.sp,
+                fontWeight = FontWeight.Light,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = textAlign,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .clickable { onOpenClock() }
+                    .padding(vertical = 4.dp)
+                    .then(if (isTextLayout) Modifier else Modifier.padding(horizontal = 20.dp))
+                    .testTag("favorites_clock")
+            )
+
+            Text(
+                text = dateFormatter.format(nowDate),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = textAlign,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onOpenCalendar() }
+                    .padding(vertical = 4.dp)
+                    .then(if (isTextLayout) Modifier else Modifier.padding(horizontal = 14.dp))
+                    .testTag("favorites_date")
+            )
+
+            Spacer(modifier = Modifier.height(34.dp))
+        }
+
         if (favorites.isEmpty()) {
             Text(
                 text = "No favorite apps yet",
@@ -145,20 +224,23 @@ fun FavoritesHome(
 
                 if (isTextLayout) {
                     // Multiple columns of inline icon+name rows. Two columns fit on a
-                    // phone in portrait; wider screens add more columns.
+                    // phone in portrait; wider screens add more columns. Rows are packed
+                    // edge to edge and the former gaps become part of each row's touch
+                    // target, so the whole favorites area is interactive.
                     val minColumnWidth = 170.dp
                     val columns = maxOf(
                         2,
                         ((maxWidth + spacing) / (minColumnWidth + spacing)).toInt()
                     )
-                    val itemWidth = (maxWidth - spacing * (columns - 1)) / columns
+                    val rowGap = 2.dp
+                    val itemWidth = maxWidth / columns
 
                     FlowRow(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("favorites_text_list"),
-                        horizontalArrangement = Arrangement.spacedBy(spacing),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(0.dp),
+                        verticalArrangement = Arrangement.spacedBy(0.dp),
                         maxItemsInEachRow = columns
                     ) {
                         favorites.forEach { app ->
@@ -169,25 +251,34 @@ fun FavoritesHome(
                                 testTag = "favorite_app_${app.id}",
                                 onClick = { onLaunchFavorite(app) },
                                 onLongClick = { onLongPressFavorite(app) },
+                                contentPadding = PaddingValues(
+                                    horizontal = 6.dp + spacing / 2,
+                                    vertical = 9.dp + rowGap / 2
+                                ),
                                 modifier = Modifier.width(itemWidth)
                             )
                         }
                     }
                 } else {
-                    // Icon tiles in as many columns as the screen width allows.
+                    // Icon tiles in as many columns as the screen width allows. Tiles are
+                    // sized to the full column pitch so every pixel of the grid, including
+                    // the visual spacing, belongs to a tile's clickable area.
                     val tileWidth = 78.dp
+                    val tileGap = spacing
+                    val rowGap = 14.dp
+                    val tilePitch = tileWidth + tileGap
                     val columns = maxOf(
                         4,
-                        ((maxWidth + spacing) / (tileWidth + spacing)).toInt()
+                        ((maxWidth + tileGap) / tilePitch).toInt()
                     )
 
                     FlowRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(
-                            spacing,
+                            0.dp,
                             Alignment.CenterHorizontally
                         ),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(0.dp),
                         maxItemsInEachRow = columns
                     ) {
                         favorites.forEach { app ->
@@ -197,7 +288,12 @@ fun FavoritesHome(
                                 showFocusEffects = showFocusEffects,
                                 testTag = "favorite_app_${app.id}",
                                 onClick = { onLaunchFavorite(app) },
-                                onLongClick = { onLongPressFavorite(app) }
+                                onLongClick = { onLongPressFavorite(app) },
+                                contentPadding = PaddingValues(
+                                    horizontal = tileGap / 2,
+                                    vertical = 6.dp + rowGap / 2
+                                ),
+                                modifier = Modifier.width(tilePitch)
                             )
                         }
                     }
