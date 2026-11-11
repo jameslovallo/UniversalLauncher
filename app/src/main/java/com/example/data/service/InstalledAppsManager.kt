@@ -186,6 +186,52 @@ class InstalledAppsManager(private val context: Context) {
     }
 
     /**
+     * Expand the system notification shade. Uses the platform StatusBarManager exposed by
+     * the launcher role; silently no-ops on devices that restrict it.
+     */
+    fun expandNotificationShade() {
+        try {
+            val statusBarManager = context.getSystemService("statusbar") ?: return
+            statusBarManager.javaClass
+                .getMethod("expandNotificationsPanel")
+                .invoke(statusBarManager)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Launch the system uninstall flow for an installed package.
+     */
+    fun uninstallApp(packageName: String) {
+        try {
+            val intent = Intent(
+                Intent.ACTION_DELETE,
+                Uri.parse("package:$packageName")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Open the system app-info screen for an installed package.
+     */
+    fun openAppInfo(packageName: String) {
+        try {
+            val intent = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:$packageName")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
      * Open system settings to configure default Home/Launcher app.
      */
     fun openHomeSettings() {

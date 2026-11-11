@@ -4,11 +4,10 @@ import android.content.res.Configuration
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -37,9 +38,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -57,6 +58,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,10 +66,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -75,10 +78,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.example.data.model.GameItem
 import com.example.ui.components.AddContentModal
+import com.example.ui.components.AppIconTile
+import com.example.ui.components.AppTextRow
 import com.example.ui.components.CustomizeItemDialog
 import com.example.ui.components.EditFavoritesSheet
 import com.example.ui.components.FavoriteActionsSheet
@@ -90,6 +93,7 @@ import com.example.ui.components.TopNavBar
 import com.example.ui.viewmodel.AddModalSubView
 import com.example.ui.viewmodel.LauncherViewModel
 import com.example.ui.viewmodel.MainLibraryTab
+import com.example.ui.theme.FavoritesLayout
 import kotlinx.coroutines.launch
 
 @Composable
@@ -128,6 +132,7 @@ fun DashboardScreen(
     var showSearchBar by remember { mutableStateOf(false) }
 
     val gridState = rememberLazyGridState()
+    val appsGridState = rememberLazyGridState()
     val gamesRowState = rememberLazyListState()
     val appsListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -158,6 +163,12 @@ fun DashboardScreen(
 
     // Vertical pager inside the Apps tab: favorites home, then the complete app list.
     val appsPagerState = rememberPagerState(pageCount = { 2 })
+
+    // Dismiss the drawer with a much shorter downward drag than the default half-page.
+    val appsPagerFling = PagerDefaults.flingBehavior(
+        state = appsPagerState,
+        snapPositionalThreshold = 0.12f
+    )
 
     LaunchedEffect(pagerState.currentPage) {
         val tab = if (pagerState.currentPage == 0) MainLibraryTab.APPS else MainLibraryTab.GAMES
@@ -226,7 +237,11 @@ fun DashboardScreen(
                     if (appsPagerState.currentPage != 1) {
                         appsPagerState.animateScrollToPage(1)
                     }
-                    appsListState.animateScrollToItem(idx)
+                    if (favoritesLayout == FavoritesLayout.ICONS) {
+                        appsGridState.animateScrollToItem(idx)
+                    } else {
+                        appsListState.animateScrollToItem(idx)
+                    }
                 }
             }
         }
@@ -247,12 +262,14 @@ fun DashboardScreen(
                 )
         )
 
-        // Fades to an opaque Material background as the pager settles on the Games page.
+        // Fades to an opaque Material container as the pager settles on the Games page.
+        // surfaceContainerHighest is a defined Material palette tone that sits between
+        // the light and dark extremes instead of near-black.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
-                    MaterialTheme.colorScheme.background.copy(alpha = darkAmount)
+                    MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = darkAmount)
                 )
         )
 
@@ -260,6 +277,7 @@ fun DashboardScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
+                .displayCutoutPadding()
         ) {
             // Top Navigation Bar (+ Icon Left, Apps/Games Center, Settings Gear Right)
             TopNavBar(
@@ -321,6 +339,7 @@ fun DashboardScreen(
                             gridState = gridState,
                             rowState = gamesRowState,
                             compactLandscape = isCompactLandscape,
+                            onColumnCountChanged = { viewModel.setGamesColumnCount(it) },
                             onGameClick = { game ->
                                 viewModel.setFocusedItem(game.id)
                                 viewModel.launchItem(game)
@@ -335,6 +354,7 @@ fun DashboardScreen(
                     // complete app list, which excludes favorites and games.
                     VerticalPager(
                         state = appsPagerState,
+                        flingBehavior = appsPagerFling,
                         modifier = Modifier
                             .fillMaxSize()
                             .testTag("apps_vertical_pager")
@@ -344,6 +364,7 @@ fun DashboardScreen(
                                 favorites = favoriteApps,
                                 focusedItemId = focusedItemId,
                                 layout = favoritesLayout,
+                                showFocusEffects = controllerState.isConnected,
                                 onLaunchFavorite = { app ->
                                     viewModel.setFocusedItem(app.id)
                                     viewModel.launchItem(app)
@@ -351,8 +372,7 @@ fun DashboardScreen(
                                 onLongPressFavorite = { app ->
                                     viewModel.openFavoriteActions(app)
                                 },
-                                onOpenClock = { viewModel.openClockApp() },
-                                onOpenCalendar = { viewModel.openCalendarApp() }
+                                onPullDown = { viewModel.expandNotificationShade() }
                             )
                         } else {
                             if (libraryDisplay.isEmpty()) {
@@ -361,7 +381,10 @@ fun DashboardScreen(
                                 AppsAlphabeticalList(
                                     entries = appListEntries,
                                     focusedItemId = focusedItemId,
+                                    layout = favoritesLayout,
+                                    showFocusEffects = controllerState.isConnected,
                                     listState = appsListState,
+                                    gridState = appsGridState,
                                     onAppClick = { app ->
                                         viewModel.setFocusedItem(app.id)
                                         viewModel.launchItem(app)
@@ -374,7 +397,13 @@ fun DashboardScreen(
                                             it is AppListEntry.Letter && it.letter == letter
                                         }
                                         if (index >= 0) {
-                                            scope.launch { appsListState.animateScrollToItem(index) }
+                                            scope.launch {
+                                                if (favoritesLayout == FavoritesLayout.ICONS) {
+                                                    appsGridState.scrollToItem(index)
+                                                } else {
+                                                    appsListState.scrollToItem(index)
+                                                }
+                                            }
                                         }
                                     }
                                 )
@@ -398,6 +427,7 @@ fun DashboardScreen(
                     }
                 },
                 onToggleFavorite = { viewModel.toggleFavorite(contextMenuItem!!) },
+                onOpenAppInfo = { viewModel.openAppInfo(contextMenuItem!!) },
                 onHide = { viewModel.hideItem(contextMenuItem!!) },
                 onDelete = { viewModel.deleteItem(contextMenuItem!!) },
                 onDismiss = { viewModel.closeContextMenu() }
@@ -446,7 +476,7 @@ fun DashboardScreen(
                 onNavigateSubView = { viewModel.setAddModalSubView(it) },
                 onOpenPlayStore = { viewModel.openPlayStore() },
                 onOpenMoonlight = { viewModel.openMoonlight() },
-                onAddShortcut = { title, url, poster -> viewModel.addCustomShortcutToGames(title, url, poster) },
+                onAddShortcut = { title, url, poster -> viewModel.addCustomShortcutToApps(title, url, poster) },
                 onAddGfnGame = { viewModel.addGfnGameToGames(it) },
                 onDismiss = { viewModel.closeAddModal() }
             )
@@ -476,6 +506,7 @@ private fun GamesPosterGrid(
     gridState: LazyGridState,
     rowState: LazyListState,
     compactLandscape: Boolean,
+    onColumnCountChanged: (Int) -> Unit,
     onGameClick: (GameItem) -> Unit,
     onGameLongClick: (GameItem) -> Unit
 ) {
@@ -483,6 +514,8 @@ private fun GamesPosterGrid(
         // Small landscape screens: a single horizontal row that steps one poster at a
         // time. The focused poster sits at the left edge and is visibly larger.
         val snapFling = rememberSnapFlingBehavior(lazyListState = rowState)
+
+        LaunchedEffect(Unit) { onColumnCountChanged(1) }
 
         LazyRow(
             state = rowState,
@@ -525,6 +558,8 @@ private fun GamesPosterGrid(
             3,
             ((availableWidth + spacing) / (96.dp + spacing)).toInt()
         )
+
+        LaunchedEffect(columnCount) { onColumnCountChanged(columnCount) }
 
         LazyVerticalGrid(
             columns = GridCells.Fixed(columnCount),
@@ -572,7 +607,10 @@ private fun buildAppListEntries(apps: List<GameItem>): List<AppListEntry> {
 private fun AppsAlphabeticalList(
     entries: List<AppListEntry>,
     focusedItemId: String?,
+    layout: FavoritesLayout,
+    showFocusEffects: Boolean,
     listState: LazyListState,
+    gridState: LazyGridState,
     onAppClick: (GameItem) -> Unit,
     onAppLongClick: (GameItem) -> Unit,
     onLetterSelected: (String) -> Unit
@@ -591,27 +629,71 @@ private fun AppsAlphabeticalList(
             .fillMaxSize()
             .navigationBarsPadding()
     ) {
-        LazyColumn(
-            state = listState,
-            contentPadding = PaddingValues(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .testTag("apps_list")
-        ) {
-            entries.forEach { entry ->
-                when (entry) {
-                    is AppListEntry.Letter -> item(key = "section_${entry.letter}") {
-                        AppLetterHeader(letter = entry.letter)
+        if (layout == FavoritesLayout.ICONS) {
+            // Icon grid drawer: the same tiles as the favorites grid, left justified.
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 78.dp),
+                state = gridState,
+                contentPadding = PaddingValues(start = 12.dp, end = 0.dp, top = 8.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .testTag("apps_grid")
+            ) {
+                entries.forEach { entry ->
+                    when (entry) {
+                        is AppListEntry.Letter -> item(
+                            key = "section_${entry.letter}",
+                            span = { GridItemSpan(maxLineSpan) }
+                        ) {
+                            AppLetterHeader(letter = entry.letter)
+                        }
+                        is AppListEntry.App -> item(key = entry.item.id) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                AppIconTile(
+                                    app = entry.item,
+                                    isFocused = entry.item.id == focusedItemId,
+                                    showFocusEffects = showFocusEffects,
+                                    testTag = "app_row_${entry.item.id}",
+                                    onClick = { onAppClick(entry.item) },
+                                    onLongClick = { onAppLongClick(entry.item) }
+                                )
+                            }
+                        }
                     }
-                    is AppListEntry.App -> item(key = entry.item.id) {
-                        AppListRow(
-                            app = entry.item,
-                            isFocused = entry.item.id == focusedItemId,
-                            onClick = { onAppClick(entry.item) },
-                            onLongClick = { onAppLongClick(entry.item) }
-                        )
+                }
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                contentPadding = PaddingValues(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .testTag("apps_list")
+            ) {
+                entries.forEach { entry ->
+                    when (entry) {
+                        is AppListEntry.Letter -> item(key = "section_${entry.letter}") {
+                            AppLetterHeader(letter = entry.letter)
+                        }
+                        is AppListEntry.App -> item(key = entry.item.id) {
+                            AppTextRow(
+                                app = entry.item,
+                                isFocused = entry.item.id == focusedItemId,
+                                showFocusEffects = showFocusEffects,
+                                testTag = "app_row_${entry.item.id}",
+                                onClick = { onAppClick(entry.item) },
+                                onLongClick = { onAppLongClick(entry.item) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
             }
@@ -630,7 +712,6 @@ private fun AppLetterHeader(letter: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.92f))
             .padding(start = 6.dp, top = 12.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -648,107 +729,82 @@ private fun AppLetterHeader(letter: String) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun AppListRow(
-    app: GameItem,
-    isFocused: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit
-) {
-    val context = LocalContext.current
-    val imageUrl = app.iconUrl ?: app.posterUrl
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(21.dp))
-            .background(
-                if (isFocused) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-                else Color.Transparent
-            )
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
-            .padding(horizontal = 6.dp, vertical = 9.dp)
-            .testTag("app_row_${app.id}"),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(42.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            if (!imageUrl.isNullOrBlank()) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(imageUrl)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = "${app.title} icon",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(CircleShape)
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.Apps,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(21.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.width(18.dp))
-
-        Text(
-            text = app.title,
-            fontSize = 24.sp,
-            fontWeight = if (isFocused) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (isFocused) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
-
 @Composable
 private fun AlphabetRail(
     letters: List<String>,
     activeLetter: String?,
     onLetterSelected: (String) -> Unit
 ) {
-    Column(
+    // Measure the rail and the packed letter column inside it, so a touch maps onto the
+    // letters the user can actually see (the column is bottom-aligned, not full height).
+    var railHeight by remember { mutableIntStateOf(0) }
+    var lettersHeight by remember { mutableIntStateOf(0) }
+    var draggedLetter by remember { mutableStateOf<String?>(null) }
+    val haptics = LocalHapticFeedback.current
+    val highlightedLetter = draggedLetter ?: activeLetter
+
+    fun letterAt(y: Float): String? {
+        if (letters.isEmpty() || lettersHeight <= 0) return null
+        val top = (railHeight - lettersHeight).coerceAtLeast(0)
+        val local = (y - top).coerceIn(0f, lettersHeight - 1f)
+        val index = ((local / lettersHeight) * letters.size)
+            .toInt()
+            .coerceIn(0, letters.lastIndex)
+        return letters[index]
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxHeight()
-            .width(28.dp)
-            .padding(vertical = 8.dp)
+            .width(36.dp)
+            .onSizeChanged { railHeight = it.height }
+            .pointerInput(letters) {
+                // Press and drag are a single continuous gesture: every letter the thumb
+                // passes over is selected immediately, with no per-letter buttons.
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    var lastReported: String? = null
+
+                    fun report(letter: String?) {
+                        if (letter == null || letter == lastReported) return
+                        lastReported = letter
+                        draggedLetter = letter
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onLetterSelected(letter)
+                    }
+
+                    report(letterAt(down.position.y))
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        change.consume()
+                        report(letterAt(change.position.y))
+                    }
+                    draggedLetter = null
+                }
+            }
             .testTag("apps_alphabet_rail"),
-        verticalArrangement = Arrangement.SpaceEvenly,
-        horizontalAlignment = Alignment.CenterHorizontally
+        contentAlignment = Alignment.BottomCenter
     ) {
-        letters.forEach { letter ->
-            val isActive = letter == activeLetter
-            Box(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable { onLetterSelected(letter) }
-                    .padding(horizontal = 5.dp, vertical = 1.dp),
-                contentAlignment = Alignment.Center
-            ) {
+        Column(
+            modifier = Modifier.onSizeChanged { lettersHeight = it.height },
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            letters.forEach { letter ->
+                val isActive = letter == highlightedLetter
                 Text(
                     text = letter,
-                    fontSize = 10.sp,
-                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.SemiBold,
+                    fontSize = 9.sp,
+                    lineHeight = 11.sp,
+                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
                     color = if (isActive) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .padding(horizontal = 4.dp)
+                        .testTag("alphabet_rail_letter_$letter")
                 )
             }
         }

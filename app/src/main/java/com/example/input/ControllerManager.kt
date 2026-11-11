@@ -38,9 +38,15 @@ class ControllerManager(context: Context) : InputManager.InputDeviceListener {
     private val _controllerState = MutableStateFlow(ControllerState())
     val controllerState: StateFlow<ControllerState> = _controllerState.asStateFlow()
 
-    private var lastJoystickNavTime = 0L
-    private val joystickThrottleMs = 220L
-    private val joystickDeadzone = 0.45f
+    private var lastNavigationTime = 0L
+    private val navigationThrottleMs = 130L
+    private val joystickDeadzone = 0.55f
+    private val joystickReleaseZone = 0.35f
+
+    // The direction the stick is currently deflected towards. A direction is emitted once
+    // per deflection; the stick must return near neutral before it can fire again. This
+    // stops a noisy analog stick from stepping several items for one push.
+    private var activeDirection: ControllerAction? = null
 
     init {
         inputManager.registerInputDeviceListener(this, Handler(Looper.getMainLooper()))
@@ -83,7 +89,7 @@ class ControllerManager(context: Context) : InputManager.InputDeviceListener {
     fun handleKeyEvent(event: KeyEvent): ControllerAction? {
         if (event.action != KeyEvent.ACTION_DOWN) return null
 
-        return when (event.keyCode) {
+        val action = when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> ControllerAction.UP
             KeyEvent.KEYCODE_DPAD_DOWN -> ControllerAction.DOWN
             KeyEvent.KEYCODE_DPAD_LEFT -> ControllerAction.LEFT
@@ -112,11 +118,25 @@ class ControllerManager(context: Context) : InputManager.InputDeviceListener {
             KeyEvent.KEYCODE_BUTTON_MODE -> ControllerAction.QUICK_SELECT
 
             else -> null
+        } ?: return null
+
+        val isNavigation = action == ControllerAction.UP || action == ControllerAction.DOWN ||
+            action == ControllerAction.LEFT || action == ControllerAction.RIGHT
+        if (isNavigation) {
+            val now = System.currentTimeMillis()
+            if (now - lastNavigationTime < navigationThrottleMs) {
+                return null
+            }
+            lastNavigationTime = now
         }
+        return action
     }
 
     /**
-     * Handle analog stick (Left Stick / Hat) motion events for navigation
+     * Handle analog stick (Left Stick / Hat) motion events for navigation.
+     *
+     * Uses hysteresis (a larger engage threshold than the release threshold) and emits
+     * only when the stick moves into a new direction, so one push steps one item.
      */
     fun handleMotionEvent(event: MotionEvent): ControllerAction? {
         if ((event.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK &&
@@ -125,25 +145,41 @@ class ControllerManager(context: Context) : InputManager.InputDeviceListener {
             return null
         }
 
-        val now = System.currentTimeMillis()
-        if (now - lastJoystickNavTime < joystickThrottleMs) return null
-
-        val x = event.getAxisValue(MotionEvent.AXIS_X).let { if (abs(it) > joystickDeadzone) it else 0f }
-        val y = event.getAxisValue(MotionEvent.AXIS_Y).let { if (abs(it) > joystickDeadzone) it else 0f }
+        val rawX = event.getAxisValue(MotionEvent.AXIS_X)
+        val rawY = event.getAxisValue(MotionEvent.AXIS_Y)
         val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
         val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
 
-        val navAction = when {
-            hatY < -0.5f || y < -joystickDeadzone -> ControllerAction.UP
-            hatY > 0.5f || y > joystickDeadzone -> ControllerAction.DOWN
-            hatX < -0.5f || x < -joystickDeadzone -> ControllerAction.LEFT
-            hatX > 0.5f || x > joystickDeadzone -> ControllerAction.RIGHT
-            else -> null
+        val x = if (abs(hatX) > 0.5f) hatX else rawX
+        val y = if (abs(hatY) > 0.5f) hatY else rawY
+        val absX = abs(x)
+        val absY = abs(y)
+        val magnitude = maxOf(absX, absY)
+
+        if (magnitude < joystickReleaseZone) {
+            // Break hysteresis once the stick is back near neutral.
+            activeDirection = null
+            return null
+        }
+        if (magnitude < joystickDeadzone) {
+            // Inside the hysteresis band: keep the current direction latched.
+            return null
+        }
+        // One step per deflection. Wait for the stick to return near neutral before
+        // another direction can fire, even if the angle drifts while held.
+        if (activeDirection != null) return null
+
+        val direction = if (absX >= absY) {
+            if (x > 0f) ControllerAction.RIGHT else ControllerAction.LEFT
+        } else {
+            if (y > 0f) ControllerAction.DOWN else ControllerAction.UP
         }
 
-        if (navAction != null) {
-            lastJoystickNavTime = now
-        }
-        return navAction
+        val now = System.currentTimeMillis()
+        if (now - lastNavigationTime < navigationThrottleMs) return null
+
+        activeDirection = direction
+        lastNavigationTime = now
+        return direction
     }
 }

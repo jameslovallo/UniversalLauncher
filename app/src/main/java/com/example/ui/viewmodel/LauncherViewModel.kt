@@ -167,6 +167,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         gamesRowMode = enabled
     }
 
+    /** Actual column count of the Games poster grid, used for D-pad up/down steps. */
+    private var gamesColumnCount = 4
+
+    fun setGamesColumnCount(count: Int) {
+        if (count > 0) gamesColumnCount = count
+    }
+
     fun launchItem(item: GameItem) {
         viewModelScope.launch {
             repository.recordPlay(item.id)
@@ -282,8 +289,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         installedAppsManager.openCalendar()
     }
 
+    /** Pull down the notification shade from the favorites home. */
+    fun expandNotificationShade() {
+        installedAppsManager.expandNotificationShade()
+    }
+
+    /** Open the system app-info page for an installed app. */
+    fun openAppInfo(item: GameItem) {
+        item.packageName?.let { installedAppsManager.openAppInfo(it) }
+        closeContextMenu()
+    }
+
     fun deleteItem(item: GameItem) {
         viewModelScope.launch {
+            // Native apps in the Apps tab get a real uninstall prompt; shortcuts and
+            // other library entries are simply removed. The row is dropped either way,
+            // and a cancelled uninstall will be restored by the next app sync.
+            if (item.type == GameType.INSTALLED_APP && !item.isGame) {
+                item.packageName?.let { installedAppsManager.uninstallApp(it) }
+            }
             repository.deleteGame(item.id)
             closeContextMenu()
         }
@@ -356,16 +380,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         closeAddModal()
     }
 
-    fun addCustomShortcutToGames(title: String, url: String, posterUrl: String?) {
+    /**
+     * Custom web/cloud shortcuts are library entries like any other app. Only Moonlight
+     * creates game tiles, so new shortcuts are added to the app list.
+     */
+    fun addCustomShortcutToApps(title: String, url: String, posterUrl: String?) {
         viewModelScope.launch {
             val type = if (url.contains("geforcenow.com") || url.contains("xbox.com/play")) {
                 GameType.CUSTOM_CLOUD
             } else {
                 GameType.SHORTCUT
             }
-            repository.addCustomShortcut(title, url, posterUrl, type)
+            repository.addCustomShortcut(title, url, posterUrl, type, isGame = false)
             closeAddModal()
-            _currentTab.value = MainLibraryTab.GAMES
+            _currentTab.value = MainLibraryTab.APPS
         }
     }
 
@@ -495,9 +523,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val isAppsTab = _currentTab.value == MainLibraryTab.APPS
                 // In compact landscape the Games tab is a single horizontal row, so
                 // every direction steps one poster instead of jumping a grid column.
-                val step = if (isAppsTab || gamesRowMode) 1 else 4
-                val curIndex = currentList.indexOfFirst { it.id == _focusedItemId.value }.let { if (it >= 0) it else 0 }
-                val nextIndex = when (action) {
+                val step = if (isAppsTab || gamesRowMode) 1 else gamesColumnCount
+                val hasFocus = currentList.any { it.id == _focusedItemId.value }
+                val curIndex = currentList.indexOfFirst { it.id == _focusedItemId.value }
+                    .let { if (it >= 0) it else 0 }
+                val nextIndex = if (!hasFocus) {
+                    0
+                } else when (action) {
                     ControllerAction.RIGHT -> (curIndex + 1).coerceAtMost(currentList.lastIndex)
                     ControllerAction.LEFT -> (curIndex - 1).coerceAtLeast(0)
                     ControllerAction.DOWN ->

@@ -163,13 +163,15 @@ class GameRepository(
         url: String,
         posterUrl: String?,
         type: GameType,
-        genre: String = "Web Shortcut"
+        genre: String = "Web Shortcut",
+        isGame: Boolean = false
     ) {
         val id = "custom_${System.currentTimeMillis()}"
         val item = GameItem(
             id = id,
             title = title,
             type = type,
+            isGame = isGame,
             launchUrl = url,
             posterUrl = posterUrl,
             genre = genre,

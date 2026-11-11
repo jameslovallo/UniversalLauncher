@@ -17,14 +17,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -44,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.GameItem
+import com.example.data.model.GameType
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,6 +56,7 @@ fun ItemContextMenuSheet(
     onCustomize: () -> Unit,
     onMove: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onOpenAppInfo: () -> Unit,
     onHide: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
@@ -71,11 +76,14 @@ fun ItemContextMenuSheet(
                 .navigationBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 8.dp)
         ) {
-            // Header Preview
+            // Header Preview. Tapping the header opens the customization editor.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 16.dp),
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { onCustomize() }
+                    .padding(bottom = 16.dp)
+                    .testTag("context_menu_header"),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
@@ -123,19 +131,24 @@ fun ItemContextMenuSheet(
                         fontWeight = FontWeight.Medium
                     )
                 }
+
+                if (item.type == GameType.INSTALLED_APP && item.packageName != null) {
+                    IconButton(
+                        onClick = onOpenAppInfo,
+                        modifier = Modifier.testTag("context_menu_app_info")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Open app info in system settings",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
             Spacer(modifier = Modifier.height(8.dp))
-
-            // Action 1: Customize Name and Icon / Artwork
-            ContextMenuItemRow(
-                icon = Icons.Default.Edit,
-                title = "Customize name and icon",
-                onClick = onCustomize,
-                testTag = "context_menu_customize"
-            )
 
             // Action 2: Move to Apps / Move to Games
             if (item.isGame) {
@@ -172,14 +185,40 @@ fun ItemContextMenuSheet(
                 testTag = "context_menu_hide"
             )
 
-            // Action 6: Remove
-            ContextMenuItemRow(
-                icon = Icons.Default.Delete,
-                title = "Remove from library",
-                isDestructive = true,
+            // Explicit destructive action: uninstall a native app, delete a shortcut, or
+            // remove a game tile from the library.
+            val isNativeApp = item.type == GameType.INSTALLED_APP &&
+                !item.isGame && !item.packageName.isNullOrBlank()
+            val deleteLabel = when {
+                isNativeApp -> "Uninstall app"
+                item.isGame -> "Remove from library"
+                else -> "Delete shortcut"
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
                 onClick = onDelete,
-                testTag = "context_menu_delete"
-            )
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                ),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .testTag("context_menu_delete")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = null
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = deleteLabel,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
         }

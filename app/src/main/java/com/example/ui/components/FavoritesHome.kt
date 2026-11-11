@@ -1,15 +1,13 @@
 package com.example.ui.components
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -26,7 +24,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DragHandle
@@ -42,48 +39,35 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import android.text.format.DateFormat
 import com.example.data.model.GameItem
 import com.example.ui.theme.FavoritesLayout
-import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import kotlin.math.abs
 
 /**
- * Full-height favorites home shown on the Apps tab. The clock, date and favorite apps are
- * vertically centred; swiping up (handled by the parent pager) reveals the complete app
- * list. Tapping the clock opens the clock app and tapping the date opens the calendar.
+ * Full-height favorites home shown on the Apps tab. Favorites are laid out in as many
+ * columns as fit, in either the text-list or icon-grid style. Swiping up (handled by the
+ * parent pager) reveals the complete app list.
  *
- * The [layout] decides whether favorites are a left-aligned text list (small icon inline
- * with each app name, the default) or a centred grid of large icons.
+ * The [layout] decides whether favorites use inline icon+name rows (the default) or
+ * large icon tiles.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -91,31 +75,12 @@ fun FavoritesHome(
     favorites: List<GameItem>,
     focusedItemId: String?,
     layout: FavoritesLayout,
+    showFocusEffects: Boolean,
     onLaunchFavorite: (GameItem) -> Unit,
     onLongPressFavorite: (GameItem) -> Unit,
-    onOpenClock: () -> Unit,
-    onOpenCalendar: () -> Unit,
+    onPullDown: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(1_000L)
-        }
-    }
-
-    val is24Hour = remember { DateFormat.is24HourFormat(context) }
-    val timeFormatter = remember(is24Hour) {
-        SimpleDateFormat(if (is24Hour) "HH:mm" else "h:mm", Locale.getDefault())
-    }
-    val dateFormatter = remember {
-        SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
-    }
-    val nowDate = Date(now)
-
     val isTextLayout = layout == FavoritesLayout.TEXT
     val contentAlignment = if (isTextLayout) Alignment.Start else Alignment.CenterHorizontally
     val textAlign = if (isTextLayout) TextAlign.Start else TextAlign.Center
@@ -123,40 +88,40 @@ fun FavoritesHome(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp),
+            // Before the padding, so the whole home screen is a pull-down surface.
+            .pointerInput(onPullDown) {
+                // A short downward drag on the home screen expands the notification
+                // shade. Upward drags are left to the parent pager (opens the drawer).
+                val triggerDistance = 64.dp.toPx()
+                val touchSlop = viewConfiguration.touchSlop
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var totalDy = 0f
+                    var isVertical = false
+                    var fired = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        totalDy += change.position.y - change.previousPosition.y
+                        if (!isVertical && abs(totalDy) > touchSlop) {
+                            isVertical = true
+                            if (totalDy < 0f) return@awaitEachGesture
+                        }
+                        if (isVertical && totalDy > 0f) {
+                            change.consume()
+                            if (!fired && totalDy >= triggerDistance) {
+                                fired = true
+                                onPullDown()
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = contentAlignment
     ) {
-        Text(
-            text = timeFormatter.format(nowDate),
-            fontSize = 64.sp,
-            fontWeight = FontWeight.Light,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = textAlign,
-            modifier = Modifier
-                .clip(RoundedCornerShape(20.dp))
-                .clickable { onOpenClock() }
-                .padding(vertical = 4.dp)
-                .then(if (isTextLayout) Modifier else Modifier.padding(horizontal = 20.dp))
-                .testTag("favorites_clock")
-        )
-
-        Text(
-            text = dateFormatter.format(nowDate),
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = textAlign,
-            modifier = Modifier
-                .clip(RoundedCornerShape(12.dp))
-                .clickable { onOpenCalendar() }
-                .padding(vertical = 4.dp)
-                .then(if (isTextLayout) Modifier else Modifier.padding(horizontal = 14.dp))
-                .testTag("favorites_date")
-        )
-
-        Spacer(modifier = Modifier.height(34.dp))
-
         if (favorites.isEmpty()) {
             Text(
                 text = "No favorite apps yet",
@@ -174,174 +139,71 @@ fun FavoritesHome(
                 textAlign = textAlign,
                 modifier = Modifier.fillMaxWidth()
             )
-        } else if (isTextLayout) {
-            // Text list: icon inline and vertically centred with each app name,
-            // all left justified.
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("favorites_text_list"),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                horizontalAlignment = Alignment.Start
-            ) {
-                favorites.forEach { app ->
-                    FavoriteTextRow(
-                        app = app,
-                        isFocused = app.id == focusedItemId,
-                        onClick = { onLaunchFavorite(app) },
-                        onLongClick = { onLongPressFavorite(app) }
-                    )
-                }
-            }
         } else {
-            // Icon grid: large centred icons with labels underneath.
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                maxItemsInEachRow = 4
-            ) {
-                favorites.forEach { app ->
-                    FavoriteAppTile(
-                        app = app,
-                        isFocused = app.id == focusedItemId,
-                        onClick = { onLaunchFavorite(app) },
-                        onLongClick = { onLongPressFavorite(app) }
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val spacing = 10.dp
+
+                if (isTextLayout) {
+                    // Multiple columns of inline icon+name rows. Two columns fit on a
+                    // phone in portrait; wider screens add more columns.
+                    val minColumnWidth = 170.dp
+                    val columns = maxOf(
+                        2,
+                        ((maxWidth + spacing) / (minColumnWidth + spacing)).toInt()
                     )
+                    val itemWidth = (maxWidth - spacing * (columns - 1)) / columns
+
+                    FlowRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("favorites_text_list"),
+                        horizontalArrangement = Arrangement.spacedBy(spacing),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                        maxItemsInEachRow = columns
+                    ) {
+                        favorites.forEach { app ->
+                            AppTextRow(
+                                app = app,
+                                isFocused = app.id == focusedItemId,
+                                showFocusEffects = showFocusEffects,
+                                testTag = "favorite_app_${app.id}",
+                                onClick = { onLaunchFavorite(app) },
+                                onLongClick = { onLongPressFavorite(app) },
+                                modifier = Modifier.width(itemWidth)
+                            )
+                        }
+                    }
+                } else {
+                    // Icon tiles in as many columns as the screen width allows.
+                    val tileWidth = 78.dp
+                    val columns = maxOf(
+                        4,
+                        ((maxWidth + spacing) / (tileWidth + spacing)).toInt()
+                    )
+
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(
+                            spacing,
+                            Alignment.CenterHorizontally
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        maxItemsInEachRow = columns
+                    ) {
+                        favorites.forEach { app ->
+                            AppIconTile(
+                                app = app,
+                                isFocused = app.id == focusedItemId,
+                                showFocusEffects = showFocusEffects,
+                                testTag = "favorite_app_${app.id}",
+                                onClick = { onLaunchFavorite(app) },
+                                onLongClick = { onLongPressFavorite(app) }
+                            )
+                        }
+                    }
                 }
             }
         }
-    }
-}
-
-/** One left-aligned row in the text favorites layout. */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun FavoriteTextRow(
-    app: GameItem,
-    isFocused: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(21.dp))
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
-            .padding(vertical = 9.dp, horizontal = 6.dp)
-            .testTag("favorite_app_${app.id}"),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(42.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            FavoriteIcon(app = app, size = 39.dp)
-        }
-
-        Spacer(modifier = Modifier.width(18.dp))
-
-        Text(
-            text = app.title,
-            fontSize = 24.sp,
-            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
-            color = if (isFocused) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun FavoriteAppTile(
-    app: GameItem,
-    isFocused: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit
-) {
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.08f else 1f,
-        animationSpec = tween(150),
-        label = "favorite_scale"
-    )
-
-    Column(
-        modifier = Modifier
-            .width(78.dp)
-            .scale(scale)
-            .clip(RoundedCornerShape(16.dp))
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
-            .padding(vertical = 6.dp)
-            .testTag("favorite_app_${app.id}"),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(
-            modifier = Modifier
-                .size(58.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .border(
-                    width = if (isFocused) 2.dp else 0.dp,
-                    color = if (isFocused) MaterialTheme.colorScheme.primary else Color.Transparent,
-                    shape = CircleShape
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            FavoriteIcon(app = app, size = 54.dp)
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Text(
-            text = app.title,
-            fontSize = 11.sp,
-            fontWeight = if (isFocused) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (isFocused) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
-    }
-}
-
-@Composable
-private fun FavoriteIcon(app: GameItem, size: Dp) {
-    val context = LocalContext.current
-    val imageUrl = app.iconUrl ?: app.posterUrl
-
-    if (!imageUrl.isNullOrBlank()) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(imageUrl)
-                .crossfade(true)
-                .build(),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .size(size)
-                .clip(CircleShape)
-        )
-    } else {
-        Text(
-            text = app.title.trim().take(1).uppercase().ifEmpty { "?" },
-            fontSize = (size.value / 2.6f).sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
@@ -377,13 +239,10 @@ fun FavoriteActionsSheet(
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Box(
-                    modifier = Modifier
-                        .size(54.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    modifier = Modifier.size(54.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    FavoriteIcon(app = item, size = 50.dp)
+                    AppIcon(app = item, size = 50.dp)
                 }
 
                 Column(modifier = Modifier.weight(1f)) {
@@ -574,13 +433,10 @@ fun EditFavoritesSheet(
                             Spacer(modifier = Modifier.width(10.dp))
 
                             Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                                modifier = Modifier.size(40.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                FavoriteIcon(app = item, size = 36.dp)
+                                AppIcon(app = item, size = 36.dp)
                             }
 
                             Spacer(modifier = Modifier.width(12.dp))
