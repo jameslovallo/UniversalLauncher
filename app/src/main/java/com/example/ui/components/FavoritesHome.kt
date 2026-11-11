@@ -223,15 +223,20 @@ fun FavoritesHome(
                 val spacing = 10.dp
 
                 if (isTextLayout) {
-                    // Multiple columns of inline icon+name rows. Two columns fit on a
-                    // phone in portrait; wider screens add more columns. Rows are packed
+                    // Multiple columns of inline icon+name rows. A phone in portrait gets a
+                    // single full-width column; wider screens add columns. Rows are packed
                     // edge to edge and the former gaps become part of each row's touch
                     // target, so the whole favorites area is interactive.
                     val minColumnWidth = 170.dp
-                    val columns = maxOf(
-                        2,
-                        ((maxWidth + spacing) / (minColumnWidth + spacing)).toInt()
-                    )
+                    val isCompactPortrait = !isLandscape && maxWidth < 600.dp
+                    val columns = if (isCompactPortrait) {
+                        1
+                    } else {
+                        maxOf(
+                            2,
+                            ((maxWidth + spacing) / (minColumnWidth + spacing)).toInt()
+                        )
+                    }
                     val rowGap = 2.dp
                     val itemWidth = maxWidth / columns
 
