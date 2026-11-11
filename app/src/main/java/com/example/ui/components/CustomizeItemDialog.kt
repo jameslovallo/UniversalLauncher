@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -67,8 +68,11 @@ import coil.request.ImageRequest
 import com.example.data.model.GameItem
 import com.example.data.service.ArtworkOption
 import com.example.data.service.SteamGridDbService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,13 +91,21 @@ fun CustomizeItemDialog(
     var isSearching by remember { mutableStateOf(true) }
 
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     // Local photo picker
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            posterUrl = uri.toString()
+            scope.launch {
+                // The photo picker only grants transient read access to the picked URI, so
+                // copy the bytes into app storage; the stored path then survives restarts.
+                val stored = withContext(Dispatchers.IO) {
+                    copyPickedImage(context, item.id, uri)
+                }
+                posterUrl = stored ?: uri.toString()
+            }
         }
     }
 
@@ -418,3 +430,27 @@ fun CustomizeItemDialog(
             }
     }
 }
+
+/**
+ * Copies a photo-picker URI into app-private storage and returns a `file://` URL.
+ *
+ * Photo-picker grants are transient, so a bare `content://` URI saved in the database
+ * would stop resolving after the app is restarted. Older copies for the same item are
+ * deleted to avoid unbounded growth.
+ */
+private fun copyPickedImage(context: Context, itemId: String, uri: Uri): String? =
+    runCatching {
+        val dir = File(context.filesDir, "custom_art").apply { mkdirs() }
+        val safeId = itemId.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val target = File(dir, "$safeId-${System.currentTimeMillis()}.img")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        } ?: return null
+        if (target.length() == 0L) {
+            target.delete()
+            return null
+        }
+        dir.listFiles { file -> file.name.startsWith("$safeId-") && file != target }
+            ?.forEach { it.delete() }
+        Uri.fromFile(target).toString()
+    }.getOrNull()

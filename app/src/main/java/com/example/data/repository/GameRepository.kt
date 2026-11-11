@@ -117,12 +117,21 @@ class GameRepository(
             if (existing == null) {
                 gameDao.insertGame(app)
             } else if (!existing.isDeleted) {
-                val updated = existing.copy(
-                    title = app.title,
-                    packageName = app.packageName,
-                    activityName = app.activityName,
-                    iconUrl = app.iconUrl
-                )
+                // A customized item keeps its user-chosen name, icon and artwork; only the
+                // launch target is refreshed from the package.
+                val updated = if (existing.isCustomized) {
+                    existing.copy(
+                        packageName = app.packageName,
+                        activityName = app.activityName
+                    )
+                } else {
+                    existing.copy(
+                        title = app.title,
+                        packageName = app.packageName,
+                        activityName = app.activityName,
+                        iconUrl = app.iconUrl
+                    )
+                }
                 gameDao.updateGame(updated)
             }
         }

@@ -68,10 +68,13 @@ class PinShortcutActivity : ComponentActivity() {
                 fresh
             } else {
                 fresh.copy(
+                    title = if (existing.isCustomized) existing.title else fresh.title,
+                    iconUrl = if (existing.isCustomized) existing.iconUrl else fresh.iconUrl,
                     isGame = existing.isGame,
                     isFavorite = existing.isFavorite,
                     favoriteOrder = existing.favoriteOrder,
                     isHidden = existing.isHidden,
+                    isCustomized = existing.isCustomized,
                     lastPlayedTimestamp = existing.lastPlayedTimestamp,
                     playCount = existing.playCount,
                     posterUrl = existing.posterUrl,

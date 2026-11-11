@@ -24,7 +24,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -95,8 +97,11 @@ fun SteamGamePosterCard(
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 val imageUrl = game.posterUrl ?: game.heroBannerUrl ?: game.iconUrl
+                // A broken or unreachable URL should fall back to the type icon rather
+                // than leaving an empty card.
+                var imageFailed by remember(imageUrl) { mutableStateOf(false) }
 
-                if (!imageUrl.isNullOrBlank()) {
+                if (!imageUrl.isNullOrBlank() && !imageFailed) {
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
                             .data(imageUrl)
@@ -104,6 +109,7 @@ fun SteamGamePosterCard(
                             .build(),
                         contentDescription = "${game.title} poster",
                         contentScale = ContentScale.Crop,
+                        onError = { imageFailed = true },
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {

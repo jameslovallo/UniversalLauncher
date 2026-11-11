@@ -98,6 +98,10 @@ fun FavoritesHome(
     val isTextLayout = layout == FavoritesLayout.TEXT
     val contentAlignment = if (isTextLayout) Alignment.Start else Alignment.CenterHorizontally
     val textAlign = if (isTextLayout) TextAlign.Start else TextAlign.Center
+    val favoritesSpacing = 10.dp
+    // Inline rows add their gutters inside the clickable content, so the clock and date
+    // need the same inset to line up with the icons.
+    val textRowInset = 6.dp + favoritesSpacing / 2
 
     // The clock and date are only shown in portrait: in landscape the space is needed
     // for the favorites themselves.
@@ -180,7 +184,7 @@ fun FavoritesHome(
                     .clip(RoundedCornerShape(20.dp))
                     .clickable { onOpenClock() }
                     .padding(vertical = 4.dp)
-                    .then(if (isTextLayout) Modifier else Modifier.padding(horizontal = 20.dp))
+                    .then(if (isTextLayout) Modifier.padding(start = textRowInset) else Modifier.padding(horizontal = 20.dp))
                     .testTag("favorites_clock")
             )
 
@@ -194,7 +198,7 @@ fun FavoritesHome(
                     .clip(RoundedCornerShape(12.dp))
                     .clickable { onOpenCalendar() }
                     .padding(vertical = 4.dp)
-                    .then(if (isTextLayout) Modifier else Modifier.padding(horizontal = 14.dp))
+                    .then(if (isTextLayout) Modifier.padding(start = textRowInset) else Modifier.padding(horizontal = 14.dp))
                     .testTag("favorites_date")
             )
 
@@ -220,7 +224,7 @@ fun FavoritesHome(
             )
         } else {
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val spacing = 10.dp
+                val spacing = favoritesSpacing
 
                 if (isTextLayout) {
                     // Multiple columns of inline icon+name rows. A phone in portrait gets a

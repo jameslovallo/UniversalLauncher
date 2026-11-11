@@ -70,6 +70,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -626,10 +627,13 @@ private fun AppsAlphabeticalList(
             ?.let { alphabetSection(it.item.title) }
     }
 
+    // Draw edge to edge behind the navigation bar / app-switcher drag handle. The bar
+    // inset moves into each list's scrollable content padding instead, so rows can pass
+    // under the handle while the final items still scroll fully into view.
+    val navigationBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
     Row(
-        modifier = Modifier
-            .fillMaxSize()
-            .navigationBarsPadding()
+        modifier = Modifier.fillMaxSize()
     ) {
         if (layout == FavoritesLayout.ICONS) {
             // Icon grid drawer: the same tiles as the favorites grid, left justified.
@@ -638,7 +642,12 @@ private fun AppsAlphabeticalList(
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 78.dp),
                 state = gridState,
-                contentPadding = PaddingValues(start = 12.dp, end = 0.dp, top = 8.dp, bottom = 16.dp),
+                contentPadding = PaddingValues(
+                    start = 12.dp,
+                    end = 0.dp,
+                    top = 8.dp,
+                    bottom = 16.dp + navigationBarInset
+                ),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
                 modifier = Modifier
@@ -672,7 +681,12 @@ private fun AppsAlphabeticalList(
         } else {
             LazyColumn(
                 state = listState,
-                contentPadding = PaddingValues(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 16.dp),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = 4.dp,
+                    top = 8.dp,
+                    bottom = 16.dp + navigationBarInset
+                ),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
                 modifier = Modifier
                     .weight(1f)
@@ -745,11 +759,23 @@ private fun AlphabetRail(
     val haptics = LocalHapticFeedback.current
     val highlightedLetter = draggedLetter ?: activeLetter
 
+    // Letters sit in a tightly packed column with a little breathing room between
+    // them, lifted off the bottom edge by roughly five letter heights so the rail does
+    // not collide with the gesture bar or the last row of apps.
+    val letterSpacing = 4.dp
+    val letterLineHeight = with(LocalDensity.current) { 13.sp.toDp() }
+    val letterPitch = letterLineHeight + letterSpacing
+    val bottomInset = letterPitch * 5
+    val density = LocalDensity.current
+    val letterPitchPx = with(density) { letterPitch.toPx() }
+    val bottomInsetPx = with(density) { bottomInset.toPx() }
+
     fun letterAt(y: Float): String? {
         if (letters.isEmpty() || lettersHeight <= 0) return null
-        val top = (railHeight - lettersHeight).coerceAtLeast(0)
+        val bottom = (railHeight - bottomInsetPx).coerceAtLeast(lettersHeight.toFloat())
+        val top = bottom - lettersHeight
         val local = (y - top).coerceIn(0f, lettersHeight - 1f)
-        val index = ((local / lettersHeight) * letters.size)
+        val index = (local / letterPitchPx)
             .toInt()
             .coerceIn(0, letters.lastIndex)
         return letters[index]
@@ -791,23 +817,28 @@ private fun AlphabetRail(
         contentAlignment = Alignment.BottomCenter
     ) {
         Column(
-            modifier = Modifier.onSizeChanged { lettersHeight = it.height },
-            verticalArrangement = Arrangement.spacedBy(1.dp),
+            modifier = Modifier.padding(bottom = bottomInset),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            letters.forEach { letter ->
-                val isActive = letter == highlightedLetter
-                Text(
-                    text = letter,
-                    fontSize = 10.sp,
-                    lineHeight = 13.sp,
-                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isActive) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .padding(horizontal = 4.dp)
-                        .testTag("alphabet_rail_letter_$letter")
-                )
+            Column(
+                modifier = Modifier.onSizeChanged { lettersHeight = it.height },
+                verticalArrangement = Arrangement.spacedBy(letterSpacing),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                letters.forEach { letter ->
+                    val isActive = letter == highlightedLetter
+                    Text(
+                        text = letter,
+                        fontSize = 10.sp,
+                        lineHeight = 13.sp,
+                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isActive) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp)
+                            .testTag("alphabet_rail_letter_$letter")
+                    )
+                }
             }
         }
     }

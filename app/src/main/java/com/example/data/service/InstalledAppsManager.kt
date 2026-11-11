@@ -53,8 +53,10 @@ class InstalledAppsManager(private val context: Context) {
                 (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME) != 0
             }
 
-            // Build android resource URI for app icon
-            val iconUri = "android.resource://$pkg/${resolveInfo.activityInfo.iconResource}"
+            // Render the app icon to a cached PNG. The package resource URI cannot be
+            // decoded by Coil for adaptive icons, which left tiles blank.
+            val versionStamp = packageVersionStamp(pkg)
+            val iconUri = AppIconStore.iconUrl(context, pkg, versionStamp)
 
             GameItem(
                 id = "app_$pkg",
@@ -287,5 +289,20 @@ class InstalledAppsManager(private val context: Context) {
                 context.startActivity(intent)
             } catch (_: Exception) {}
         }
+    }
+
+    /** Last update time of a package, used to invalidate its cached icon. */
+    private fun packageVersionStamp(packageName: String): Long = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getPackageInfo(
+                packageName,
+                PackageManager.PackageInfoFlags.of(0L)
+            ).lastUpdateTime
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+        }
+    } catch (_: Exception) {
+        0L
     }
 }

@@ -69,7 +69,7 @@ interface GameDao {
     @Query("UPDATE games SET isGame = :isGame WHERE id = :id")
     suspend fun setIsGame(id: String, isGame: Boolean)
 
-    @Query("UPDATE games SET title = :title, posterUrl = :posterUrl, iconUrl = :iconUrl WHERE id = :id")
+    @Query("UPDATE games SET title = :title, posterUrl = :posterUrl, iconUrl = :iconUrl, isCustomized = 1 WHERE id = :id")
     suspend fun updateTitleAndArtwork(id: String, title: String, posterUrl: String?, iconUrl: String?)
 
     @Query("DELETE FROM games WHERE id = :id")

@@ -21,6 +21,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -154,8 +157,11 @@ fun AppIconTile(
 fun AppIcon(app: GameItem, size: Dp) {
     val context = LocalContext.current
     val imageUrl = app.iconUrl ?: app.posterUrl
+    // Broken URLs (e.g. icons saved before icons were copied to local files) fall back to
+    // the initial letter instead of leaving an empty slot.
+    var imageFailed by remember(imageUrl) { mutableStateOf(false) }
 
-    if (!imageUrl.isNullOrBlank()) {
+    if (!imageUrl.isNullOrBlank() && !imageFailed) {
         AsyncImage(
             model = ImageRequest.Builder(context)
                 .data(imageUrl)
@@ -163,6 +169,7 @@ fun AppIcon(app: GameItem, size: Dp) {
                 .build(),
             contentDescription = null,
             contentScale = ContentScale.Crop,
+            onError = { imageFailed = true },
             modifier = Modifier
                 .size(size)
                 .clip(CircleShape)
