@@ -7,6 +7,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import com.example.data.model.GameItem
 import com.example.data.repository.GameRepository
+import java.io.FileNotFoundException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -62,10 +63,37 @@ class LibrarySyncService(
     fun lastSyncedAt(): Long? =
         prefs.getLong(KEY_LAST_SYNC, 0L).takeIf { it > 0L }
 
+    private data class ConfigSnapshot(
+        val docUri: String?,
+        val treeUri: String?,
+        val label: String?,
+        val updatedAt: Long,
+        val signature: String?
+    )
+
+    private fun snapshotConfig(): ConfigSnapshot = ConfigSnapshot(
+        docUri = prefs.getString(KEY_DOC_URI, null),
+        treeUri = prefs.getString(KEY_TREE_URI, null),
+        label = prefs.getString(KEY_TARGET_LABEL, null),
+        updatedAt = prefs.getLong(KEY_UPDATED_AT, 0L),
+        signature = prefs.getString(KEY_SIGNATURE, null)
+    )
+
+    private fun restoreConfig(snapshot: ConfigSnapshot) {
+        prefs.edit()
+            .putString(KEY_DOC_URI, snapshot.docUri)
+            .putString(KEY_TREE_URI, snapshot.treeUri)
+            .putString(KEY_TARGET_LABEL, snapshot.label)
+            .putLong(KEY_UPDATED_AT, snapshot.updatedAt)
+            .putString(KEY_SIGNATURE, snapshot.signature)
+            .apply()
+    }
+
     /** Uses an existing (or newly created) document as the sync target. */
     suspend fun configureFile(uri: Uri): LibrarySyncOutcome = withContext(Dispatchers.IO) {
         mutex.withLock {
             persistPermission(uri)
+            val previous = snapshotConfig()
             prefs.edit()
                 .putString(KEY_DOC_URI, uri.toString())
                 .remove(KEY_TREE_URI)
@@ -73,8 +101,17 @@ class LibrarySyncService(
                 .putLong(KEY_UPDATED_AT, 0L)
                 .putString(KEY_SIGNATURE, "")
                 .apply()
-            // Adopt whatever the chosen file already contains.
-            syncLocked(adoptExisting = true)
+            try {
+                // Adopt whatever the chosen file already contains.
+                val outcome = syncLocked(adoptExisting = true)
+                releasePreviousPermission(previous, uri.toString())
+                outcome
+            } catch (error: Exception) {
+                // A file that cannot be read or is not a Nexus library must not replace a
+                // working sync target (or be written to).
+                restoreConfig(previous)
+                throw error
+            }
         }
     }
 
@@ -82,6 +119,7 @@ class LibrarySyncService(
     suspend fun configureFolder(treeUri: Uri): LibrarySyncOutcome = withContext(Dispatchers.IO) {
         mutex.withLock {
             persistPermission(treeUri)
+            val previous = snapshotConfig()
             prefs.edit()
                 .putString(KEY_TREE_URI, treeUri.toString())
                 .remove(KEY_DOC_URI)
@@ -89,12 +127,19 @@ class LibrarySyncService(
                 .putLong(KEY_UPDATED_AT, 0L)
                 .putString(KEY_SIGNATURE, "")
                 .apply()
-            // Make sure the file exists before the first read.
-            writableDocumentUri(resolveTarget() ?: return@withLock LibrarySyncOutcome.NotConfigured)
-                ?: throw IllegalStateException(
-                    "Could not create $FILE_NAME in that folder"
-                )
-            syncLocked(adoptExisting = true)
+            try {
+                val target = resolveTarget()
+                    ?: return@withLock LibrarySyncOutcome.NotConfigured
+                // Make sure the file exists before the first read.
+                writableDocumentUri(target)
+                    ?: throw IllegalStateException("Could not create $FILE_NAME in that folder")
+                val outcome = syncLocked(adoptExisting = true)
+                releasePreviousPermission(previous, treeUri.toString())
+                outcome
+            } catch (error: Exception) {
+                restoreConfig(previous)
+                throw error
+            }
         }
     }
 
@@ -108,15 +153,7 @@ class LibrarySyncService(
             prefs.getString(KEY_DOC_URI, null),
             prefs.getString(KEY_TREE_URI, null)
         )
-        docs.forEach { stored ->
-            runCatching {
-                resolver.releasePersistableUriPermission(
-                    Uri.parse(stored),
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-            }
-        }
+        docs.forEach { stored -> releasePermission(Uri.parse(stored)) }
         prefs.edit()
             .remove(KEY_DOC_URI)
             .remove(KEY_TREE_URI)
@@ -125,6 +162,22 @@ class LibrarySyncService(
             .remove(KEY_SIGNATURE)
             .remove(KEY_LAST_SYNC)
             .apply()
+    }
+
+    /** Drops the grant for the target that was replaced, once the new one works. */
+    private fun releasePreviousPermission(previous: ConfigSnapshot, current: String) {
+        val old = previous.docUri ?: previous.treeUri ?: return
+        if (old != current) releasePermission(Uri.parse(old))
+    }
+
+    private fun releasePermission(uri: Uri) {
+        runCatching {
+            resolver.releasePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }
     }
 
     /**
@@ -231,13 +284,25 @@ class LibrarySyncService(
     ): LibrarySyncOutcome {
         val target = resolvedTarget ?: resolveTarget()
             ?: return LibrarySyncOutcome.NotConfigured
-        val uri = writableDocumentUri(target)
-            ?: throw IllegalStateException("Could not open the sync file for writing")
+        val uri = try {
+            writableDocumentUri(target)
+        } catch (error: SecurityException) {
+            throw fileAccessError(error)
+        }
+        if (uri == null) {
+            throw IllegalStateException("Could not open the sync file for writing")
+        }
         val version = maxOf(nextVersion(), minVersion + 1L)
         val document = buildDocument(items, version).toString()
-        resolver.openOutputStream(uri, "wt")?.use { stream ->
-            stream.write(document.toByteArray(Charsets.UTF_8))
-        } ?: throw IllegalStateException("Could not open the sync file for writing")
+        try {
+            resolver.openOutputStream(uri, "wt")?.use { stream ->
+                stream.write(document.toByteArray(Charsets.UTF_8))
+            } ?: throw IllegalStateException("Could not open the sync file for writing")
+        } catch (error: SecurityException) {
+            throw fileAccessError(error)
+        } catch (error: FileNotFoundException) {
+            throw fileAccessError(error)
+        }
 
         prefs.edit()
             .putLong(KEY_UPDATED_AT, version)
@@ -267,14 +332,31 @@ class LibrarySyncService(
         return null
     }
 
+    private fun fileAccessError(cause: Exception): IllegalStateException =
+        IllegalStateException(
+            "Nexus cannot open the sync file. Choose it again in Settings.",
+            cause
+        )
+
     private fun readDocument(target: Target): Snapshot? {
         // A missing child of a folder grant is the normal "first run" case. Read errors on
         // a document that should exist are not: they must abort the sync rather than let
         // the seed write overwrite the user's backup.
-        val uri = readableDocumentUri(target) ?: return null
-        val text = resolver.openInputStream(uri)?.use {
-            it.readBytes().toString(Charsets.UTF_8)
-        } ?: throw IllegalStateException("Could not read the sync file")
+        val uri = try {
+            readableDocumentUri(target)
+        } catch (error: SecurityException) {
+            throw fileAccessError(error)
+        }
+        if (uri == null) return null
+        val text = try {
+            resolver.openInputStream(uri)?.use {
+                it.readBytes().toString(Charsets.UTF_8)
+            } ?: throw IllegalStateException("Could not read the sync file")
+        } catch (error: FileNotFoundException) {
+            throw fileAccessError(error)
+        } catch (error: SecurityException) {
+            throw fileAccessError(error)
+        }
         if (text.isBlank()) return null
         return parseDocument(text)
     }
@@ -294,10 +376,10 @@ class LibrarySyncService(
             resolver.openFileDescriptor(uri, "r")?.use { true } ?: false
         }.getOrDefault(false)
 
-    private fun findChildDocument(treeUri: Uri): Uri? = runCatching {
+    private fun findChildDocument(treeUri: Uri): Uri? {
         val parentId = DocumentsContract.getTreeDocumentId(treeUri)
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
-        resolver.query(
+        return resolver.query(
             childrenUri,
             arrayOf(
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
@@ -317,7 +399,7 @@ class LibrarySyncService(
             }
             null
         }
-    }.getOrNull()
+    }
 
     private fun createChildDocument(treeUri: Uri): Uri? = runCatching {
         val parentUri = DocumentsContract.buildDocumentUriUsingTree(

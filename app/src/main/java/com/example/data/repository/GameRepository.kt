@@ -39,9 +39,13 @@ class GameRepository(
 
     suspend fun getGameById(id: String): GameItem? = gameDao.getGameById(id)
 
-    suspend fun initializeLibraryIfEmpty() {
-        // Remove any old pre-populated items so only actual installed Android games remain
-        gameDao.deletePrePopulatedItems()
+    suspend fun initializeLibraryIfEmpty(purgeLegacyCatalog: Boolean = false) {
+        // The first-run cleanup drops hardcoded entries from very old builds. It must not
+        // repeat, because it also matches the live GeForce NOW catalog the user added
+        // deliberately (and which the library sync file restores).
+        if (purgeLegacyCatalog) {
+            gameDao.deletePrePopulatedItems()
+        }
         // Auto-scan installed apps and games
         syncInstalledApps()
         // Pinned shortcuts that the publisher removed or the user unpinned should not
@@ -276,9 +280,6 @@ class GameRepository(
         // and catalog syncs re-add the tile on the next launcher start.
         gameDao.markDeleted(gameId)
     }
-
-    /** Snapshot of every row (including hidden and tombstoned entries) for cloud sync. */
-    suspend fun getAllItemsSnapshot(): List<GameItem> = gameDao.getAllItemsNow()
 
     /**
      * Rows that travel between devices in the library file: cloud games, Moonlight games

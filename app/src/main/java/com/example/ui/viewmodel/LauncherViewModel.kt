@@ -182,7 +182,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     init {
         viewModelScope.launch {
-            repository.initializeLibraryIfEmpty()
+            val pendingLegacyCleanup = !prefs.getBoolean(KEY_LEGACY_CLEANUP_DONE, false)
+            repository.initializeLibraryIfEmpty(purgeLegacyCatalog = pendingLegacyCleanup)
+            if (pendingLegacyCleanup) {
+                prefs.edit().putBoolean(KEY_LEGACY_CLEANUP_DONE, true).apply()
+            }
 
             // Restore the library file before anything else can write over it.
             if (librarySyncService.isConfigured) {
@@ -707,5 +711,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private companion object {
         const val DEFAULT_APPS_OPACITY = 0.55f
+
+        /** One-time cleanup of the hardcoded library entries from early builds. */
+        const val KEY_LEGACY_CLEANUP_DONE = "legacy_prepopulated_cleanup_done"
     }
 }
