@@ -2,17 +2,24 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
+import com.example.data.service.DriveSyncService
 import com.example.data.service.GeForceNowService
 import com.example.data.service.InstalledAppsManager
 import com.example.data.service.MOONLIGHT_PACKAGES
+import com.example.data.service.WeatherInfo
+import com.example.data.service.WeatherLocationMode
+import com.example.data.service.WeatherService
 import com.example.input.ControllerAction
 import com.example.input.ControllerManager
 import com.example.ui.theme.FavoritesLayout
+import com.example.ui.theme.ThemeStyle
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -95,6 +102,54 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _steamGridDbApiKey = MutableStateFlow(prefs.getString("sgdb_api_key", ""))
     val steamGridDbApiKey: StateFlow<String?> = _steamGridDbApiKey.asStateFlow()
 
+    private val weatherService = WeatherService(application)
+    private val driveSyncService = DriveSyncService(application, repository)
+
+    // Opacity of the wallpaper scrim on the Apps screen. 0 = wallpaper only, 1 = solid.
+    private val _appsBackgroundOpacity = MutableStateFlow(
+        prefs.getFloat("apps_bg_opacity", DEFAULT_APPS_OPACITY).coerceIn(0f, 1f)
+    )
+    val appsBackgroundOpacity: StateFlow<Float> = _appsBackgroundOpacity.asStateFlow()
+
+    private val _themeStyle = MutableStateFlow(
+        runCatching {
+            ThemeStyle.valueOf(
+                prefs.getString("theme_style", ThemeStyle.WALLPAPER.name)!!
+            )
+        }.getOrDefault(ThemeStyle.WALLPAPER)
+    )
+    val themeStyle: StateFlow<ThemeStyle> = _themeStyle.asStateFlow()
+
+    private val _weatherEnabled = MutableStateFlow(prefs.getBoolean("weather_enabled", false))
+    val weatherEnabled: StateFlow<Boolean> = _weatherEnabled.asStateFlow()
+
+    private val _weatherMode = MutableStateFlow(
+        runCatching {
+            WeatherLocationMode.valueOf(
+                prefs.getString("weather_mode", WeatherLocationMode.DEVICE_LOCATION.name)!!
+            )
+        }.getOrDefault(WeatherLocationMode.DEVICE_LOCATION)
+    )
+    val weatherMode: StateFlow<WeatherLocationMode> = _weatherMode.asStateFlow()
+
+    private val _weatherZip = MutableStateFlow(prefs.getString("weather_zip", "").orEmpty())
+    val weatherZip: StateFlow<String> = _weatherZip.asStateFlow()
+
+    private val _weatherInfo = MutableStateFlow<WeatherInfo?>(null)
+    val weatherInfo: StateFlow<WeatherInfo?> = _weatherInfo.asStateFlow()
+
+    private val _weatherError = MutableStateFlow<String?>(null)
+    val weatherError: StateFlow<String?> = _weatherError.asStateFlow()
+
+    private val _driveEmail = MutableStateFlow(driveSyncService.signedInEmail())
+    val driveEmail: StateFlow<String?> = _driveEmail.asStateFlow()
+
+    private val _driveSyncing = MutableStateFlow(false)
+    val driveSyncing: StateFlow<Boolean> = _driveSyncing.asStateFlow()
+
+    private val _driveStatus = MutableStateFlow<String?>(null)
+    val driveStatus: StateFlow<String?> = _driveStatus.asStateFlow()
+
     // All library items from Room
     val allItems: StateFlow<List<GameItem>> = repository.allGames
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -128,6 +183,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             repository.backfillGfnArtwork()
             repository.matchMissingGamePosters()
         }
+        if (_weatherEnabled.value) refreshWeather()
     }
 
     fun setTab(tab: MainLibraryTab) {
@@ -444,6 +500,113 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _favoritesLayout.value = layout
     }
 
+    fun setAppsBackgroundOpacity(opacity: Float) {
+        val clamped = opacity.coerceIn(0f, 1f)
+        prefs.edit().putFloat("apps_bg_opacity", clamped).apply()
+        _appsBackgroundOpacity.value = clamped
+    }
+
+    fun setThemeStyle(style: ThemeStyle) {
+        prefs.edit().putString("theme_style", style.name).apply()
+        _themeStyle.value = style
+    }
+
+    fun setWeatherEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("weather_enabled", enabled).apply()
+        _weatherEnabled.value = enabled
+        if (enabled) refreshWeather() else {
+            _weatherInfo.value = null
+            _weatherError.value = null
+        }
+    }
+
+    fun setWeatherMode(mode: WeatherLocationMode) {
+        prefs.edit().putString("weather_mode", mode.name).apply()
+        _weatherMode.value = mode
+        refreshWeather()
+    }
+
+    fun setWeatherZip(zip: String) {
+        val trimmed = zip.trim()
+        prefs.edit().putString("weather_zip", trimmed).apply()
+        _weatherZip.value = trimmed
+        if (_weatherMode.value == WeatherLocationMode.ZIP_CODE) refreshWeather()
+    }
+
+    /** Fetch current conditions for the favorites date row. */
+    fun refreshWeather() {
+        if (!_weatherEnabled.value) return
+        viewModelScope.launch {
+            _weatherError.value = null
+            weatherService.current(_weatherMode.value, _weatherZip.value)
+                .onSuccess { _weatherInfo.value = it }
+                .onFailure {
+                    _weatherInfo.value = null
+                    _weatherError.value = it.message ?: "Weather unavailable"
+                }
+        }
+    }
+
+    // ---- Google Drive backup -------------------------------------------------------
+
+    fun driveSignInIntent(): Intent = driveSyncService.signInIntent()
+
+    fun completeDriveSignIn(data: Intent?) {
+        viewModelScope.launch {
+            val email = runCatching { driveSyncService.completeSignIn(data) }
+                .onFailure { _driveStatus.value = it.message ?: "Google sign-in failed" }
+                .getOrNull()
+            _driveEmail.value = email ?: driveSyncService.signedInEmail()
+            if (_driveEmail.value != null) {
+                _driveStatus.value = "Signed in. Tap Sync to back up your library."
+            }
+        }
+    }
+
+    fun signOutDrive() {
+        driveSyncService.signOut()
+        _driveEmail.value = null
+        _driveStatus.value = "Signed out"
+    }
+
+    fun syncDrive() {
+        if (_driveSyncing.value) return
+        if (_driveEmail.value == null) {
+            _driveStatus.value = "Sign in with Google first"
+            return
+        }
+        viewModelScope.launch {
+            _driveSyncing.value = true
+            _driveStatus.value = "Syncing with Google Drive…"
+            runCatching { driveSyncService.sync() }
+                .onSuccess { summary ->
+                    _driveStatus.value =
+                        "Synced ${summary.total} items (${summary.imported} new on this device)"
+                }
+                .onFailure {
+                    _driveStatus.value = it.message ?: "Google Drive sync failed"
+                }
+            _driveSyncing.value = false
+        }
+    }
+
+    /**
+     * Re-scan installed apps when the launcher regains focus (for example after the user
+     * installs something from the Play Store). Debounced so quick resume cycles do not
+     * repeat the package scan.
+     */
+    private var lastInstalledAppRefresh = 0L
+
+    fun refreshInstalledApps() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastInstalledAppRefresh < 1_500L) return
+        lastInstalledAppRefresh = now
+        viewModelScope.launch {
+            repository.syncInstalledApps()
+            repository.matchMissingGamePosters()
+        }
+    }
+
     fun saveSteamGridDbApiKey(key: String) {
         prefs.edit().putString("sgdb_api_key", key).apply()
         _steamGridDbApiKey.value = key
@@ -452,6 +615,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun openDefaultLauncherSettings() {
         installedAppsManager.openHomeSettings()
     }
+
+    fun openAccessibilitySettings() {
+        installedAppsManager.openAccessibilitySettings()
+    }
+
+    fun isDefaultLauncher(): Boolean = installedAppsManager.isDefaultLauncher()
+
+    fun isHomeOverrideEnabled(): Boolean = installedAppsManager.isHomeOverrideEnabled()
 
     fun syncLibrary() {
         viewModelScope.launch {
@@ -559,5 +730,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
             else -> return false
         }
+    }
+
+    private companion object {
+        const val DEFAULT_APPS_OPACITY = 0.55f
     }
 }

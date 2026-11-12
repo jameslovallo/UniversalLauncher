@@ -1,5 +1,6 @@
 package com.example.data.service
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.content.pm.LauncherApps
@@ -10,6 +11,8 @@ import android.os.Build
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.Settings
+import android.view.accessibility.AccessibilityManager
+import com.example.HomeOverrideService
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import kotlinx.coroutines.Dispatchers
@@ -304,5 +307,44 @@ class InstalledAppsManager(private val context: Context) {
         }
     } catch (_: Exception) {
         0L
+    }
+
+    /** True when this app is the system's current default home/launcher app. */
+    fun isDefaultLauncher(): Boolean {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val resolved = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.resolveActivity(
+                intent,
+                PackageManager.ResolveInfoFlags.of(0L)
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.resolveActivity(intent, 0)
+        }
+        return resolved?.activityInfo?.packageName == context.packageName
+    }
+
+    /** True when the optional home-override accessibility service is enabled. */
+    fun isHomeOverrideEnabled(): Boolean {
+        val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE)
+            as? AccessibilityManager ?: return false
+        return manager.getEnabledAccessibilityServiceList(
+            AccessibilityServiceInfo.FEEDBACK_ALL_MASK
+        ).any { info ->
+            val service = info.resolveInfo?.serviceInfo ?: return@any false
+            service.packageName == context.packageName &&
+                service.name == HomeOverrideService::class.java.name
+        }
+    }
+
+    /** Open the system accessibility settings so the user can enable the service. */
+    fun openAccessibilitySettings() {
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) {
+        }
     }
 }

@@ -81,6 +81,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.GameItem
 import com.example.ui.components.AddContentModal
@@ -98,6 +100,7 @@ import com.example.ui.viewmodel.AddModalSubView
 import com.example.ui.viewmodel.LauncherViewModel
 import com.example.ui.viewmodel.MainLibraryTab
 import com.example.ui.theme.FavoritesLayout
+import com.example.ui.theme.ThemeStyle
 import kotlinx.coroutines.launch
 
 @Composable
@@ -126,6 +129,33 @@ fun DashboardScreen(
     val steamGridDbApiKey by viewModel.steamGridDbApiKey.collectAsStateWithLifecycle()
 
     val controllerState by viewModel.controllerManager.controllerState.collectAsStateWithLifecycle()
+
+    val appsBackgroundOpacity by viewModel.appsBackgroundOpacity.collectAsStateWithLifecycle()
+    val themeStyle by viewModel.themeStyle.collectAsStateWithLifecycle()
+    val weatherEnabled by viewModel.weatherEnabled.collectAsStateWithLifecycle()
+    val weatherMode by viewModel.weatherMode.collectAsStateWithLifecycle()
+    val weatherZip by viewModel.weatherZip.collectAsStateWithLifecycle()
+    val weatherInfo by viewModel.weatherInfo.collectAsStateWithLifecycle()
+    val weatherError by viewModel.weatherError.collectAsStateWithLifecycle()
+    val driveEmail by viewModel.driveEmail.collectAsStateWithLifecycle()
+    val driveSyncing by viewModel.driveSyncing.collectAsStateWithLifecycle()
+    val driveStatus by viewModel.driveStatus.collectAsStateWithLifecycle()
+
+    // Re-scan installed apps whenever the launcher comes back to the foreground, so a
+    // freshly installed app appears without restarting.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.refreshInstalledApps()
+        viewModel.refreshWeather()
+    }
+
+    // A controller connection jumps straight to the Games library.
+    var controllerWasConnected by remember { mutableStateOf(false) }
+    LaunchedEffect(controllerState.isConnected) {
+        if (controllerState.isConnected && !controllerWasConnected) {
+            viewModel.setTab(MainLibraryTab.GAMES)
+        }
+        controllerWasConnected = controllerState.isConnected
+    }
 
     // Phones held sideways get a compact horizontal poster row instead of a grid.
     val configuration = LocalConfiguration.current
@@ -261,7 +291,7 @@ fun DashboardScreen(
                 .fillMaxSize()
                 .background(
                     MaterialTheme.colorScheme.background.copy(
-                        alpha = 0.55f * (1f - darkAmount)
+                        alpha = appsBackgroundOpacity * (1f - darkAmount)
                     )
                 )
         )
@@ -369,6 +399,8 @@ fun DashboardScreen(
                                 focusedItemId = focusedItemId,
                                 layout = favoritesLayout,
                                 showFocusEffects = controllerState.isConnected,
+                                weatherEnabled = weatherEnabled,
+                                weather = weatherInfo,
                                 onLaunchFavorite = { app ->
                                     viewModel.setFocusedItem(app.id)
                                     viewModel.launchItem(app)
@@ -495,11 +527,34 @@ fun DashboardScreen(
                 favoritesLayout = favoritesLayout,
                 steamGridDbApiKey = steamGridDbApiKey,
                 hiddenItems = hiddenItems,
+                appsBackgroundOpacity = appsBackgroundOpacity,
+                themeStyle = themeStyle,
+                weatherEnabled = weatherEnabled,
+                weatherMode = weatherMode,
+                weatherZip = weatherZip,
+                weatherInfo = weatherInfo,
+                weatherError = weatherError,
+                driveEmail = driveEmail,
+                driveSyncing = driveSyncing,
+                driveStatus = driveStatus,
+                isDefaultLauncher = { viewModel.isDefaultLauncher() },
+                isHomeOverrideEnabled = { viewModel.isHomeOverrideEnabled() },
                 onSelectFavoritesLayout = { viewModel.setFavoritesLayout(it) },
                 onSaveApiKey = { viewModel.saveSteamGridDbApiKey(it) },
                 onSetDefaultLauncher = { viewModel.openDefaultLauncherSettings() },
+                onSetAppsBackgroundOpacity = { viewModel.setAppsBackgroundOpacity(it) },
+                onSelectThemeStyle = { viewModel.setThemeStyle(it) },
                 onSyncLibrary = { viewModel.syncLibrary() },
                 onUnhideItem = { viewModel.unhideItem(it) },
+                onOpenHiddenItem = { viewModel.launchItem(it) },
+                onWeatherEnabledChange = { viewModel.setWeatherEnabled(it) },
+                onWeatherModeChange = { viewModel.setWeatherMode(it) },
+                onWeatherZipChange = { viewModel.setWeatherZip(it) },
+                onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() },
+                onDriveSignInIntent = { viewModel.driveSignInIntent() },
+                onDriveSignInResult = { viewModel.completeDriveSignIn(it) },
+                onDriveSignOut = { viewModel.signOutDrive() },
+                onDriveSync = { viewModel.syncDrive() },
                 onDismiss = { viewModel.closeSettingsModal() }
             )
         }
@@ -779,7 +834,7 @@ private fun AlphabetRail(
     // Letters sit in a tightly packed column with a little breathing room between
     // them, lifted off the bottom edge by roughly five letter heights so the rail does
     // not collide with the gesture bar or the last row of apps.
-    val letterSpacing = 4.dp
+    val letterSpacing = 6.dp
     val letterLineHeight = with(LocalDensity.current) { 13.sp.toDp() }
     val letterPitch = letterLineHeight + letterSpacing
     val bottomInset = letterPitch * 5

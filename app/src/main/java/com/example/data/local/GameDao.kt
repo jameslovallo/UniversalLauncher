@@ -36,6 +36,10 @@ interface GameDao {
     @Query("SELECT * FROM games WHERE type = :type")
     suspend fun getGamesByTypeNow(type: GameType): List<GameItem>
 
+    // Full table, including hidden and deleted rows, for backup/sync export.
+    @Query("SELECT * FROM games")
+    suspend fun getAllItemsNow(): List<GameItem>
+
     @Query("SELECT * FROM games WHERE id = :id LIMIT 1")
     suspend fun getGameById(id: String): GameItem?
 

@@ -266,6 +266,9 @@ class GameRepository(
         gameDao.markDeleted(gameId)
     }
 
+    /** Snapshot of every row (including hidden and tombstoned entries) for cloud sync. */
+    suspend fun getAllItemsSnapshot(): List<GameItem> = gameDao.getAllItemsNow()
+
     companion object {
         fun create(context: Context): GameRepository {
             val db = AppDatabase.getDatabase(context)

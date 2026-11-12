@@ -30,9 +30,14 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AcUnit
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.Grain
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -66,12 +71,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.data.model.GameItem
+import com.example.data.service.WeatherInfo
 import com.example.ui.theme.FavoritesLayout
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Full-height favorites home shown on the Apps tab. Favorites are laid out in as many
@@ -88,6 +95,8 @@ fun FavoritesHome(
     focusedItemId: String?,
     layout: FavoritesLayout,
     showFocusEffects: Boolean,
+    weatherEnabled: Boolean = false,
+    weather: WeatherInfo? = null,
     onLaunchFavorite: (GameItem) -> Unit,
     onLongPressFavorite: (GameItem) -> Unit,
     onOpenClock: () -> Unit,
@@ -103,10 +112,12 @@ fun FavoritesHome(
     // need the same inset to line up with the icons.
     val textRowInset = 6.dp + favoritesSpacing / 2
 
-    // The clock and date are only shown in portrait: in landscape the space is needed
-    // for the favorites themselves.
+    // The clock and date are hidden only on small screens in landscape (phones held
+    // sideways); landscape tablets keep them because there is room.
     val context = LocalContext.current
-    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val showClockAndDate = !isLandscape || configuration.screenHeightDp >= 480
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
 
     LaunchedEffect(Unit) {
@@ -173,7 +184,7 @@ fun FavoritesHome(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = contentAlignment
     ) {
-        if (!isLandscape) {
+        if (showClockAndDate) {
             Text(
                 text = timeFormatter.format(nowDate),
                 fontSize = 64.sp,
@@ -188,31 +199,61 @@ fun FavoritesHome(
                     .testTag("favorites_clock")
             )
 
-            Text(
-                text = dateFormatter.format(nowDate),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = textAlign,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = if (isTextLayout) Arrangement.Start else Arrangement.Center,
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
                     .clickable { onOpenCalendar() }
                     .padding(vertical = 4.dp)
                     .then(if (isTextLayout) Modifier.padding(start = textRowInset) else Modifier.padding(horizontal = 14.dp))
-                    .testTag("favorites_date")
-            )
+                    .testTag("favorites_date_row")
+            ) {
+                Text(
+                    text = dateFormatter.format(nowDate),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = textAlign,
+                    modifier = Modifier.testTag("favorites_date")
+                )
+
+                if (weatherEnabled && weather != null) {
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Icon(
+                        imageVector = weatherIcon(weather.weatherCode),
+                        contentDescription = weatherDescription(weather.weatherCode),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "${weather.temperatureC.roundToInt()}°",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("favorites_weather")
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(34.dp))
         }
 
         if (favorites.isEmpty()) {
+            // Keep the empty state aligned with the clock and date above it.
+            val emptyInset = if (isTextLayout) {
+                Modifier.padding(start = textRowInset)
+            } else {
+                Modifier.padding(horizontal = 14.dp)
+            }
             Text(
                 text = "No favorite apps yet",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
                 textAlign = textAlign,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().then(emptyInset)
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
@@ -220,7 +261,7 @@ fun FavoritesHome(
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = textAlign,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().then(emptyInset)
             )
         } else {
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -644,4 +685,29 @@ private fun FavoriteActionRow(
             )
         }
     }
+}
+
+/** Material icon matching an Open-Meteo WMO weather code. */
+private fun weatherIcon(code: Int) = when (code) {
+    0, 1 -> Icons.Default.WbSunny
+    2, 3 -> Icons.Default.Cloud
+    45, 48 -> Icons.Default.Cloud
+    51, 53, 55, 56, 57 -> Icons.Default.Grain
+    61, 63, 65, 66, 67, 80, 81, 82 -> Icons.Default.Grain
+    71, 73, 75, 77, 85, 86 -> Icons.Default.AcUnit
+    95, 96, 99 -> Icons.Default.FlashOn
+    else -> Icons.Default.Cloud
+}
+
+/** Short spoken description of an Open-Meteo WMO weather code. */
+private fun weatherDescription(code: Int): String = when (code) {
+    0 -> "Clear sky"
+    1, 2 -> "Partly cloudy"
+    3 -> "Overcast"
+    45, 48 -> "Fog"
+    51, 53, 55, 56, 57 -> "Drizzle"
+    61, 63, 65, 66, 67, 80, 81, 82 -> "Rain"
+    71, 73, 75, 77, 85, 86 -> "Snow"
+    95, 96, 99 -> "Thunderstorm"
+    else -> "Weather"
 }

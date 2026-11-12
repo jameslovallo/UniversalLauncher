@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+    <!-- Optional weather widget: device location, or a ZIP code when not granted. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Google Drive app-data backup uses the device's Google account. -->
+    <uses-permission android:name="android.permission.GET_ACCOUNTS" />
     <!-- Required on API 28+ to launch the system uninstall prompt for other apps. -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <!-- Allow apps to install and remove home-screen shortcuts through this launcher. -->
@@ -67,6 +71,21 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- Optional "launcher hijack" fallback for devices that will not let the user
+             choose Nexus as the default home app. -->
+        <service
+            android:name=".HomeOverrideService"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/home_override_service" />
+        </service>
     </application>
 
 </manifest>
