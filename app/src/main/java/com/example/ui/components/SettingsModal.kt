@@ -1,8 +1,8 @@
 package com.example.ui.components
 
 import android.Manifest
-import android.app.Activity
 import android.content.pm.PackageManager
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -24,17 +24,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Login
-import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Opacity
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -92,9 +90,8 @@ fun SettingsModal(
     weatherZip: String,
     weatherInfo: WeatherInfo?,
     weatherError: String?,
-    driveEmail: String?,
-    driveSyncing: Boolean,
-    driveStatus: String?,
+    libraryTransferBusy: Boolean,
+    libraryTransferStatus: String?,
     isDefaultLauncher: () -> Boolean,
     isHomeOverrideEnabled: () -> Boolean,
     onSelectFavoritesLayout: (FavoritesLayout) -> Unit,
@@ -109,10 +106,8 @@ fun SettingsModal(
     onWeatherModeChange: (WeatherLocationMode) -> Unit,
     onWeatherZipChange: (String) -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
-    onDriveSignInIntent: () -> android.content.Intent,
-    onDriveSignInResult: (android.content.Intent?) -> Unit,
-    onDriveSignOut: () -> Unit,
-    onDriveSync: () -> Unit,
+    onExportLibrary: (Uri) -> Unit,
+    onImportLibrary: (Uri) -> Unit,
     onDismiss: () -> Unit
 ) {
     var apiKeyInput by remember { mutableStateOf(steamGridDbApiKey ?: "") }
@@ -145,12 +140,16 @@ fun SettingsModal(
         if (granted) onWeatherModeChange(WeatherLocationMode.DEVICE_LOCATION)
     }
 
-    val driveSignInLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            onDriveSignInResult(result.data)
-        }
+    val exportLibraryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) onExportLibrary(uri)
+    }
+
+    val importLibraryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) onImportLibrary(uri)
     }
 
     ModalBottomSheet(
@@ -213,20 +212,27 @@ fun SettingsModal(
             // Theme
             SectionHeader(
                 title = "Theme",
-                description = "Use colors from your wallpaper, or keep the neutral built-in palette"
+                description = "Pick a Material palette, or let the wallpaper choose the colors"
             )
             Spacer(modifier = Modifier.height(10.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                ThemeStyle.values().forEach { styleOption ->
-                    ThemeStyleCard(
-                        style = styleOption,
-                        isSelected = themeStyle == styleOption,
-                        onSelect = { onSelectThemeStyle(styleOption) },
-                        modifier = Modifier.weight(1f)
-                    )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ThemeStyle.values().toList().chunked(2).forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        row.forEach { styleOption ->
+                            ThemeStyleCard(
+                                style = styleOption,
+                                isSelected = themeStyle == styleOption,
+                                onSelect = { onSelectThemeStyle(styleOption) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (row.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
                 }
             }
 
@@ -297,10 +303,13 @@ fun SettingsModal(
             // Optional accessibility fallback, modelled on LauncherHijack.
             Text(
                 text = if (overrideEnabled) {
-                    "Accessibility launcher override is enabled."
+                    "Accessibility launcher override is enabled. Home presses are routed back " +
+                        "to Nexus, and Nexus is hidden from the Task Switcher."
                 } else {
                     "Some devices refuse to change the default launcher. Enable the " +
-                        "accessibility override to return to Nexus whenever another home app opens."
+                        "accessibility override to catch Home presses and launcher opens and " +
+                        "return to Nexus. Nexus is hidden from the Task Switcher while this " +
+                        "service is active."
                 },
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -419,72 +428,55 @@ fun SettingsModal(
             HorizontalDivider()
             Spacer(modifier = Modifier.height(18.dp))
 
-            // Google Drive sync
+            // Share library between devices
             SectionHeader(
-                title = "Google Drive Sync",
-                description = "Back up and restore GeForce NOW and Moonlight games using this " +
-                    "app's private Drive data"
+                title = "Share Library",
+                description = "Export your GeForce NOW, Moonlight, and shortcut games to a " +
+                    "file, or import a library exported from another device"
             )
             Spacer(modifier = Modifier.height(10.dp))
 
-            if (driveEmail == null) {
-                Button(
-                    onClick = { driveSignInLauncher.launch(onDriveSignInIntent()) },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("drive_sign_in_button")
-                ) {
-                    Icon(imageVector = Icons.Default.Login, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Sign in with Google", fontWeight = FontWeight.Bold)
-                }
-            } else {
-                Text(
-                    text = "Signed in as $driveEmail",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.testTag("drive_account_label")
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = onDriveSync,
-                    enabled = !driveSyncing,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("drive_sync_button")
-                ) {
-                    Icon(imageVector = Icons.Default.Sync, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        if (driveSyncing) "Syncing…" else "Sync Now",
-                        fontWeight = FontWeight.Bold
+            Button(
+                onClick = { exportLibraryLauncher.launch("nexus-library.json") },
+                enabled = !libraryTransferBusy,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().testTag("library_export_button")
+            ) {
+                Icon(imageVector = Icons.Default.Upload, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Export Library", fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    importLibraryLauncher.launch(
+                        arrayOf("application/json", "text/plain", "application/octet-stream")
                     )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = onDriveSignOut,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("drive_sign_out_button")
-                ) {
-                    Icon(imageVector = Icons.Default.Logout, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Sign Out")
-                }
+                },
+                enabled = !libraryTransferBusy,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().testTag("library_import_button")
+            ) {
+                Icon(imageVector = Icons.Default.Download, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (libraryTransferBusy) "Working…" else "Import Library")
             }
 
-            if (!driveStatus.isNullOrBlank()) {
+            if (!libraryTransferStatus.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = Icons.Default.CloudSync,
+                        imageVector = Icons.Default.Refresh,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = driveStatus,
+                        text = libraryTransferStatus,
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("drive_status")
+                        modifier = Modifier.testTag("library_transfer_status")
                     )
                 }
             }
@@ -659,13 +651,11 @@ private fun ThemeStyleCard(
     onSelect: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val title = when (style) {
-        ThemeStyle.WALLPAPER -> "Wallpaper"
-        ThemeStyle.NEUTRAL -> "Neutral"
-    }
-    val description = when (style) {
-        ThemeStyle.WALLPAPER -> "Match your wallpaper"
-        ThemeStyle.NEUTRAL -> "Built-in palette"
+    val seed = style.seedColor
+    val swatch = if (seed != null) {
+        androidx.compose.ui.graphics.Color(seed.toInt())
+    } else {
+        MaterialTheme.colorScheme.primary
     }
     Card(
         onClick = onSelect,
@@ -683,35 +673,42 @@ private fun ThemeStyleCard(
             )
             .testTag("theme_style_${style.name.lowercase()}")
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 14.dp, horizontal = 12.dp)
+                .padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Palette,
-                    contentDescription = null,
-                    tint = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(swatch)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = title,
-                    fontSize = 14.sp,
+                    text = style.label,
+                    fontSize = 13.sp,
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
                     color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
                     else MaterialTheme.colorScheme.onSurface
                 )
+                Text(
+                    text = style.description,
+                    fontSize = 10.sp,
+                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = description,
-                fontSize = 11.sp,
-                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
-                else MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }

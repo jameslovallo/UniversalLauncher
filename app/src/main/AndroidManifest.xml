@@ -8,8 +8,6 @@
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
     <!-- Optional weather widget: device location, or a ZIP code when not granted. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <!-- Google Drive app-data backup uses the device's Google account. -->
-    <uses-permission android:name="android.permission.GET_ACCOUNTS" />
     <!-- Required on API 28+ to launch the system uninstall prompt for other apps. -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <!-- Allow apps to install and remove home-screen shortcuts through this launcher. -->

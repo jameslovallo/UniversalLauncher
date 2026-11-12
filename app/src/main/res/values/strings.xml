@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">Nexus</string>
-    <string name="accessibility_home_override_description">Brings Nexus back to the foreground when another home app is the system default. Nexus never reads window content.</string>
+    <string name="accessibility_home_override_description">Returns Nexus to the foreground when you press Home or another launcher opens. Also keeps Nexus out of the Task Switcher. Nexus never reads window content.</string>
 </resources>

@@ -137,9 +137,8 @@ fun DashboardScreen(
     val weatherZip by viewModel.weatherZip.collectAsStateWithLifecycle()
     val weatherInfo by viewModel.weatherInfo.collectAsStateWithLifecycle()
     val weatherError by viewModel.weatherError.collectAsStateWithLifecycle()
-    val driveEmail by viewModel.driveEmail.collectAsStateWithLifecycle()
-    val driveSyncing by viewModel.driveSyncing.collectAsStateWithLifecycle()
-    val driveStatus by viewModel.driveStatus.collectAsStateWithLifecycle()
+    val libraryTransferBusy by viewModel.libraryTransferBusy.collectAsStateWithLifecycle()
+    val libraryTransferStatus by viewModel.libraryTransferStatus.collectAsStateWithLifecycle()
 
     // Re-scan installed apps whenever the launcher comes back to the foreground, so a
     // freshly installed app appears without restarting.
@@ -534,9 +533,8 @@ fun DashboardScreen(
                 weatherZip = weatherZip,
                 weatherInfo = weatherInfo,
                 weatherError = weatherError,
-                driveEmail = driveEmail,
-                driveSyncing = driveSyncing,
-                driveStatus = driveStatus,
+                libraryTransferBusy = libraryTransferBusy,
+                libraryTransferStatus = libraryTransferStatus,
                 isDefaultLauncher = { viewModel.isDefaultLauncher() },
                 isHomeOverrideEnabled = { viewModel.isHomeOverrideEnabled() },
                 onSelectFavoritesLayout = { viewModel.setFavoritesLayout(it) },
@@ -551,10 +549,8 @@ fun DashboardScreen(
                 onWeatherModeChange = { viewModel.setWeatherMode(it) },
                 onWeatherZipChange = { viewModel.setWeatherZip(it) },
                 onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() },
-                onDriveSignInIntent = { viewModel.driveSignInIntent() },
-                onDriveSignInResult = { viewModel.completeDriveSignIn(it) },
-                onDriveSignOut = { viewModel.signOutDrive() },
-                onDriveSync = { viewModel.syncDrive() },
+                onExportLibrary = { viewModel.exportLibrary(it) },
+                onImportLibrary = { viewModel.importLibrary(it) },
                 onDismiss = { viewModel.closeSettingsModal() }
             )
         }

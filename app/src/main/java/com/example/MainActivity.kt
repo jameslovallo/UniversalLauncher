@@ -1,5 +1,6 @@
 package com.example
 
+import android.app.ActivityManager
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -32,6 +33,23 @@ class MainActivity : ComponentActivity() {
             val themeStyle by viewModel.themeStyle.collectAsStateWithLifecycle()
             MyApplicationTheme(style = themeStyle) {
                 NexusApp(viewModel = viewModel)
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // When the optional home-override service is active, Nexus behaves like the home
+        // app itself, so keep it out of the Task Switcher / Recents list.
+        updateRecentsVisibility()
+    }
+
+    private fun updateRecentsVisibility() {
+        val hide = viewModel.isHomeOverrideEnabled()
+        val activityManager = getSystemService(ActivityManager::class.java) ?: return
+        runCatching {
+            activityManager.appTasks.forEach { task ->
+                task.setExcludeFromRecents(hide)
             }
         }
     }

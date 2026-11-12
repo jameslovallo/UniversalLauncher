@@ -2,16 +2,16 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
-import android.content.Intent
+import android.net.Uri
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
-import com.example.data.service.DriveSyncService
 import com.example.data.service.GeForceNowService
 import com.example.data.service.InstalledAppsManager
+import com.example.data.service.LibraryTransferService
 import com.example.data.service.MOONLIGHT_PACKAGES
 import com.example.data.service.WeatherInfo
 import com.example.data.service.WeatherLocationMode
@@ -103,7 +103,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val steamGridDbApiKey: StateFlow<String?> = _steamGridDbApiKey.asStateFlow()
 
     private val weatherService = WeatherService(application)
-    private val driveSyncService = DriveSyncService(application, repository)
+    private val libraryTransferService = LibraryTransferService(application, repository)
 
     // Opacity of the wallpaper scrim on the Apps screen. 0 = wallpaper only, 1 = solid.
     private val _appsBackgroundOpacity = MutableStateFlow(
@@ -112,11 +112,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appsBackgroundOpacity: StateFlow<Float> = _appsBackgroundOpacity.asStateFlow()
 
     private val _themeStyle = MutableStateFlow(
-        runCatching {
-            ThemeStyle.valueOf(
-                prefs.getString("theme_style", ThemeStyle.WALLPAPER.name)!!
-            )
-        }.getOrDefault(ThemeStyle.WALLPAPER)
+        ThemeStyle.fromStorage(prefs.getString("theme_style", ThemeStyle.WALLPAPER.name))
     )
     val themeStyle: StateFlow<ThemeStyle> = _themeStyle.asStateFlow()
 
@@ -141,14 +137,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _weatherError = MutableStateFlow<String?>(null)
     val weatherError: StateFlow<String?> = _weatherError.asStateFlow()
 
-    private val _driveEmail = MutableStateFlow(driveSyncService.signedInEmail())
-    val driveEmail: StateFlow<String?> = _driveEmail.asStateFlow()
+    private val _libraryTransferBusy = MutableStateFlow(false)
+    val libraryTransferBusy: StateFlow<Boolean> = _libraryTransferBusy.asStateFlow()
 
-    private val _driveSyncing = MutableStateFlow(false)
-    val driveSyncing: StateFlow<Boolean> = _driveSyncing.asStateFlow()
-
-    private val _driveStatus = MutableStateFlow<String?>(null)
-    val driveStatus: StateFlow<String?> = _driveStatus.asStateFlow()
+    private val _libraryTransferStatus = MutableStateFlow<String?>(null)
+    val libraryTransferStatus: StateFlow<String?> = _libraryTransferStatus.asStateFlow()
 
     // All library items from Room
     val allItems: StateFlow<List<GameItem>> = repository.allGames
@@ -547,46 +540,47 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // ---- Google Drive backup -------------------------------------------------------
+    // ---- Library export / import ---------------------------------------------------
 
-    fun driveSignInIntent(): Intent = driveSyncService.signInIntent()
-
-    fun completeDriveSignIn(data: Intent?) {
+    /** Writes the shareable game library to the document the user picked. */
+    fun exportLibrary(uri: Uri) {
+        if (_libraryTransferBusy.value) return
         viewModelScope.launch {
-            val email = runCatching { driveSyncService.completeSignIn(data) }
-                .onFailure { _driveStatus.value = it.message ?: "Google sign-in failed" }
-                .getOrNull()
-            _driveEmail.value = email ?: driveSyncService.signedInEmail()
-            if (_driveEmail.value != null) {
-                _driveStatus.value = "Signed in. Tap Sync to back up your library."
-            }
-        }
-    }
-
-    fun signOutDrive() {
-        driveSyncService.signOut()
-        _driveEmail.value = null
-        _driveStatus.value = "Signed out"
-    }
-
-    fun syncDrive() {
-        if (_driveSyncing.value) return
-        if (_driveEmail.value == null) {
-            _driveStatus.value = "Sign in with Google first"
-            return
-        }
-        viewModelScope.launch {
-            _driveSyncing.value = true
-            _driveStatus.value = "Syncing with Google Drive…"
-            runCatching { driveSyncService.sync() }
+            _libraryTransferBusy.value = true
+            _libraryTransferStatus.value = "Exporting library…"
+            runCatching { libraryTransferService.exportLibrary(uri) }
                 .onSuccess { summary ->
-                    _driveStatus.value =
-                        "Synced ${summary.total} items (${summary.imported} new on this device)"
+                    _libraryTransferStatus.value =
+                        "Exported ${summary.itemCount} items. Share the file with your " +
+                            "other device."
                 }
                 .onFailure {
-                    _driveStatus.value = it.message ?: "Google Drive sync failed"
+                    _libraryTransferStatus.value = it.message ?: "Export failed"
                 }
-            _driveSyncing.value = false
+            _libraryTransferBusy.value = false
+        }
+    }
+
+    /** Merges a library file exported from another device, keeping local items intact. */
+    fun importLibrary(uri: Uri) {
+        if (_libraryTransferBusy.value) return
+        viewModelScope.launch {
+            _libraryTransferBusy.value = true
+            _libraryTransferStatus.value = "Importing library…"
+            runCatching { libraryTransferService.importLibrary(uri) }
+                .onSuccess { summary ->
+                    _libraryTransferStatus.value = if (summary.imported == 0) {
+                        "No new items to import — this library is already up to date" +
+                            " (${summary.itemCount} items)."
+                    } else {
+                        "Imported ${summary.imported} new items " +
+                            "(${summary.itemCount} total)."
+                    }
+                }
+                .onFailure {
+                    _libraryTransferStatus.value = it.message ?: "Import failed"
+                }
+            _libraryTransferBusy.value = false
         }
     }
 
