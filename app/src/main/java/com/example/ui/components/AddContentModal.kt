@@ -122,7 +122,7 @@ fun AddContentModal(
 
                         Text(
                             text = when (subView) {
-                                AddModalSubView.OPTIONS -> "Discover"
+                                AddModalSubView.OPTIONS -> "Add Apps & Games"
                                 AddModalSubView.ADD_GFN -> "Add GeForce Now Game"
                                 AddModalSubView.ADD_WEB_URL -> "Add Web URL"
                             },
