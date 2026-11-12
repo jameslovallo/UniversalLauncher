@@ -37,7 +37,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -71,6 +71,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -103,6 +105,7 @@ import com.example.ui.viewmodel.LauncherViewModel
 import com.example.ui.viewmodel.MainLibraryTab
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -332,6 +335,9 @@ fun DashboardScreen(
                             },
                             onGameLongClick = { game ->
                                 viewModel.openContextMenu(game)
+                            },
+                            onGameFocus = { game ->
+                                viewModel.setFocusedItem(game.id)
                             }
                         )
                     }
@@ -362,7 +368,8 @@ fun DashboardScreen(
                                 },
                                 onOpenClock = { viewModel.openClockApp() },
                                 onOpenCalendar = { viewModel.openCalendarApp() },
-                                onPullDown = { viewModel.expandNotificationShade() }
+                                onPullDown = { viewModel.expandNotificationShade() },
+                                onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
                             )
                         } else {
                             if (libraryDisplay.isEmpty()) {
@@ -381,6 +388,9 @@ fun DashboardScreen(
                                     },
                                     onAppLongClick = { app ->
                                         viewModel.openContextMenu(app)
+                                    },
+                                    onAppFocus = { app ->
+                                        viewModel.setFocusedItem(app.id)
                                     },
                                     onLetterSelected = { letter ->
                                         val index = appListEntries.indexOfFirst {
@@ -526,8 +536,27 @@ private fun GamesPosterGrid(
     rowState: LazyListState,
     compactLandscape: Boolean,
     onGameClick: (GameItem) -> Unit,
-    onGameLongClick: (GameItem) -> Unit
+    onGameLongClick: (GameItem) -> Unit,
+    onGameFocus: (GameItem) -> Unit = {}
 ) {
+    val firstItemFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(showFocusEffects) {
+        if (showFocusEffects && games.isNotEmpty()) {
+            delay(50)
+            runCatching { firstItemFocusRequester.requestFocus() }
+        }
+    }
+
+    LaunchedEffect(focusedItemId, compactLandscape) {
+        if (compactLandscape && focusedItemId != null) {
+            val idx = games.indexOfFirst { it.id == focusedItemId }
+            if (idx >= 0) {
+                runCatching { rowState.animateScrollToItem(idx) }
+            }
+        }
+    }
+
     if (compactLandscape) {
         // Small landscape screens: a single horizontal row that steps one poster at a
         // time. The focused poster sits at the left edge and is visibly larger.
@@ -544,7 +573,7 @@ private fun GamesPosterGrid(
                 .navigationBarsPadding()
                 .testTag("games_poster_row")
         ) {
-            itemsIndexed(games, key = { _, game -> game.id }) { _, game ->
+            itemsIndexed(games, key = { _, game -> game.id }) { index, game ->
                 val isFocused = game.id == focusedItemId && showFocusEffects
 
                 SteamGamePosterCard(
@@ -553,7 +582,10 @@ private fun GamesPosterGrid(
                     showFocusOutline = false,
                     onClick = { onGameClick(game) },
                     onLongClick = { onGameLongClick(game) },
-                    modifier = Modifier.width(if (isFocused) 168.dp else 112.dp)
+                    onFocus = { onGameFocus(game) },
+                    modifier = Modifier
+                        .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                        .width(if (isFocused) 168.dp else 112.dp)
                 )
             }
         }
@@ -585,12 +617,14 @@ private fun GamesPosterGrid(
                 .fillMaxSize()
                 .testTag("games_poster_grid")
         ) {
-            items(games, key = { it.id }) { game ->
+            itemsIndexed(games, key = { _, game -> game.id }) { index, game ->
                 SteamGamePosterCard(
                     game = game,
                     isFocused = game.id == focusedItemId && showFocusEffects,
                     onClick = { onGameClick(game) },
-                    onLongClick = { onGameLongClick(game) }
+                    onLongClick = { onGameLongClick(game) },
+                    onFocus = { onGameFocus(game) },
+                    modifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
                 )
             }
         }
@@ -627,7 +661,8 @@ private fun AppsAlphabeticalList(
     gridState: LazyGridState,
     onAppClick: (GameItem) -> Unit,
     onAppLongClick: (GameItem) -> Unit,
-    onLetterSelected: (String) -> Unit
+    onLetterSelected: (String) -> Unit,
+    onAppFocus: (GameItem) -> Unit = {},
 ) {
     val letters = remember(entries) {
         entries.filterIsInstance<AppListEntry.Letter>().map { it.letter }
@@ -689,6 +724,7 @@ private fun AppsAlphabeticalList(
                                 testTag = "app_row_${entry.item.id}",
                                 onClick = { onAppClick(entry.item) },
                                 onLongClick = { onAppLongClick(entry.item) },
+                                onFocus = { onAppFocus(entry.item) },
                                 contentPadding = PaddingValues(horizontal = 5.dp, vertical = 10.dp),
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -725,6 +761,7 @@ private fun AppsAlphabeticalList(
                                 testTag = "app_row_${entry.item.id}",
                                 onClick = { onAppClick(entry.item) },
                                 onLongClick = { onAppLongClick(entry.item) },
+                                onFocus = { onAppFocus(entry.item) },
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
                                 modifier = Modifier.fillMaxWidth()
                             )

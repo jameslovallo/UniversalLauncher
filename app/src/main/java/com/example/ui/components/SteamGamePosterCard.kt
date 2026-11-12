@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
@@ -30,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -48,10 +50,15 @@ fun SteamGamePosterCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
-    showFocusOutline: Boolean = true
+    showFocusOutline: Boolean = true,
+    onFocus: (() -> Unit)? = null,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocusedByCompose by interactionSource.collectIsFocusedAsState()
+    val effectivelyFocused = isFocused || isFocusedByCompose
+
     val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.05f else 1.0f,
+        targetValue = if (effectivelyFocused) 1.05f else 1.0f,
         animationSpec = tween(150),
         label = "poster_scale"
     )
@@ -60,8 +67,13 @@ fun SteamGamePosterCard(
         modifier = modifier
             .fillMaxWidth()
             .scale(scale)
+            .onFocusChanged { focusState ->
+                if (focusState.isFocused) {
+                    onFocus?.invoke()
+                }
+            }
             .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -76,13 +88,13 @@ fun SteamGamePosterCard(
                 .aspectRatio(2f / 3f)
                 .border(
                     width = when {
-                        isFocused && showFocusOutline -> 2.5.dp
+                        effectivelyFocused && showFocusOutline -> 2.5.dp
                         showFocusOutline -> 1.dp
                         else -> 0.dp
                     },
                     color = when {
                         !showFocusOutline -> androidx.compose.ui.graphics.Color.Transparent
-                        isFocused -> MaterialTheme.colorScheme.primary
+                        effectivelyFocused -> MaterialTheme.colorScheme.primary
                         else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                     },
                     shape = RoundedCornerShape(16.dp)
@@ -92,7 +104,7 @@ fun SteamGamePosterCard(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
             ),
             elevation = CardDefaults.cardElevation(
-                defaultElevation = if (isFocused) 8.dp else 2.dp
+                defaultElevation = if (effectivelyFocused) 8.dp else 2.dp
             )
         ) {
             Box(modifier = Modifier.fillMaxSize()) {

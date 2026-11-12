@@ -7,7 +7,11 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -24,6 +28,15 @@ import com.example.ui.viewmodel.LauncherViewModel
 
 class MainActivity : ComponentActivity() {
     private val viewModel: LauncherViewModel by viewModels()
+
+    private val bHoldHandler = Handler(Looper.getMainLooper())
+    private var isHoldingB = false
+    private var bHoldTriggered = false
+    private val bHoldRunnable = Runnable {
+        bHoldTriggered = true
+        window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        viewModel.openContextMenuForFocusedItem()
+    }
 
     /** Reads the library sync file again after the device is unlocked. */
     private val userPresentReceiver = object : BroadcastReceiver() {
@@ -62,7 +75,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        bHoldHandler.removeCallbacks(bHoldRunnable)
+        isHoldingB = false
+        bHoldTriggered = false
+    }
+
     override fun onDestroy() {
+        bHoldHandler.removeCallbacks(bHoldRunnable)
         runCatching { unregisterReceiver(userPresentReceiver) }
         super.onDestroy()
     }
@@ -90,6 +111,104 @@ class MainActivity : ComponentActivity() {
         if (action != null) {
             if (viewModel.onControllerAction(action)) {
                 return true
+            }
+        }
+        // Map controller Button A to DPAD_CENTER so Compose's clickable handles it as a click
+        if (event.keyCode == KeyEvent.KEYCODE_BUTTON_A) {
+            val dpadCenterEvent = KeyEvent(
+                event.downTime,
+                event.eventTime,
+                event.action,
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                event.repeatCount,
+                event.metaState,
+                event.deviceId,
+                event.scanCode,
+                event.flags,
+                event.source,
+            )
+            if (super.dispatchKeyEvent(dpadCenterEvent)) {
+                return true
+            }
+        }
+
+        // Controller Button B handling:
+        // - Holding B opens the currently focused app or game's context menu.
+        // - When any context menu/modal is open, pressing B acts exactly like the native Android Back gesture.
+        if (event.keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+            if (viewModel.isAnyMenuOrModalOpen()) {
+                // If a menu was just opened by holding B, ignore the subsequent ACTION_UP from that hold
+                if (bHoldTriggered && (event.action == KeyEvent.ACTION_UP)) {
+                    bHoldTriggered = false
+                    isHoldingB = false
+                    return true
+                }
+                // When open, pressing B acts exactly like native Back
+                val backEvent = KeyEvent(
+                    event.downTime,
+                    event.eventTime,
+                    event.action,
+                    KeyEvent.KEYCODE_BACK,
+                    event.repeatCount,
+                    event.metaState,
+                    event.deviceId,
+                    event.scanCode,
+                    event.flags,
+                    event.source,
+                )
+                if (super.dispatchKeyEvent(backEvent)) {
+                    return true
+                }
+                if (event.action == KeyEvent.ACTION_UP) {
+                    onBackPressedDispatcher.onBackPressed()
+                    return true
+                }
+                return true
+            } else {
+                // When no context menu or modal is open:
+                when (event.action) {
+                    KeyEvent.ACTION_DOWN -> {
+                        if (event.repeatCount == 0) {
+                            isHoldingB = true
+                            bHoldTriggered = false
+                            bHoldHandler.removeCallbacks(bHoldRunnable)
+                            bHoldHandler.postDelayed(
+                                bHoldRunnable,
+                                ViewConfiguration.getLongPressTimeout().toLong(),
+                            )
+                        }
+                        return true
+                    }
+                    KeyEvent.ACTION_UP -> {
+                        bHoldHandler.removeCallbacks(bHoldRunnable)
+                        if (isHoldingB) {
+                            isHoldingB = false
+                            if (bHoldTriggered) {
+                                bHoldTriggered = false
+                                return true
+                            } else {
+                                // Short tap when no menu open: native back behavior
+                                val backEvent = KeyEvent(
+                                    event.downTime,
+                                    event.eventTime,
+                                    event.action,
+                                    KeyEvent.KEYCODE_BACK,
+                                    event.repeatCount,
+                                    event.metaState,
+                                    event.deviceId,
+                                    event.scanCode,
+                                    event.flags,
+                                    event.source,
+                                )
+                                if (super.dispatchKeyEvent(backEvent)) {
+                                    return true
+                                }
+                                onBackPressedDispatcher.onBackPressed()
+                                return true
+                            }
+                        }
+                    }
+                }
             }
         }
         return super.dispatchKeyEvent(event)

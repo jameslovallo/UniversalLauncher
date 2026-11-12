@@ -303,6 +303,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _contextMenuItem.value = item
     }
 
+    fun openContextMenuForFocusedItem(): Boolean {
+        val focusedId = _focusedItemId.value
+        val item = if (focusedId != null) {
+            allItems.value.firstOrNull { it.id == focusedId }
+        } else {
+            if (_currentTab.value == MainLibraryTab.GAMES) {
+                gamesList.value.firstOrNull()
+            } else {
+                favoriteApps.value.firstOrNull() ?: appsList.value.firstOrNull()
+            }
+        } ?: return false
+
+        openContextMenu(item)
+        return true
+    }
+
+    fun isAnyMenuOrModalOpen(): Boolean =
+        _showAddModal.value ||
+        _showSettingsModal.value ||
+        _editingItem.value != null ||
+        _contextMenuItem.value != null ||
+        _favoriteActionItem.value != null ||
+        _showFavoritesEditor.value
+
     fun closeContextMenu() {
         _contextMenuItem.value = null
     }

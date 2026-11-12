@@ -102,7 +102,8 @@ fun FavoritesHome(
     onOpenClock: () -> Unit,
     onOpenCalendar: () -> Unit,
     onPullDown: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onFocusFavorite: (GameItem) -> Unit = {},
 ) {
     val isTextLayout = layout == FavoritesLayout.TEXT
     val contentAlignment = if (isTextLayout) Alignment.Start else Alignment.CenterHorizontally
@@ -301,6 +302,7 @@ fun FavoritesHome(
                                 testTag = "favorite_app_${app.id}",
                                 onClick = { onLaunchFavorite(app) },
                                 onLongClick = { onLongPressFavorite(app) },
+                                onFocus = { onFocusFavorite(app) },
                                 contentPadding = PaddingValues(
                                     horizontal = 6.dp + spacing / 2,
                                     vertical = 9.dp + rowGap / 2
@@ -339,6 +341,7 @@ fun FavoritesHome(
                                 testTag = "favorite_app_${app.id}",
                                 onClick = { onLaunchFavorite(app) },
                                 onLongClick = { onLongPressFavorite(app) },
+                                onFocus = { onFocusFavorite(app) },
                                 contentPadding = PaddingValues(
                                     horizontal = tileGap / 2,
                                     vertical = 6.dp + rowGap / 2

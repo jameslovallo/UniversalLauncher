@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -57,7 +58,8 @@ fun AppTextRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     contentPadding: PaddingValues = PaddingValues(horizontal = 6.dp, vertical = 9.dp),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onFocus: (() -> Unit)? = null,
 ) {
     val focused = isFocused && showFocusEffects
 
@@ -68,6 +70,7 @@ fun AppTextRow(
                 if (focused) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
                 else Color.Transparent
             )
+            .onFocusChanged { if (it.isFocused) onFocus?.invoke() }
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -114,7 +117,8 @@ fun AppIconTile(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     contentPadding: PaddingValues = PaddingValues(vertical = 6.dp),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onFocus: (() -> Unit)? = null,
 ) {
     val focused = isFocused && showFocusEffects
     val scale by animateFloatAsState(
@@ -127,6 +131,7 @@ fun AppIconTile(
         modifier = modifier
             .scale(scale)
             .clip(RoundedCornerShape(16.dp))
+            .onFocusChanged { if (it.isFocused) onFocus?.invoke() }
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
