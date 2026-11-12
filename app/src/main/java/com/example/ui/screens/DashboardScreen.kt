@@ -137,23 +137,17 @@ fun DashboardScreen(
     val weatherZip by viewModel.weatherZip.collectAsStateWithLifecycle()
     val weatherInfo by viewModel.weatherInfo.collectAsStateWithLifecycle()
     val weatherError by viewModel.weatherError.collectAsStateWithLifecycle()
-    val libraryTransferBusy by viewModel.libraryTransferBusy.collectAsStateWithLifecycle()
-    val libraryTransferStatus by viewModel.libraryTransferStatus.collectAsStateWithLifecycle()
+    val librarySyncBusy by viewModel.librarySyncBusy.collectAsStateWithLifecycle()
+    val librarySyncStatus by viewModel.librarySyncStatus.collectAsStateWithLifecycle()
+    val librarySyncConfigured by viewModel.librarySyncConfigured.collectAsStateWithLifecycle()
+    val librarySyncTarget by viewModel.librarySyncTarget.collectAsStateWithLifecycle()
+    val librarySyncLastSyncedAt by viewModel.librarySyncLastSyncedAt.collectAsStateWithLifecycle()
 
     // Re-scan installed apps whenever the launcher comes back to the foreground, so a
     // freshly installed app appears without restarting.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         viewModel.refreshInstalledApps()
         viewModel.refreshWeather()
-    }
-
-    // A controller connection jumps straight to the Games library.
-    var controllerWasConnected by remember { mutableStateOf(false) }
-    LaunchedEffect(controllerState.isConnected) {
-        if (controllerState.isConnected && !controllerWasConnected) {
-            viewModel.setTab(MainLibraryTab.GAMES)
-        }
-        controllerWasConnected = controllerState.isConnected
     }
 
     // Phones held sideways get a compact horizontal poster row instead of a grid.
@@ -169,10 +163,6 @@ fun DashboardScreen(
     val gamesRowState = rememberLazyListState()
     val appsListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-
-    LaunchedEffect(isCompactLandscape) {
-        viewModel.setGamesRowMode(isCompactLandscape)
-    }
 
     // Filter each page by the search query. Keeping both lists separate means swiping
     // between pages shows the correct results even before the tab state catches up.
@@ -221,8 +211,8 @@ fun DashboardScreen(
         }
     }
 
-    // With no controller, the Games tab should start with nothing focused. A connected
-    // controller focuses the first game so the D-pad has somewhere to start.
+    // With no controller, the Games tab starts with nothing focused. A connected
+    // controller focuses the first game so an active element is visibly highlighted.
     LaunchedEffect(controllerState.isConnected, currentTab, gamesList, focusedItemId) {
         if (currentTab == MainLibraryTab.GAMES) {
             if (controllerState.isConnected) {
@@ -240,45 +230,6 @@ fun DashboardScreen(
     // for Games, following the swipe continuously.
     val darkAmount = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
         .coerceIn(0f, 1f)
-
-    // Scroll the focused item into view when navigating with a controller (or after
-    // switching tabs). Favorites live on the home page; everything else is in the app
-    // list that opens when swiping up.
-    LaunchedEffect(focusedItemId, currentTab, isCompactLandscape) {
-        val focusedId = focusedItemId ?: return@LaunchedEffect
-        if (currentTab == MainLibraryTab.GAMES) {
-            val idx = gamesDisplay.indexOfFirst { it.id == focusedId }
-            if (idx >= 0) {
-                if (isCompactLandscape) {
-                    // Keep the focused poster pinned to the left edge of the row.
-                    gamesRowState.animateScrollToItem(idx)
-                } else {
-                    gridState.animateScrollToItem(idx)
-                }
-            }
-        } else {
-            val isFavorite = favoriteApps.any { it.id == focusedId }
-            if (isFavorite) {
-                if (appsPagerState.currentPage != 0) {
-                    appsPagerState.animateScrollToPage(0)
-                }
-            } else {
-                val idx = appListEntries.indexOfFirst {
-                    it is AppListEntry.App && it.item.id == focusedId
-                }
-                if (idx >= 0) {
-                    if (appsPagerState.currentPage != 1) {
-                        appsPagerState.animateScrollToPage(1)
-                    }
-                    if (favoritesLayout == FavoritesLayout.ICONS) {
-                        appsGridState.animateScrollToItem(idx)
-                    } else {
-                        appsListState.animateScrollToItem(idx)
-                    }
-                }
-            }
-        }
-    }
 
     Box(
         modifier = modifier.fillMaxSize()
@@ -369,10 +320,10 @@ fun DashboardScreen(
                         GamesPosterGrid(
                             games = gamesDisplay,
                             focusedItemId = focusedItemId,
+                            showFocusEffects = controllerState.isConnected,
                             gridState = gridState,
                             rowState = gamesRowState,
                             compactLandscape = isCompactLandscape,
-                            onColumnCountChanged = { viewModel.setGamesColumnCount(it) },
                             onGameClick = { game ->
                                 viewModel.setFocusedItem(game.id)
                                 viewModel.launchItem(game)
@@ -422,7 +373,6 @@ fun DashboardScreen(
                                     showFocusEffects = controllerState.isConnected,
                                     listState = appsListState,
                                     gridState = appsGridState,
-                                    onColumnCountChanged = { viewModel.setAppsColumnCount(it) },
                                     onAppClick = { app ->
                                         viewModel.setFocusedItem(app.id)
                                         viewModel.launchItem(app)
@@ -533,8 +483,11 @@ fun DashboardScreen(
                 weatherZip = weatherZip,
                 weatherInfo = weatherInfo,
                 weatherError = weatherError,
-                libraryTransferBusy = libraryTransferBusy,
-                libraryTransferStatus = libraryTransferStatus,
+                librarySyncBusy = librarySyncBusy,
+                librarySyncStatus = librarySyncStatus,
+                librarySyncConfigured = librarySyncConfigured,
+                librarySyncTarget = librarySyncTarget,
+                librarySyncLastSyncedAt = librarySyncLastSyncedAt,
                 isDefaultLauncher = { viewModel.isDefaultLauncher() },
                 isHomeOverrideEnabled = { viewModel.isHomeOverrideEnabled() },
                 onSelectFavoritesLayout = { viewModel.setFavoritesLayout(it) },
@@ -549,8 +502,10 @@ fun DashboardScreen(
                 onWeatherModeChange = { viewModel.setWeatherMode(it) },
                 onWeatherZipChange = { viewModel.setWeatherZip(it) },
                 onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() },
-                onExportLibrary = { viewModel.exportLibrary(it) },
-                onImportLibrary = { viewModel.importLibrary(it) },
+                onChooseSyncFile = { viewModel.chooseSyncFile(it) },
+                onChooseSyncFolder = { viewModel.chooseSyncFolder(it) },
+                onSyncLibraryNow = { viewModel.syncLibraryNow() },
+                onDisconnectLibrarySync = { viewModel.disconnectLibrarySync() },
                 onDismiss = { viewModel.closeSettingsModal() }
             )
         }
@@ -561,10 +516,10 @@ fun DashboardScreen(
 private fun GamesPosterGrid(
     games: List<GameItem>,
     focusedItemId: String?,
+    showFocusEffects: Boolean,
     gridState: LazyGridState,
     rowState: LazyListState,
     compactLandscape: Boolean,
-    onColumnCountChanged: (Int) -> Unit,
     onGameClick: (GameItem) -> Unit,
     onGameLongClick: (GameItem) -> Unit
 ) {
@@ -572,8 +527,6 @@ private fun GamesPosterGrid(
         // Small landscape screens: a single horizontal row that steps one poster at a
         // time. The focused poster sits at the left edge and is visibly larger.
         val snapFling = rememberSnapFlingBehavior(lazyListState = rowState)
-
-        LaunchedEffect(Unit) { onColumnCountChanged(1) }
 
         LazyRow(
             state = rowState,
@@ -587,7 +540,7 @@ private fun GamesPosterGrid(
                 .testTag("games_poster_row")
         ) {
             itemsIndexed(games, key = { _, game -> game.id }) { _, game ->
-                val isFocused = game.id == focusedItemId
+                val isFocused = game.id == focusedItemId && showFocusEffects
 
                 SteamGamePosterCard(
                     game = game,
@@ -617,8 +570,6 @@ private fun GamesPosterGrid(
             ((availableWidth + spacing) / (96.dp + spacing)).toInt()
         )
 
-        LaunchedEffect(columnCount) { onColumnCountChanged(columnCount) }
-
         LazyVerticalGrid(
             columns = GridCells.Fixed(columnCount),
             state = gridState,
@@ -632,7 +583,7 @@ private fun GamesPosterGrid(
             items(games, key = { it.id }) { game ->
                 SteamGamePosterCard(
                     game = game,
-                    isFocused = game.id == focusedItemId,
+                    isFocused = game.id == focusedItemId && showFocusEffects,
                     onClick = { onGameClick(game) },
                     onLongClick = { onGameLongClick(game) }
                 )
@@ -669,7 +620,6 @@ private fun AppsAlphabeticalList(
     showFocusEffects: Boolean,
     listState: LazyListState,
     gridState: LazyGridState,
-    onColumnCountChanged: (Int) -> Unit = {},
     onAppClick: (GameItem) -> Unit,
     onAppLongClick: (GameItem) -> Unit,
     onLetterSelected: (String) -> Unit
@@ -700,10 +650,6 @@ private fun AppsAlphabeticalList(
                 val availableWidth = maxWidth - 12.dp
                 val tileMinSize = 78.dp
                 val columns = maxOf(3, (availableWidth / tileMinSize).toInt())
-
-                LaunchedEffect(columns) {
-                    onColumnCountChanged(columns)
-                }
 
                 // Icon grid drawer: cells are packed edge to edge; gaps live inside each
                 // tile's clickable content padding so the whole cell is an easy touch target.

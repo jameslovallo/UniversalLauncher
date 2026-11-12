@@ -40,6 +40,11 @@ interface GameDao {
     @Query("SELECT * FROM games")
     suspend fun getAllItemsNow(): List<GameItem>
 
+    // Full table as a flow so library-file sync can react to adds, edits and deletes
+    // (including tombstones).
+    @Query("SELECT * FROM games")
+    fun getAllItemsFlow(): Flow<List<GameItem>>
+
     @Query("SELECT * FROM games WHERE id = :id LIMIT 1")
     suspend fun getGameById(id: String): GameItem?
 
@@ -69,6 +74,10 @@ interface GameDao {
 
     @Query("UPDATE games SET isHidden = :isHidden WHERE id = :id")
     suspend fun setHidden(id: String, isHidden: Boolean)
+
+    /** True for shortcuts pinned on this device (not imported from a sync file). */
+    @Query("UPDATE games SET isPinned = :isPinned WHERE id = :id")
+    suspend fun setPinned(id: String, isPinned: Boolean)
 
     @Query("UPDATE games SET isGame = :isGame WHERE id = :id")
     suspend fun setIsGame(id: String, isGame: Boolean)

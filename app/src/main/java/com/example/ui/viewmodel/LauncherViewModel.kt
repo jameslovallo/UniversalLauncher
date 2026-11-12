@@ -11,7 +11,8 @@ import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
 import com.example.data.service.GeForceNowService
 import com.example.data.service.InstalledAppsManager
-import com.example.data.service.LibraryTransferService
+import com.example.data.service.LibrarySyncOutcome
+import com.example.data.service.LibrarySyncService
 import com.example.data.service.MOONLIGHT_PACKAGES
 import com.example.data.service.WeatherInfo
 import com.example.data.service.WeatherLocationMode
@@ -59,7 +60,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _appsHomeReset = MutableStateFlow(0)
     val appsHomeReset: StateFlow<Int> = _appsHomeReset.asStateFlow()
 
-    // Focused item ID for controller navigation
+    // Focused item ID, used to highlight the active element when a controller is connected
     private val _focusedItemId = MutableStateFlow<String?>(null)
     val focusedItemId: StateFlow<String?> = _focusedItemId.asStateFlow()
 
@@ -103,7 +104,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val steamGridDbApiKey: StateFlow<String?> = _steamGridDbApiKey.asStateFlow()
 
     private val weatherService = WeatherService(application)
-    private val libraryTransferService = LibraryTransferService(application, repository)
+    private val librarySyncService = LibrarySyncService(application, repository, prefs)
 
     // Opacity of the wallpaper scrim on the Apps screen. 0 = wallpaper only, 1 = solid.
     private val _appsBackgroundOpacity = MutableStateFlow(
@@ -137,11 +138,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _weatherError = MutableStateFlow<String?>(null)
     val weatherError: StateFlow<String?> = _weatherError.asStateFlow()
 
-    private val _libraryTransferBusy = MutableStateFlow(false)
-    val libraryTransferBusy: StateFlow<Boolean> = _libraryTransferBusy.asStateFlow()
+    private val _librarySyncBusy = MutableStateFlow(false)
+    val librarySyncBusy: StateFlow<Boolean> = _librarySyncBusy.asStateFlow()
 
-    private val _libraryTransferStatus = MutableStateFlow<String?>(null)
-    val libraryTransferStatus: StateFlow<String?> = _libraryTransferStatus.asStateFlow()
+    private val _librarySyncStatus = MutableStateFlow<String?>(null)
+    val librarySyncStatus: StateFlow<String?> = _librarySyncStatus.asStateFlow()
+
+    private val _librarySyncConfigured = MutableStateFlow(librarySyncService.isConfigured)
+    val librarySyncConfigured: StateFlow<Boolean> = _librarySyncConfigured.asStateFlow()
+
+    private val _librarySyncTarget = MutableStateFlow(librarySyncService.targetLabel())
+    val librarySyncTarget: StateFlow<String?> = _librarySyncTarget.asStateFlow()
+
+    private val _librarySyncLastSyncedAt = MutableStateFlow(librarySyncService.lastSyncedAt())
+    val librarySyncLastSyncedAt: StateFlow<Long?> = _librarySyncLastSyncedAt.asStateFlow()
 
     // All library items from Room
     val allItems: StateFlow<List<GameItem>> = repository.allGames
@@ -152,7 +162,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         list.filter { it.isGame }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Apps Tab: all non-game applications, alphabetised for counts and controller use
+    // Apps Tab: all non-game applications, alphabetised for the app list
     val appsList: StateFlow<List<GameItem>> = allItems.map { list ->
         list.filter { !it.isGame }.sortedBy { it.title.lowercase() }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -173,6 +183,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     init {
         viewModelScope.launch {
             repository.initializeLibraryIfEmpty()
+
+            // Restore the library file before anything else can write over it.
+            if (librarySyncService.isConfigured) {
+                runCatching { librarySyncService.syncNow() }
+                    .onSuccess { outcome ->
+                        if (outcome is LibrarySyncOutcome.Applied) {
+                            _librarySyncStatus.value =
+                                "Restored ${outcome.itemCount} games from the sync file"
+                        }
+                    }
+                    .onFailure {
+                        _librarySyncStatus.value = it.message ?: "Library sync failed"
+                    }
+            }
+            refreshLibrarySyncState()
+            librarySyncService.observeLibraryChanges(viewModelScope) { message ->
+                _librarySyncStatus.value = message
+            }
+
             repository.backfillGfnArtwork()
             repository.matchMissingGamePosters()
         }
@@ -201,27 +230,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _focusedItemId.value = null
     }
 
-    /** True when the Games tab is rendered as a single horizontal row (compact landscape). */
-    private var gamesRowMode = false
-
-    fun setGamesRowMode(enabled: Boolean) {
-        gamesRowMode = enabled
-    }
-
-    /** Actual column count of the Games poster grid, used for D-pad up/down steps. */
-    private var gamesColumnCount = 4
-
-    fun setGamesColumnCount(count: Int) {
-        if (count > 0) gamesColumnCount = count
-    }
-
-    /** Actual column count of the Apps icon grid / favorites, used for 2D directional navigation. */
-    private var appsColumnCount = 4
-
-    fun setAppsColumnCount(count: Int) {
-        if (count > 0) appsColumnCount = count
-    }
-
     fun launchItem(item: GameItem) {
         viewModelScope.launch {
             repository.recordPlay(item.id)
@@ -247,25 +255,40 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val url = item.launchUrl
                 val pkg = item.packageName
                 val shortcutId = item.activityName
-                // Pinned shortcuts launch through LauncherApps so the publisher's intent
-                // (including extras) is preserved. Anything else falls back to the stored
-                // serialized intent or a plain app launch.
-                val launchedAsPinnedShortcut =
-                    pkg != null && shortcutId != null &&
-                        installedAppsManager.launchPinnedShortcut(pkg, shortcutId)
+
+                fun launchApp() {
+                    pkg?.let { installedAppsManager.launchApp(it) }
+                }
+
                 when {
-                    launchedAsPinnedShortcut -> Unit
-                    url == null -> pkg?.let { installedAppsManager.launchApp(it) }
-                    url.startsWith("intent:") -> {
-                        // Persisted launch intent (Moonlight-style). If the target activity
-                        // is gone, at least open the app so the user can pick the game there.
-                        if (!installedAppsManager.launchIntentUri(url)) {
-                            pkg?.let { installedAppsManager.launchApp(it) }
-                        }
-                    }
-                    url.startsWith("http://") || url.startsWith("https://") ->
+                    // Locally pinned shortcut: let the system launch it with the
+                    // publisher's identity, which also works for non-exported targets.
+                    item.isPinned && pkg != null && shortcutId != null &&
+                        installedAppsManager.launchPinnedShortcut(pkg, shortcutId) -> Unit
+
+                    // Moonlight games restored from another device are not pinned here.
+                    // Rebuild the direct game intent from the shortcut id instead of
+                    // falling back to Moonlight's home screen.
+                    pkg != null && pkg in MOONLIGHT_PACKAGES && shortcutId != null &&
+                        installedAppsManager.launchMoonlightShortcut(
+                            pkg,
+                            shortcutId,
+                            item.title
+                        ) -> Unit
+
+                    // Other shortcuts can usually use their persisted intent directly.
+                    url != null && url.startsWith("intent:") &&
+                        installedAppsManager.launchIntentUri(url) -> Unit
+
+                    // Custom web shortcuts store a plain URL.
+                    url != null && (url.startsWith("http://") || url.startsWith("https://")) ->
                         installedAppsManager.openExternally(url)
-                    else -> pkg?.let { installedAppsManager.launchApp(it) }
+
+                    // Legacy rows did not carry the pinned flag yet.
+                    pkg != null && shortcutId != null &&
+                        installedAppsManager.launchPinnedShortcut(pkg, shortcutId) -> Unit
+
+                    else -> launchApp()
                 }
             }
         }
@@ -481,6 +504,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     // Settings Modal
     fun openSettingsModal() {
+        refreshLibrarySyncState()
         _showSettingsModal.value = true
     }
 
@@ -540,48 +564,81 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // ---- Library export / import ---------------------------------------------------
+    // ---- Library file sync ---------------------------------------------------------
 
-    /** Writes the shareable game library to the document the user picked. */
-    fun exportLibrary(uri: Uri) {
-        if (_libraryTransferBusy.value) return
-        viewModelScope.launch {
-            _libraryTransferBusy.value = true
-            _libraryTransferStatus.value = "Exporting library…"
-            runCatching { libraryTransferService.exportLibrary(uri) }
-                .onSuccess { summary ->
-                    _libraryTransferStatus.value =
-                        "Exported ${summary.itemCount} items. Share the file with your " +
-                            "other device."
-                }
-                .onFailure {
-                    _libraryTransferStatus.value = it.message ?: "Export failed"
-                }
-            _libraryTransferBusy.value = false
-        }
+    /** Uses the file the user picked as the continuous sync target. */
+    fun chooseSyncFile(uri: Uri) {
+        runLibrarySync("Reading library file…") { librarySyncService.configureFile(uri) }
     }
 
-    /** Merges a library file exported from another device, keeping local items intact. */
-    fun importLibrary(uri: Uri) {
-        if (_libraryTransferBusy.value) return
+    /** Uses a folder as the sync target; Nexus creates nexus-library.json inside it. */
+    fun chooseSyncFolder(uri: Uri) {
+        runLibrarySync("Reading library folder…") { librarySyncService.configureFolder(uri) }
+    }
+
+    fun syncLibraryNow() {
+        if (!librarySyncService.isConfigured) {
+            _librarySyncStatus.value = "Choose a sync file or folder first"
+            return
+        }
+        runLibrarySync("Syncing library…") { librarySyncService.syncNow() }
+    }
+
+    fun disconnectLibrarySync() {
+        librarySyncService.disconnect()
+        refreshLibrarySyncState()
+        _librarySyncStatus.value = "Library sync disconnected"
+    }
+
+    /** Reads the sync file when the device is unlocked. */
+    fun onDeviceUnlocked() {
+        if (!librarySyncService.isConfigured || _librarySyncBusy.value) return
         viewModelScope.launch {
-            _libraryTransferBusy.value = true
-            _libraryTransferStatus.value = "Importing library…"
-            runCatching { libraryTransferService.importLibrary(uri) }
-                .onSuccess { summary ->
-                    _libraryTransferStatus.value = if (summary.imported == 0) {
-                        "No new items to import — this library is already up to date" +
-                            " (${summary.itemCount} items)."
-                    } else {
-                        "Imported ${summary.imported} new items " +
-                            "(${summary.itemCount} total)."
+            runCatching { librarySyncService.syncNow() }
+                .onSuccess { outcome ->
+                    if (outcome is LibrarySyncOutcome.Applied) {
+                        _librarySyncStatus.value =
+                            "Restored ${outcome.itemCount} games from the sync file"
                     }
                 }
                 .onFailure {
-                    _libraryTransferStatus.value = it.message ?: "Import failed"
+                    _librarySyncStatus.value = it.message ?: "Library sync failed"
                 }
-            _libraryTransferBusy.value = false
+            refreshLibrarySyncState()
         }
+    }
+
+    private fun runLibrarySync(
+        message: String,
+        operation: suspend () -> LibrarySyncOutcome
+    ) {
+        if (_librarySyncBusy.value) return
+        viewModelScope.launch {
+            _librarySyncBusy.value = true
+            _librarySyncStatus.value = message
+            runCatching { operation() }
+                .onSuccess { outcome ->
+                    _librarySyncStatus.value = when (outcome) {
+                        is LibrarySyncOutcome.Applied ->
+                            "Restored ${outcome.itemCount} games from the sync file"
+                        is LibrarySyncOutcome.WroteLocal ->
+                            "Saved ${outcome.itemCount} games to the sync file"
+                        LibrarySyncOutcome.UpToDate -> "Library is already up to date"
+                        LibrarySyncOutcome.NotConfigured -> "Choose a sync file or folder first"
+                    }
+                }
+                .onFailure {
+                    _librarySyncStatus.value = it.message ?: "Library sync failed"
+                }
+            refreshLibrarySyncState()
+            _librarySyncBusy.value = false
+        }
+    }
+
+    private fun refreshLibrarySyncState() {
+        _librarySyncConfigured.value = librarySyncService.isConfigured
+        _librarySyncTarget.value = librarySyncService.targetLabel()
+        _librarySyncLastSyncedAt.value = librarySyncService.lastSyncedAt()
     }
 
     /**
@@ -626,103 +683,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /**
-     * Items the directional pad moves through: the games grid, or favorites followed by
-     * the complete app list on the Apps tab.
-     */
-    private fun currentTabItems(): List<GameItem> =
-        if (_currentTab.value == MainLibraryTab.GAMES) {
-            gamesList.value
-        } else {
-            favoriteApps.value + libraryApps.value
-        }
-
-    // Controller navigation
+    // Controller navigation: only the bumpers change screens.
     fun onControllerAction(action: ControllerAction): Boolean {
-        // Close open modals on Back (B)
+        // Don't change tabs behind an open sheet or dialog.
         if (_showAddModal.value || _showSettingsModal.value || _editingItem.value != null ||
             _contextMenuItem.value != null || _favoriteActionItem.value != null ||
             _showFavoritesEditor.value
         ) {
-            if (action == ControllerAction.BACK_B) {
-                if (_addModalSubView.value != AddModalSubView.OPTIONS && _showAddModal.value) {
-                    _addModalSubView.value = AddModalSubView.OPTIONS
-                    return true
-                }
-                closeAddModal()
-                closeSettingsModal()
-                closeEditCustomizer()
-                closeContextMenu()
-                closeFavoriteActions()
-                closeFavoritesEditor()
-                return true
-            }
             return false
         }
 
-        // Bumper navigation: Apps is the first tab, Games the second.
-        when (action) {
+        return when (action) {
             ControllerAction.PREV_TAB_LB -> {
                 setTab(MainLibraryTab.APPS)
-                return true
+                true
             }
             ControllerAction.NEXT_TAB_RB -> {
                 setTab(MainLibraryTab.GAMES)
-                return true
+                true
             }
-            ControllerAction.CONFIRM_A -> {
-                val currentList = currentTabItems()
-                val item = currentList.find { it.id == _focusedItemId.value } ?: currentList.firstOrNull()
-                item?.let { launchItem(it) }
-                return true
-            }
-            ControllerAction.CUSTOMIZE_X -> {
-                val currentList = currentTabItems()
-                val item = currentList.find { it.id == _focusedItemId.value } ?: currentList.firstOrNull()
-                item?.let { openContextMenu(it) }
-                return true
-            }
-            ControllerAction.MENU_START -> {
-                openSettingsModal()
-                return true
-            }
-            ControllerAction.QUICK_SELECT -> {
-                openAddModal()
-                return true
-            }
-            ControllerAction.RIGHT,
-            ControllerAction.LEFT,
-            ControllerAction.UP,
-            ControllerAction.DOWN -> {
-                val currentList = currentTabItems()
-                if (currentList.isEmpty()) return false
-                val isAppsTab = _currentTab.value == MainLibraryTab.APPS
-                val isIconsLayout = _favoritesLayout.value == FavoritesLayout.ICONS
-                // 2D grid navigation: Up/Down moves a full row (column count). Left/Right moves 1 item.
-                val step = when {
-                    isAppsTab && isIconsLayout -> maxOf(1, appsColumnCount)
-                    isAppsTab -> 1 // Text layout is a vertical single list on phones
-                    gamesRowMode -> 1 // Compact landscape horizontal row
-                    else -> maxOf(1, gamesColumnCount) // Poster grid
-                }
-                val hasFocus = currentList.any { it.id == _focusedItemId.value }
-                val curIndex = currentList.indexOfFirst { it.id == _focusedItemId.value }
-                    .let { if (it >= 0) it else 0 }
-                val nextIndex = if (!hasFocus) {
-                    0
-                } else when (action) {
-                    ControllerAction.RIGHT -> (curIndex + 1).coerceAtMost(currentList.lastIndex)
-                    ControllerAction.LEFT -> (curIndex - 1).coerceAtLeast(0)
-                    ControllerAction.DOWN ->
-                        (curIndex + step).coerceAtMost(currentList.lastIndex)
-                    ControllerAction.UP ->
-                        (curIndex - step).coerceAtLeast(0)
-                    else -> curIndex
-                }
-                _focusedItemId.value = currentList[nextIndex].id
-                return true
-            }
-            else -> return false
         }
     }
 

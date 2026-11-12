@@ -1,9 +1,13 @@
 package com.example
 
 import android.app.ActivityManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,6 +25,15 @@ import com.example.ui.viewmodel.LauncherViewModel
 class MainActivity : ComponentActivity() {
     private val viewModel: LauncherViewModel by viewModels()
 
+    /** Reads the library sync file again after the device is unlocked. */
+    private val userPresentReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_USER_PRESENT) {
+                viewModel.onDeviceUnlocked()
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Let the device wallpaper show behind the Apps view. The window background must
@@ -29,12 +42,29 @@ class MainActivity : ComponentActivity() {
         window.setBackgroundDrawableResource(android.R.color.transparent)
         enableEdgeToEdge()
 
+        registerUserPresentReceiver()
+
         setContent {
             val themeStyle by viewModel.themeStyle.collectAsStateWithLifecycle()
             MyApplicationTheme(style = themeStyle) {
                 NexusApp(viewModel = viewModel)
             }
         }
+    }
+
+    private fun registerUserPresentReceiver() {
+        val filter = IntentFilter(Intent.ACTION_USER_PRESENT)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(userPresentReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(userPresentReceiver, filter)
+        }
+    }
+
+    override fun onDestroy() {
+        runCatching { unregisterReceiver(userPresentReceiver) }
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -55,7 +85,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Dashboard Controller Navigation
+        // Controller bumpers switch between the Apps and Games screens.
         val action = viewModel.controllerManager.handleKeyEvent(event)
         if (action != null) {
             if (viewModel.onControllerAction(action)) {
@@ -63,16 +93,6 @@ class MainActivity : ComponentActivity() {
             }
         }
         return super.dispatchKeyEvent(event)
-    }
-
-    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
-        val action = viewModel.controllerManager.handleMotionEvent(event)
-        if (action != null) {
-            if (viewModel.onControllerAction(action)) {
-                return true
-            }
-        }
-        return super.dispatchGenericMotionEvent(event)
     }
 }
 

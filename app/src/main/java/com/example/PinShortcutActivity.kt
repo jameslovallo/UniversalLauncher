@@ -75,6 +75,7 @@ class PinShortcutActivity : ComponentActivity() {
                     favoriteOrder = existing.favoriteOrder,
                     isHidden = existing.isHidden,
                     isCustomized = existing.isCustomized,
+                    isPinned = true,
                     lastPlayedTimestamp = existing.lastPlayedTimestamp,
                     playCount = existing.playCount,
                     posterUrl = existing.posterUrl,

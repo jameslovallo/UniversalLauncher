@@ -1,9 +1,13 @@
 package com.example.ui.components
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,13 +30,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Opacity
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -90,8 +94,11 @@ fun SettingsModal(
     weatherZip: String,
     weatherInfo: WeatherInfo?,
     weatherError: String?,
-    libraryTransferBusy: Boolean,
-    libraryTransferStatus: String?,
+    librarySyncBusy: Boolean,
+    librarySyncStatus: String?,
+    librarySyncConfigured: Boolean,
+    librarySyncTarget: String?,
+    librarySyncLastSyncedAt: Long?,
     isDefaultLauncher: () -> Boolean,
     isHomeOverrideEnabled: () -> Boolean,
     onSelectFavoritesLayout: (FavoritesLayout) -> Unit,
@@ -106,8 +113,10 @@ fun SettingsModal(
     onWeatherModeChange: (WeatherLocationMode) -> Unit,
     onWeatherZipChange: (String) -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
-    onExportLibrary: (Uri) -> Unit,
-    onImportLibrary: (Uri) -> Unit,
+    onChooseSyncFile: (Uri) -> Unit,
+    onChooseSyncFolder: (Uri) -> Unit,
+    onSyncLibraryNow: () -> Unit,
+    onDisconnectLibrarySync: () -> Unit,
     onDismiss: () -> Unit
 ) {
     var apiKeyInput by remember { mutableStateOf(steamGridDbApiKey ?: "") }
@@ -140,16 +149,16 @@ fun SettingsModal(
         if (granted) onWeatherModeChange(WeatherLocationMode.DEVICE_LOCATION)
     }
 
-    val exportLibraryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json")
+    val syncFileLauncher = rememberLauncherForActivityResult(
+        OpenSyncDocument()
     ) { uri ->
-        if (uri != null) onExportLibrary(uri)
+        if (uri != null) onChooseSyncFile(uri)
     }
 
-    val importLibraryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
+    val syncFolderLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
-        if (uri != null) onImportLibrary(uri)
+        if (uri != null) onChooseSyncFolder(uri)
     }
 
     ModalBottomSheet(
@@ -428,41 +437,107 @@ fun SettingsModal(
             HorizontalDivider()
             Spacer(modifier = Modifier.height(18.dp))
 
-            // Share library between devices
+            // Library file sync between devices
             SectionHeader(
-                title = "Share Library",
-                description = "Export your GeForce NOW, Moonlight, and shortcut games to a " +
-                    "file, or import a library exported from another device"
+                title = "Library Sync",
+                description = "Keep your GeForce NOW, Moonlight, and shortcut games in sync " +
+                    "with a file or folder. Changes are saved automatically and restored " +
+                    "when this device launches or unlocks."
             )
             Spacer(modifier = Modifier.height(10.dp))
 
-            Button(
-                onClick = { exportLibraryLauncher.launch("nexus-library.json") },
-                enabled = !libraryTransferBusy,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().testTag("library_export_button")
-            ) {
-                Icon(imageVector = Icons.Default.Upload, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Export Library", fontWeight = FontWeight.Bold)
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = {
-                    importLibraryLauncher.launch(
-                        arrayOf("application/json", "text/plain", "application/octet-stream")
+            if (librarySyncConfigured) {
+                Text(
+                    text = "Syncing with ${librarySyncTarget ?: "your selected file"}",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.testTag("library_sync_target")
+                )
+                val lastSynced = librarySyncLastSyncedAt
+                    ?.takeIf { it > 0L }
+                    ?.let {
+                        java.text.DateFormat.getDateTimeInstance(
+                            java.text.DateFormat.SHORT,
+                            java.text.DateFormat.SHORT
+                        ).format(java.util.Date(it))
+                    }
+                if (lastSynced != null) {
+                    Text(
+                        text = "Last synced $lastSynced",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("library_sync_last_synced")
                     )
-                },
-                enabled = !libraryTransferBusy,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().testTag("library_import_button")
-            ) {
-                Icon(imageVector = Icons.Default.Download, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(if (libraryTransferBusy) "Working…" else "Import Library")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onSyncLibraryNow,
+                        enabled = !librarySyncBusy,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f).testTag("library_sync_now_button")
+                    ) {
+                        Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (librarySyncBusy) "Working…" else "Sync Now")
+                    }
+                    TextButton(
+                        onClick = onDisconnectLibrarySync,
+                        enabled = !librarySyncBusy,
+                        modifier = Modifier.testTag("library_sync_disconnect_button")
+                    ) {
+                        Text("Disconnect")
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { syncFileLauncher.launch(Unit) },
+                        enabled = !librarySyncBusy,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f).testTag("library_sync_pick_file_button")
+                    ) {
+                        Icon(imageVector = Icons.Default.Description, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Change File")
+                    }
+                    OutlinedButton(
+                        onClick = { syncFolderLauncher.launch(null) },
+                        enabled = !librarySyncBusy,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f).testTag("library_sync_pick_folder_button")
+                    ) {
+                        Icon(imageVector = Icons.Default.Folder, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Change Folder")
+                    }
+                }
+            } else {
+                Button(
+                    onClick = { syncFileLauncher.launch(Unit) },
+                    enabled = !librarySyncBusy,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("library_sync_pick_file_button")
+                ) {
+                    Icon(imageVector = Icons.Default.Description, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Choose Sync File", fontWeight = FontWeight.Bold)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { syncFolderLauncher.launch(null) },
+                    enabled = !librarySyncBusy,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("library_sync_pick_folder_button")
+                ) {
+                    Icon(imageVector = Icons.Default.Folder, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Choose Sync Folder")
+                }
             }
 
-            if (!libraryTransferStatus.isNullOrBlank()) {
+            if (!librarySyncStatus.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
@@ -473,10 +548,10 @@ fun SettingsModal(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = libraryTransferStatus,
+                        text = librarySyncStatus,
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("library_transfer_status")
+                        modifier = Modifier.testTag("library_sync_status")
                     )
                 }
             }
@@ -555,6 +630,30 @@ fun SettingsModal(
             }
         }
     }
+}
+
+/**
+ * Opens a document with read and write access so it can be used as a continuous sync
+ * target. `OpenDocument` on its own only grants read access.
+ */
+private class OpenSyncDocument : ActivityResultContract<Unit, Uri?>() {
+    override fun createIntent(context: Context, input: Unit): Intent =
+        Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf("application/json", "text/plain", "application/octet-stream")
+            )
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
+        }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? =
+        if (resultCode == Activity.RESULT_OK) intent?.data else null
 }
 
 @Composable

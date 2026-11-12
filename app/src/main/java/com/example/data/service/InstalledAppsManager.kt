@@ -1,6 +1,7 @@
 package com.example.data.service
 
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.LauncherApps
@@ -189,6 +190,30 @@ class InstalledAppsManager(private val context: Context) {
         }
     }
 
+    /**
+     * Launch a Moonlight game shortcut on a device where the shortcut is not pinned.
+     *
+     * Moonlight builds shortcut ids as `<PC UUID><App ID>` and its exported
+     * `ShortcutTrampoline` activity accepts the PC UUID and app id as string extras. The
+     * serialized pinned-shortcut intent cannot always be relied on after it has travelled
+     * through an export file, so rebuilding the intent from the id keeps imported
+     * shortcuts opening the game instead of Moonlight's home screen.
+     */
+    fun launchMoonlightShortcut(
+        packageName: String,
+        shortcutId: String,
+        appName: String? = null
+    ): Boolean {
+        val intent = buildMoonlightShortcutIntent(packageName, shortcutId, appName)
+            ?: return false
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     /** Open the device's clock app (used by the favorites clock). */
     fun openClock(): Boolean {
         return try {
@@ -348,3 +373,44 @@ class InstalledAppsManager(private val context: Context) {
         }
     }
 }
+
+/**
+ * Rebuilds the intent Moonlight's `ShortcutTrampoline` needs to launch one PC game.
+ *
+ * Moonlight builds shortcut ids as `<PC UUID><App ID>` and puts the same values on the
+ * pinned shortcut's intent. Only the id travels through the sync file, so the extras are
+ * rebuilt here. Returns null when the id is not a Moonlight game shortcut (an id for a PC
+ * itself is just the bare UUID, and that opens Moonlight's app list).
+ */
+internal fun buildMoonlightShortcutIntent(
+    packageName: String,
+    shortcutId: String,
+    appName: String? = null
+): Intent? {
+    if (shortcutId.length <= UUID_LENGTH) return null
+    val uuid = shortcutId.substring(0, UUID_LENGTH)
+    if (!UUID_PATTERN.matches(uuid)) return null
+    val appId = shortcutId.substring(UUID_LENGTH)
+    if (appId.toIntOrNull() == null) return null
+
+    return Intent(Intent.ACTION_DEFAULT).apply {
+        component = ComponentName(packageName, MOONLIGHT_TRAMPOLINE)
+        putExtra("UUID", uuid)
+        // The app name is optional while AppId is present, but Moonlight keeps it in the
+        // game session for the title overlay and status notifications.
+        appName?.takeIf { it.isNotBlank() }?.let { putExtra("AppName", it) }
+        putExtra("AppId", appId)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+}
+
+/** Moonlight launches pinned games through this activity. */
+private const val MOONLIGHT_TRAMPOLINE = "com.limelight.ShortcutTrampoline"
+
+private const val UUID_LENGTH = 36
+
+private val UUID_PATTERN = Regex(
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" +
+        "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+

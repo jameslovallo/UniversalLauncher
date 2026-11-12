@@ -7,6 +7,7 @@ import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.service.GeForceNowService
 import com.example.data.service.InstalledAppsManager
+import com.example.data.service.LibrarySyncCodec
 import com.example.data.service.PinnedShortcutImporter
 import com.example.data.service.SteamGridDbService
 import kotlinx.coroutines.async
@@ -27,6 +28,9 @@ class GameRepository(
     val recentGames: Flow<List<GameItem>> = gameDao.getRecentGames()
     val hiddenGames: Flow<List<GameItem>> = gameDao.getHiddenGames()
 
+    /** Every row, including hidden and tombstoned entries, for library-file sync. */
+    val allItemsIncludingDeleted: Flow<List<GameItem>> = gameDao.getAllItemsFlow()
+
     // Serialises poster matching so startup sync and user actions cannot fetch the same
     // missing artwork more than once at a time.
     private val posterMatchMutex = Mutex()
@@ -46,8 +50,13 @@ class GameRepository(
     }
 
     /**
-     * Drops pinned-shortcut tiles whose system shortcut no longer exists. Skipped when the
-     * pinned list cannot be read (for example while another launcher is the default one).
+     * Drops pinned-shortcut tiles whose system shortcut no longer exists.
+     *
+     * Only rows pinned on this device are removed. Shortcuts restored from a sync file
+     * have `isPinned = false` and are left alone, because they were pinned on another
+     * device. Existing rows from older builds are promoted to `isPinned = true` while
+     * their shortcut is still live. Skipped when the pinned list cannot be read (for
+     * example while another launcher is the default one).
      */
     suspend fun removeStalePinnedShortcuts() {
         val pinned = installedAppsManager.getPinnedShortcutKeys() ?: return
@@ -57,8 +66,10 @@ class GameRepository(
                 val key = item.packageName?.let { pkg ->
                     item.activityName?.let { shortcutId -> pkg to shortcutId }
                 }
-                if (key == null || key !in pinned) {
-                    gameDao.deleteGameById(item.id)
+                val isLive = key != null && key in pinned
+                when {
+                    isLive && !item.isPinned -> gameDao.setPinned(item.id, true)
+                    !isLive && item.isPinned -> gameDao.deleteGameById(item.id)
                 }
             }
     }
@@ -268,6 +279,69 @@ class GameRepository(
 
     /** Snapshot of every row (including hidden and tombstoned entries) for cloud sync. */
     suspend fun getAllItemsSnapshot(): List<GameItem> = gameDao.getAllItemsNow()
+
+    /**
+     * Rows that travel between devices in the library file: cloud games, Moonlight games
+     * and game shortcuts. Installed apps stay local because they depend on what is
+     * installed on each device. Tombstones are included so deletions propagate.
+     */
+    suspend fun getSyncableItemsSnapshot(): List<GameItem> =
+        gameDao.getAllItemsNow().filter(::isSyncableItem)
+
+    /**
+     * Replaces the local shareable library with [remoteItems] from the sync file.
+     *
+     * Device-specific state is preserved: locally pinned shortcuts stay pinned, local
+     * artwork files survive when the backup has no artwork for that item, and play stats
+     * never move backwards. Installed apps and other non-syncable rows are untouched.
+     */
+    suspend fun replaceSyncedLibrary(remoteItems: List<GameItem>) {
+        val remoteById = remoteItems.associateBy { it.id }
+        val local = gameDao.getAllItemsNow()
+        val localById = local.associateBy { it.id }
+
+        // The file is authoritative: rows it no longer contains are removed locally.
+        local.filter { isSyncableItem(it) && it.id !in remoteById }
+            .forEach { gameDao.deleteGameById(it.id) }
+
+        remoteItems.forEach { remote ->
+            val existing = localById[remote.id]
+            gameDao.insertGame(
+                remote.copy(
+                    isPinned = existing?.isPinned ?: false,
+                    posterUrl = remote.posterUrl
+                        ?: existing?.posterUrl?.takeIf { it.startsWith("file:") },
+                    heroBannerUrl = remote.heroBannerUrl
+                        ?: existing?.heroBannerUrl?.takeIf { it.startsWith("file:") },
+                    iconUrl = remote.iconUrl
+                        ?: existing?.iconUrl?.takeIf { it.startsWith("file:") },
+                    lastPlayedTimestamp = maxOf(
+                        remote.lastPlayedTimestamp,
+                        existing?.lastPlayedTimestamp ?: 0L
+                    ),
+                    playCount = maxOf(remote.playCount, existing?.playCount ?: 0)
+                )
+            )
+        }
+    }
+
+    /**
+     * Adds live items from an older export file without removing or overwriting local
+     * rows. Used once when such a file is adopted, before it is rewritten in the current
+     * format.
+     */
+    suspend fun mergeSyncedLibrary(remoteItems: List<GameItem>) {
+        val knownIds = gameDao.getAllItemsNow().mapTo(HashSet()) { it.id }
+        remoteItems
+            .filter { !it.isDeleted && isSyncableItem(it) }
+            .forEach { remote ->
+                if (knownIds.add(remote.id)) {
+                    gameDao.insertGame(remote.copy(isPinned = false))
+                }
+            }
+    }
+
+    private fun isSyncableItem(item: GameItem): Boolean = LibrarySyncCodec.isSyncable(item)
 
     companion object {
         fun create(context: Context): GameRepository {

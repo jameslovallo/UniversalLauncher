@@ -74,6 +74,9 @@ object PinnedShortcutImporter {
             activityName = shortcut.id,
             launchUrl = launchIntent,
             iconUrl = saveShortcutIcon(context, publisher, shortcut),
+            // Marks the row as created by a pin request on this device. Imported copies
+            // carry isPinned = false so cleanup and launch logic can tell them apart.
+            isPinned = true,
             genre = if (isGame) "Game Shortcut" else "App Shortcut",
             publisher = appLabel,
             description = "Pinned shortcut from $appLabel",
