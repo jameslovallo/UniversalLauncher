@@ -68,10 +68,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -108,6 +112,7 @@ import com.example.ui.theme.ThemeStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun DashboardScreen(
     viewModel: LauncherViewModel,
@@ -218,10 +223,10 @@ fun DashboardScreen(
 
     // With no controller, the Games tab starts with nothing focused. A connected
     // controller focuses the first game so an active element is visibly highlighted.
-    LaunchedEffect(controllerState.isConnected, currentTab, gamesList, focusedItemId) {
+    LaunchedEffect(controllerState.isConnected, currentTab) {
         if (currentTab == MainLibraryTab.GAMES) {
             if (controllerState.isConnected) {
-                if (focusedItemId == null) {
+                if (focusedItemId == null || gamesList.none { it.id == focusedItemId }) {
                     gamesList.firstOrNull()?.let { viewModel.setFocusedItem(it.id) }
                 }
             } else if (focusedItemId != null && gamesList.any { it.id == focusedItemId }) {
@@ -315,98 +320,133 @@ fun DashboardScreen(
             ) { page ->
                 if (page == 1) {
                     // Games View: Steam poster aspect ratio (2:3)
-                    if (gamesDisplay.isEmpty()) {
-                        EmptyLibraryState(
-                            isGamesTab = true,
-                            searchQuery = searchQuery,
-                            onAddClicked = { viewModel.openAddModal() }
-                        )
-                    } else {
-                        GamesPosterGrid(
-                            games = gamesDisplay,
-                            focusedItemId = focusedItemId,
-                            showFocusEffects = controllerState.isConnected,
-                            gridState = gridState,
-                            rowState = gamesRowState,
-                            compactLandscape = isCompactLandscape,
-                            onGameClick = { game ->
-                                viewModel.setFocusedItem(game.id)
-                                viewModel.launchItem(game)
-                            },
-                            onGameLongClick = { game ->
-                                viewModel.openContextMenu(game)
-                            },
-                            onGameFocus = { game ->
-                                viewModel.setFocusedItem(game.id)
+                    // Confine directional focus navigation within the Games view so D-pad /
+                    // left stick left cannot escape to page 0 (Apps view).
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .focusGroup()
+                            .focusProperties {
+                                exit = { direction ->
+                                    if (direction == FocusDirection.Left || direction == FocusDirection.Previous) {
+                                        FocusRequester.Cancel
+                                    } else {
+                                        FocusRequester.Default
+                                    }
+                                }
                             }
-                        )
+                    ) {
+                        if (gamesDisplay.isEmpty()) {
+                            EmptyLibraryState(
+                                isGamesTab = true,
+                                searchQuery = searchQuery,
+                                onAddClicked = { viewModel.openAddModal() }
+                            )
+                        } else {
+                            GamesPosterGrid(
+                                games = gamesDisplay,
+                                focusedItemId = focusedItemId,
+                                showFocusEffects = controllerState.isConnected,
+                                isGamesTabOpen = currentTab == MainLibraryTab.GAMES && pagerState.currentPage == 1,
+                                gridState = gridState,
+                                rowState = gamesRowState,
+                                compactLandscape = isCompactLandscape,
+                                onGameClick = { game ->
+                                    viewModel.setFocusedItem(game.id)
+                                    viewModel.launchItem(game)
+                                },
+                                onGameLongClick = { game ->
+                                    viewModel.openContextMenu(game)
+                                },
+                                onGameFocus = { game ->
+                                    viewModel.setFocusedItem(game.id)
+                                }
+                            )
+                        }
                     }
                 } else {
                     // Apps View: a full-height favorites home. Swiping up reveals the
                     // complete app list, which excludes favorites and games.
-                    VerticalPager(
-                        state = appsPagerState,
-                        flingBehavior = appsPagerFling,
+                    // Confine directional focus navigation so D-pad / stick right cannot
+                    // escape to page 1 (Games view).
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .testTag("apps_vertical_pager")
-                    ) { page ->
-                        if (page == 0) {
-                            FavoritesHome(
-                                favorites = favoriteApps,
-                                focusedItemId = focusedItemId,
-                                layout = favoritesLayout,
-                                showFocusEffects = controllerState.isConnected,
-                                weatherEnabled = weatherEnabled,
-                                weather = weatherInfo,
-                                onLaunchFavorite = { app ->
-                                    viewModel.setFocusedItem(app.id)
-                                    viewModel.launchItem(app)
-                                },
-                                onLongPressFavorite = { app ->
-                                    viewModel.openFavoriteActions(app)
-                                },
-                                onOpenClock = { viewModel.openClockApp() },
-                                onOpenCalendar = { viewModel.openCalendarApp() },
-                                onPullDown = { viewModel.expandNotificationShade() },
-                                onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
-                            )
-                        } else {
-                            if (libraryDisplay.isEmpty()) {
-                                EmptyAppDrawerState(hasFavorites = favoriteApps.isNotEmpty())
-                            } else {
-                                AppsAlphabeticalList(
-                                    entries = appListEntries,
+                            .focusGroup()
+                            .focusProperties {
+                                exit = { direction ->
+                                    if (direction == FocusDirection.Right || direction == FocusDirection.Next) {
+                                        FocusRequester.Cancel
+                                    } else {
+                                        FocusRequester.Default
+                                    }
+                                }
+                            }
+                    ) {
+                        VerticalPager(
+                            state = appsPagerState,
+                            flingBehavior = appsPagerFling,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("apps_vertical_pager")
+                        ) { page ->
+                            if (page == 0) {
+                                FavoritesHome(
+                                    favorites = favoriteApps,
                                     focusedItemId = focusedItemId,
                                     layout = favoritesLayout,
                                     showFocusEffects = controllerState.isConnected,
-                                    listState = appsListState,
-                                    gridState = appsGridState,
-                                    onAppClick = { app ->
+                                    weatherEnabled = weatherEnabled,
+                                    weather = weatherInfo,
+                                    onLaunchFavorite = { app ->
                                         viewModel.setFocusedItem(app.id)
                                         viewModel.launchItem(app)
                                     },
-                                    onAppLongClick = { app ->
-                                        viewModel.openContextMenu(app)
+                                    onLongPressFavorite = { app ->
+                                        viewModel.openFavoriteActions(app)
                                     },
-                                    onAppFocus = { app ->
-                                        viewModel.setFocusedItem(app.id)
-                                    },
-                                    onLetterSelected = { letter ->
-                                        val index = appListEntries.indexOfFirst {
-                                            it is AppListEntry.Letter && it.letter == letter
-                                        }
-                                        if (index >= 0) {
-                                            scope.launch {
-                                                if (favoritesLayout == FavoritesLayout.ICONS) {
-                                                    appsGridState.scrollToItem(index)
-                                                } else {
-                                                    appsListState.scrollToItem(index)
+                                    onOpenClock = { viewModel.openClockApp() },
+                                    onOpenCalendar = { viewModel.openCalendarApp() },
+                                    onPullDown = { viewModel.expandNotificationShade() },
+                                    onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
+                                )
+                            } else {
+                                if (libraryDisplay.isEmpty()) {
+                                    EmptyAppDrawerState(hasFavorites = favoriteApps.isNotEmpty())
+                                } else {
+                                    AppsAlphabeticalList(
+                                        entries = appListEntries,
+                                        focusedItemId = focusedItemId,
+                                        layout = favoritesLayout,
+                                        showFocusEffects = controllerState.isConnected,
+                                        listState = appsListState,
+                                        gridState = appsGridState,
+                                        onAppClick = { app ->
+                                            viewModel.setFocusedItem(app.id)
+                                            viewModel.launchItem(app)
+                                        },
+                                        onAppLongClick = { app ->
+                                            viewModel.openContextMenu(app)
+                                        },
+                                        onAppFocus = { app ->
+                                            viewModel.setFocusedItem(app.id)
+                                        },
+                                        onLetterSelected = { letter ->
+                                            val index = appListEntries.indexOfFirst {
+                                                it is AppListEntry.Letter && it.letter == letter
+                                            }
+                                            if (index >= 0) {
+                                                scope.launch {
+                                                    if (favoritesLayout == FavoritesLayout.ICONS) {
+                                                        appsGridState.scrollToItem(index)
+                                                    } else {
+                                                        appsListState.scrollToItem(index)
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                )
+                                    )
+                                }
                             }
                         }
                     }
@@ -527,11 +567,13 @@ fun DashboardScreen(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun GamesPosterGrid(
     games: List<GameItem>,
     focusedItemId: String?,
     showFocusEffects: Boolean,
+    isGamesTabOpen: Boolean,
     gridState: LazyGridState,
     rowState: LazyListState,
     compactLandscape: Boolean,
@@ -541,9 +583,20 @@ private fun GamesPosterGrid(
 ) {
     val firstItemFocusRequester = remember { FocusRequester() }
 
-    LaunchedEffect(showFocusEffects) {
-        if (showFocusEffects && games.isNotEmpty()) {
+    // When the Games grid opens, focus the first game so an active element is visibly
+    // highlighted and controller navigation starts from the top-left item.
+    LaunchedEffect(isGamesTabOpen, games.isNotEmpty()) {
+        if (isGamesTabOpen && games.isNotEmpty()) {
+            val firstGame = games.first()
+            onGameFocus(firstGame)
+            if (compactLandscape) {
+                runCatching { rowState.scrollToItem(0) }
+            } else {
+                runCatching { gridState.scrollToItem(0) }
+            }
             delay(50)
+            runCatching { firstItemFocusRequester.requestFocus() }
+            delay(100)
             runCatching { firstItemFocusRequester.requestFocus() }
         }
     }
@@ -585,6 +638,7 @@ private fun GamesPosterGrid(
                     onFocus = { onGameFocus(game) },
                     modifier = Modifier
                         .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                        .then(if (index == 0) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
                         .width(if (isFocused) 168.dp else 112.dp)
                 )
             }
@@ -618,13 +672,16 @@ private fun GamesPosterGrid(
                 .testTag("games_poster_grid")
         ) {
             itemsIndexed(games, key = { _, game -> game.id }) { index, game ->
+                val isLeftmost = index % columnCount == 0
                 SteamGamePosterCard(
                     game = game,
                     isFocused = game.id == focusedItemId && showFocusEffects,
                     onClick = { onGameClick(game) },
                     onLongClick = { onGameLongClick(game) },
                     onFocus = { onGameFocus(game) },
-                    modifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
+                    modifier = Modifier
+                        .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                        .then(if (isLeftmost) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
                 )
             }
         }

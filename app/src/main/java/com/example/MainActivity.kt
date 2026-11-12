@@ -29,11 +29,11 @@ import com.example.ui.viewmodel.LauncherViewModel
 class MainActivity : ComponentActivity() {
     private val viewModel: LauncherViewModel by viewModels()
 
-    private val bHoldHandler = Handler(Looper.getMainLooper())
-    private var isHoldingB = false
-    private var bHoldTriggered = false
-    private val bHoldRunnable = Runnable {
-        bHoldTriggered = true
+    private val aHoldHandler = Handler(Looper.getMainLooper())
+    private var isHoldingA = false
+    private var aHoldTriggered = false
+    private val aHoldRunnable = Runnable {
+        aHoldTriggered = true
         window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         viewModel.openContextMenuForFocusedItem()
     }
@@ -77,13 +77,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
-        bHoldHandler.removeCallbacks(bHoldRunnable)
-        isHoldingB = false
-        bHoldTriggered = false
+        aHoldHandler.removeCallbacks(aHoldRunnable)
+        isHoldingA = false
+        aHoldTriggered = false
     }
 
     override fun onDestroy() {
-        bHoldHandler.removeCallbacks(bHoldRunnable)
+        aHoldHandler.removeCallbacks(aHoldRunnable)
         runCatching { unregisterReceiver(userPresentReceiver) }
         super.onDestroy()
     }
@@ -113,42 +113,18 @@ class MainActivity : ComponentActivity() {
                 return true
             }
         }
-        // Map controller Button A to DPAD_CENTER so Compose's clickable handles it as a click
-        if (event.keyCode == KeyEvent.KEYCODE_BUTTON_A) {
-            val dpadCenterEvent = KeyEvent(
-                event.downTime,
-                event.eventTime,
-                event.action,
-                KeyEvent.KEYCODE_DPAD_CENTER,
-                event.repeatCount,
-                event.metaState,
-                event.deviceId,
-                event.scanCode,
-                event.flags,
-                event.source,
-            )
-            if (super.dispatchKeyEvent(dpadCenterEvent)) {
-                return true
-            }
-        }
 
-        // Controller Button B handling:
-        // - Holding B opens the currently focused app or game's context menu.
-        // - When any context menu/modal is open, pressing B acts exactly like the native Android Back gesture.
-        if (event.keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+        // Controller Button A handling:
+        // - Holding A opens the currently focused app or game's context menu.
+        // - Short pressing A acts as click (mapped to DPAD_CENTER).
+        // - When a menu or modal is open, pressing A clicks the selected option immediately.
+        if (event.keyCode == KeyEvent.KEYCODE_BUTTON_A) {
             if (viewModel.isAnyMenuOrModalOpen()) {
-                // If a menu was just opened by holding B, ignore the subsequent ACTION_UP from that hold
-                if (bHoldTriggered && (event.action == KeyEvent.ACTION_UP)) {
-                    bHoldTriggered = false
-                    isHoldingB = false
-                    return true
-                }
-                // When open, pressing B acts exactly like native Back
-                val backEvent = KeyEvent(
+                val dpadCenterEvent = KeyEvent(
                     event.downTime,
                     event.eventTime,
                     event.action,
-                    KeyEvent.KEYCODE_BACK,
+                    KeyEvent.KEYCODE_DPAD_CENTER,
                     event.repeatCount,
                     event.metaState,
                     event.deviceId,
@@ -156,61 +132,94 @@ class MainActivity : ComponentActivity() {
                     event.flags,
                     event.source,
                 )
-                if (super.dispatchKeyEvent(backEvent)) {
-                    return true
-                }
-                if (event.action == KeyEvent.ACTION_UP) {
-                    onBackPressedDispatcher.onBackPressed()
+                if (super.dispatchKeyEvent(dpadCenterEvent)) {
                     return true
                 }
                 return true
-            } else {
-                // When no context menu or modal is open:
-                when (event.action) {
-                    KeyEvent.ACTION_DOWN -> {
-                        if (event.repeatCount == 0) {
-                            isHoldingB = true
-                            bHoldTriggered = false
-                            bHoldHandler.removeCallbacks(bHoldRunnable)
-                            bHoldHandler.postDelayed(
-                                bHoldRunnable,
-                                ViewConfiguration.getLongPressTimeout().toLong(),
-                            )
-                        }
-                        return true
+            }
+
+            // When no menu or modal is open:
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    if (event.repeatCount == 0) {
+                        isHoldingA = true
+                        aHoldTriggered = false
+                        aHoldHandler.removeCallbacks(aHoldRunnable)
+                        aHoldHandler.postDelayed(
+                            aHoldRunnable,
+                            ViewConfiguration.getLongPressTimeout().toLong(),
+                        )
                     }
-                    KeyEvent.ACTION_UP -> {
-                        bHoldHandler.removeCallbacks(bHoldRunnable)
-                        if (isHoldingB) {
-                            isHoldingB = false
-                            if (bHoldTriggered) {
-                                bHoldTriggered = false
-                                return true
-                            } else {
-                                // Short tap when no menu open: native back behavior
-                                val backEvent = KeyEvent(
-                                    event.downTime,
-                                    event.eventTime,
-                                    event.action,
-                                    KeyEvent.KEYCODE_BACK,
-                                    event.repeatCount,
-                                    event.metaState,
-                                    event.deviceId,
-                                    event.scanCode,
-                                    event.flags,
-                                    event.source,
-                                )
-                                if (super.dispatchKeyEvent(backEvent)) {
-                                    return true
-                                }
-                                onBackPressedDispatcher.onBackPressed()
-                                return true
-                            }
+                    return true
+                }
+                KeyEvent.ACTION_UP -> {
+                    aHoldHandler.removeCallbacks(aHoldRunnable)
+                    if (isHoldingA) {
+                        isHoldingA = false
+                        if (aHoldTriggered) {
+                            aHoldTriggered = false
+                            return true
                         }
+                        // Short tap: dispatch click to focused item
+                        val downEvent = KeyEvent(
+                            event.downTime,
+                            event.eventTime,
+                            KeyEvent.ACTION_DOWN,
+                            KeyEvent.KEYCODE_DPAD_CENTER,
+                            0,
+                            event.metaState,
+                            event.deviceId,
+                            event.scanCode,
+                            event.flags,
+                            event.source,
+                        )
+                        val upEvent = KeyEvent(
+                            event.downTime,
+                            event.eventTime,
+                            KeyEvent.ACTION_UP,
+                            KeyEvent.KEYCODE_DPAD_CENTER,
+                            0,
+                            event.metaState,
+                            event.deviceId,
+                            event.scanCode,
+                            event.flags,
+                            event.source,
+                        )
+                        super.dispatchKeyEvent(downEvent)
+                        super.dispatchKeyEvent(upEvent)
+                        return true
                     }
                 }
             }
+            return true
         }
+
+        // Controller Button B handling:
+        // - B always acts exactly like the native Android Back gesture.
+        // - Holding B does nothing special.
+        if (event.keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+            val backEvent = KeyEvent(
+                event.downTime,
+                event.eventTime,
+                event.action,
+                KeyEvent.KEYCODE_BACK,
+                event.repeatCount,
+                event.metaState,
+                event.deviceId,
+                event.scanCode,
+                event.flags,
+                event.source,
+            )
+            if (super.dispatchKeyEvent(backEvent)) {
+                return true
+            }
+            if (event.action == KeyEvent.ACTION_UP) {
+                onBackPressedDispatcher.onBackPressed()
+                return true
+            }
+            return true
+        }
+
         return super.dispatchKeyEvent(event)
     }
 }
