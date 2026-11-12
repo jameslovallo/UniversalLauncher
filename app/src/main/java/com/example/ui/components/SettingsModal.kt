@@ -38,6 +38,13 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Opacity
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.displayCutoutPadding
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -47,14 +54,13 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -113,7 +119,6 @@ fun SettingsModal(
     onWeatherModeChange: (WeatherLocationMode) -> Unit,
     onWeatherZipChange: (String) -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
-    onChooseSyncFile: (Uri) -> Unit,
     onChooseSyncFolder: (Uri) -> Unit,
     onSyncLibraryNow: () -> Unit,
     onDisconnectLibrarySync: () -> Unit,
@@ -121,10 +126,9 @@ fun SettingsModal(
 ) {
     var apiKeyInput by remember { mutableStateOf(steamGridDbApiKey ?: "") }
     var zipInput by remember(weatherZip) { mutableStateOf(weatherZip) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
 
-    // These settings depend on external system state, so re-read them whenever the sheet
+    // These settings depend on external system state, so re-read them whenever the screen
     // comes back to the foreground (for example after the accessibility settings screen).
     var isDefault by remember { mutableStateOf(isDefaultLauncher()) }
     var overrideEnabled by remember { mutableStateOf(isHomeOverrideEnabled()) }
@@ -149,55 +153,68 @@ fun SettingsModal(
         if (granted) onWeatherModeChange(WeatherLocationMode.DEVICE_LOCATION)
     }
 
-    val syncFileLauncher = rememberLauncherForActivityResult(
-        OpenSyncDocument()
-    ) { uri ->
-        if (uri != null) onChooseSyncFile(uri)
-    }
-
     val syncFolderLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) onChooseSyncFolder(uri)
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    BackHandler(onBack = onDismiss)
+
+    Surface(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .displayCutoutPadding()
+            .navigationBarsPadding(),
+        color = MaterialTheme.colorScheme.background,
+        contentColor = MaterialTheme.colorScheme.onBackground
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp)
-                .padding(bottom = 24.dp)
-                .verticalScroll(rememberScrollState())
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 760.dp)
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 32.dp)
             ) {
-                Text(
-                    text = "Settings",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                IconButton(onClick = onDismiss, modifier = Modifier.testTag("settings_close_button")) {
-                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
+                // Header Row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("settings_close_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "Settings",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
                 }
-            }
 
-            Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
             // Favorites Home Layout
             SectionHeader(
-                title = "Favorites Layout",
-                description = "Choose how the clock, date, and favorite apps appear on the home view"
+                title = "Favorites Layout"
             )
             Spacer(modifier = Modifier.height(10.dp))
             Row(
@@ -218,10 +235,9 @@ fun SettingsModal(
             HorizontalDivider()
             Spacer(modifier = Modifier.height(18.dp))
 
-            // Theme
+            // Color
             SectionHeader(
-                title = "Theme",
-                description = "Pick a Material palette, or let the wallpaper choose the colors"
+                title = "Color"
             )
             Spacer(modifier = Modifier.height(10.dp))
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -259,8 +275,7 @@ fun SettingsModal(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 SectionHeader(
-                    title = "Apps Background Opacity",
-                    description = "How strongly the wallpaper is dimmed behind the apps screen"
+                    title = "Apps Background Opacity"
                 )
             }
             Spacer(modifier = Modifier.height(4.dp))
@@ -437,18 +452,18 @@ fun SettingsModal(
             HorizontalDivider()
             Spacer(modifier = Modifier.height(18.dp))
 
-            // Library file sync between devices
+            // Library folder sync between devices
             SectionHeader(
                 title = "Library Sync",
                 description = "Keep your GeForce NOW, Moonlight, and shortcut games in sync " +
-                    "with a file or folder. Changes are saved automatically and restored " +
-                    "when this device launches or unlocks."
+                    "with a folder on your device or cloud drive. All assigned game posters " +
+                    "and library metadata are exported automatically."
             )
             Spacer(modifier = Modifier.height(10.dp))
 
             if (librarySyncConfigured) {
                 Text(
-                    text = "Syncing with ${librarySyncTarget ?: "your selected file"}",
+                    text = "Syncing with ${librarySyncTarget ?: "your selected folder"}",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
@@ -491,40 +506,6 @@ fun SettingsModal(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { syncFileLauncher.launch(Unit) },
-                        enabled = !librarySyncBusy,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f).testTag("library_sync_pick_file_button")
-                    ) {
-                        Icon(imageVector = Icons.Default.Description, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Change File")
-                    }
-                    OutlinedButton(
-                        onClick = { syncFolderLauncher.launch(null) },
-                        enabled = !librarySyncBusy,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f).testTag("library_sync_pick_folder_button")
-                    ) {
-                        Icon(imageVector = Icons.Default.Folder, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Change Folder")
-                    }
-                }
-            } else {
-                Button(
-                    onClick = { syncFileLauncher.launch(Unit) },
-                    enabled = !librarySyncBusy,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("library_sync_pick_file_button")
-                ) {
-                    Icon(imageVector = Icons.Default.Description, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Choose Sync File", fontWeight = FontWeight.Bold)
-                }
-                Spacer(modifier = Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { syncFolderLauncher.launch(null) },
                     enabled = !librarySyncBusy,
@@ -532,8 +513,19 @@ fun SettingsModal(
                     modifier = Modifier.fillMaxWidth().testTag("library_sync_pick_folder_button")
                 ) {
                     Icon(imageVector = Icons.Default.Folder, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Change Folder")
+                }
+            } else {
+                Button(
+                    onClick = { syncFolderLauncher.launch(null) },
+                    enabled = !librarySyncBusy,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("library_sync_pick_folder_button")
+                ) {
+                    Icon(imageVector = Icons.Default.Folder, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Choose Sync Folder")
+                    Text("Choose Sync Folder", fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -631,35 +623,14 @@ fun SettingsModal(
         }
     }
 }
-
-/**
- * Opens a document with read and write access so it can be used as a continuous sync
- * target. `OpenDocument` on its own only grants read access.
- */
-private class OpenSyncDocument : ActivityResultContract<Unit, Uri?>() {
-    override fun createIntent(context: Context, input: Unit): Intent =
-        Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/json"
-            putExtra(
-                Intent.EXTRA_MIME_TYPES,
-                arrayOf("application/json", "text/plain", "application/octet-stream")
-            )
-            addFlags(
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-            )
-        }
-
-    override fun parseResult(resultCode: Int, intent: Intent?): Uri? =
-        if (resultCode == Activity.RESULT_OK) intent?.data else null
 }
+
+
 
 @Composable
 private fun SectionHeader(
     title: String,
-    description: String
+    description: String? = null
 ) {
     Column {
         Text(
@@ -668,11 +639,13 @@ private fun SectionHeader(
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary
         )
-        Text(
-            text = description,
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        if (!description.isNullOrBlank()) {
+            Text(
+                text = description,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -793,12 +766,6 @@ private fun ThemeStyleCard(
                     color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
                     else MaterialTheme.colorScheme.onSurface
                 )
-                Text(
-                    text = style.description,
-                    fontSize = 10.sp,
-                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
             if (isSelected) {
                 Icon(
@@ -835,10 +802,11 @@ private fun FavoritesLayoutCard(
             )
             .testTag("favorites_layout_${layout.name.lowercase()}")
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 14.dp, horizontal = 12.dp)
+                .padding(vertical = 12.dp, horizontal = 12.dp),
+            contentAlignment = Alignment.Center
         ) {
             Text(
                 text = layout.label,
@@ -846,13 +814,6 @@ private fun FavoritesLayoutCard(
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
                 color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
                 else MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = layout.description,
-                fontSize = 11.sp,
-                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
-                else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

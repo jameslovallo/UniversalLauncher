@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -86,7 +86,7 @@ fun TopNavBar(
             )
         }
 
-        // Right: Settings Gear Icon button (same size as add button)
+        // Right: Settings Tune Icon button (balanced minimalist stroke aesthetic)
         IconButton(
             onClick = onOpenSettings,
             modifier = Modifier
@@ -94,7 +94,7 @@ fun TopNavBar(
                 .testTag("topbar_settings_button")
         ) {
             Icon(
-                imageVector = Icons.Default.Settings,
+                imageVector = Icons.Default.Tune,
                 contentDescription = "Open Settings",
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(24.dp)

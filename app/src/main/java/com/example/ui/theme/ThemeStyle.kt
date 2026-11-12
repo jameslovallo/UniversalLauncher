@@ -1,11 +1,10 @@
 package com.example.ui.theme
 
 /**
- * How the app derives its Material color scheme.
+ * Material You / Monet color palettes matching those offered on Google Pixel devices.
  *
- * [WALLPAPER] follows the system wallpaper (Material You on Android 12+, or a scheme
- * derived from the wallpaper color on older devices). Every other entry is a predefined
- * Material palette that stays the same regardless of the wallpaper.
+ * [WALLPAPER] dynamically derives colors from the system wallpaper (Android 12+ Monet).
+ * The remaining styles represent Pixel's official "Basic colors" tonal palettes.
  */
 enum class ThemeStyle(
     val label: String,
@@ -13,23 +12,29 @@ enum class ThemeStyle(
     /** Seed color used to build the palette, or null for the wallpaper-derived style. */
     val seedColor: Long?
 ) {
-    WALLPAPER("Wallpaper", "Match your wallpaper", null),
-    MONOCHROME("Monochrome", "Black, white and grey", 0xFF8E8E93),
-    INDIGO("Indigo", "Material default", 0xFF6750A4),
-    BLUE("Blue", "Cool coastal blue", 0xFF0B57D0),
-    TEAL("Teal", "Balanced teal", 0xFF006A6A),
-    GREEN("Green", "Fresh green", 0xFF386A20),
-    AMBER("Amber", "Warm amber", 0xFF8B5000),
-    ROSE("Rose", "Soft rose", 0xFF984061);
+    WALLPAPER("Wallpaper", "Dynamic colors from wallpaper", null),
+    MONOCHROME("Monochrome", "Pixel neutral greyscale", 0xFF76777A),
+    OCEAN("Ocean Blue", "Pixel ocean blue", 0xFF3871E0),
+    FOREST("Forest Green", "Pixel fresh forest", 0xFF2E7D52),
+    LAVENDER("Lavender", "Pixel soft violet", 0xFF7C5295),
+    CORAL("Coral", "Pixel flamingo & terra cotta", 0xFFBA4336),
+    SAND("Sand", "Pixel warm sunny amber", 0xFF8C6500),
+    AQUA("Aqua", "Pixel cool turquoise", 0xFF006874);
 
     companion object {
         /**
-         * Reads a saved preference. Older builds stored `NEUTRAL`; map it to the
-         * monochrome palette instead of silently falling back to the wallpaper.
+         * Reads a saved preference. Maps older values to matching Pixel Monet palettes
+         * instead of silently falling back to wallpaper.
          */
         fun fromStorage(value: String?): ThemeStyle = when (value) {
             null -> WALLPAPER
-            "NEUTRAL" -> MONOCHROME
+            "NEUTRAL", "MONOCHROME" -> MONOCHROME
+            "BLUE", "INDIGO", "OCEAN" -> OCEAN
+            "GREEN", "FOREST" -> FOREST
+            "LAVENDER" -> LAVENDER
+            "CORAL", "ROSE" -> CORAL
+            "AMBER", "SAND" -> SAND
+            "TEAL", "AQUA" -> AQUA
             else -> runCatching { valueOf(value) }.getOrDefault(WALLPAPER)
         }
     }

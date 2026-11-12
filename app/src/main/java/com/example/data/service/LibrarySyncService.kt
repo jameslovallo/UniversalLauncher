@@ -7,6 +7,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import com.example.data.model.GameItem
 import com.example.data.repository.GameRepository
+import java.io.File
 import java.io.FileNotFoundException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,7 +22,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-/** Result of a library-file sync or write. */
+/** Result of a library folder sync or write. */
 sealed interface LibrarySyncOutcome {
     data class Applied(val itemCount: Int) : LibrarySyncOutcome
     data class WroteLocal(val itemCount: Int) : LibrarySyncOutcome
@@ -30,14 +31,16 @@ sealed interface LibrarySyncOutcome {
 }
 
 /**
- * Keeps the shareable game library synchronised with a file chosen through the Storage
+ * Keeps the shareable game library synchronised with a folder chosen through the Storage
  * Access Framework.
  *
- * The grant may be a single document or a folder (in which case `nexus-library.json` is
- * created inside it). Every document carries an `updatedAt` timestamp and the full set of
- * cloud/Moonlight/game-shortcut items, including tombstones. Local changes are written
- * back automatically; on launch, unlock or an explicit sync the file is read and wins when
- * it is newer than the last version seen on this device.
+ * Inside the chosen folder:
+ * - `nexus-library.json` records game metadata, launch URLs, custom titles, tags, and tombstones.
+ * - `posters/` stores all assigned game poster images so custom artwork and covers travel
+ *   intact across devices.
+ *
+ * Local changes are written back automatically; on launch, unlock or explicit sync, the folder
+ * is read and wins when it is newer than the version seen on this device.
  */
 class LibrarySyncService(
     private val context: Context,
@@ -48,23 +51,20 @@ class LibrarySyncService(
     private val mutex = Mutex()
 
     val isConfigured: Boolean
-        get() = prefs.getString(KEY_DOC_URI, null) != null ||
-            prefs.getString(KEY_TREE_URI, null) != null
+        get() = prefs.getString(KEY_TREE_URI, null) != null
 
     fun targetLabel(): String? {
         if (!isConfigured) return null
+        val treeUriStr = prefs.getString(KEY_TREE_URI, null) ?: return null
         return prefs.getString(KEY_TARGET_LABEL, null)
-            ?: (prefs.getString(KEY_DOC_URI, null) ?: prefs.getString(KEY_TREE_URI, null))
-                ?.let(Uri::parse)
-                ?.lastPathSegment
-                ?.substringAfterLast('/')
+            ?: runCatching { treeDisplayName(Uri.parse(treeUriStr)) }.getOrNull()
+            ?: "Selected folder"
     }
 
     fun lastSyncedAt(): Long? =
         prefs.getLong(KEY_LAST_SYNC, 0L).takeIf { it > 0L }
 
     private data class ConfigSnapshot(
-        val docUri: String?,
         val treeUri: String?,
         val label: String?,
         val updatedAt: Long,
@@ -72,7 +72,6 @@ class LibrarySyncService(
     )
 
     private fun snapshotConfig(): ConfigSnapshot = ConfigSnapshot(
-        docUri = prefs.getString(KEY_DOC_URI, null),
         treeUri = prefs.getString(KEY_TREE_URI, null),
         label = prefs.getString(KEY_TARGET_LABEL, null),
         updatedAt = prefs.getLong(KEY_UPDATED_AT, 0L),
@@ -81,7 +80,6 @@ class LibrarySyncService(
 
     private fun restoreConfig(snapshot: ConfigSnapshot) {
         prefs.edit()
-            .putString(KEY_DOC_URI, snapshot.docUri)
             .putString(KEY_TREE_URI, snapshot.treeUri)
             .putString(KEY_TARGET_LABEL, snapshot.label)
             .putLong(KEY_UPDATED_AT, snapshot.updatedAt)
@@ -89,51 +87,22 @@ class LibrarySyncService(
             .apply()
     }
 
-    /** Uses an existing (or newly created) document as the sync target. */
-    suspend fun configureFile(uri: Uri): LibrarySyncOutcome = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            persistPermission(uri)
-            val previous = snapshotConfig()
-            prefs.edit()
-                .putString(KEY_DOC_URI, uri.toString())
-                .remove(KEY_TREE_URI)
-                .putString(KEY_TARGET_LABEL, displayName(uri) ?: "Selected file")
-                .putLong(KEY_UPDATED_AT, 0L)
-                .putString(KEY_SIGNATURE, "")
-                .apply()
-            try {
-                // Adopt whatever the chosen file already contains.
-                val outcome = syncLocked(adoptExisting = true)
-                releasePreviousPermission(previous, uri.toString())
-                outcome
-            } catch (error: Exception) {
-                // A file that cannot be read or is not a Nexus library must not replace a
-                // working sync target (or be written to).
-                restoreConfig(previous)
-                throw error
-            }
-        }
-    }
-
-    /** Uses a folder as the sync target, creating `nexus-library.json` inside it. */
+    /** Uses a folder as the sync target, creating `nexus-library.json` and `posters/` inside it. */
     suspend fun configureFolder(treeUri: Uri): LibrarySyncOutcome = withContext(Dispatchers.IO) {
         mutex.withLock {
             persistPermission(treeUri)
             val previous = snapshotConfig()
             prefs.edit()
                 .putString(KEY_TREE_URI, treeUri.toString())
-                .remove(KEY_DOC_URI)
                 .putString(KEY_TARGET_LABEL, treeDisplayName(treeUri) ?: "Selected folder")
                 .putLong(KEY_UPDATED_AT, 0L)
                 .putString(KEY_SIGNATURE, "")
                 .apply()
             try {
-                val target = resolveTarget()
-                    ?: return@withLock LibrarySyncOutcome.NotConfigured
-                // Make sure the file exists before the first read.
-                writableDocumentUri(target)
-                    ?: throw IllegalStateException("Could not create $FILE_NAME in that folder")
-                val outcome = syncLocked(adoptExisting = true)
+                // Ensure the metadata file exists before the first read.
+                writableDocumentUri(treeUri)
+                    ?: throw IllegalStateException("Could not access or create $FILE_NAME in that folder")
+                val outcome = syncLocked(treeUri, adoptExisting = true)
                 releasePreviousPermission(previous, treeUri.toString())
                 outcome
             } catch (error: Exception) {
@@ -143,19 +112,19 @@ class LibrarySyncService(
         }
     }
 
-    /** Reads the file and restores it when newer, otherwise writes local changes. */
+    /** Reads the folder and restores it when newer, otherwise writes local changes and exports posters. */
     suspend fun syncNow(): LibrarySyncOutcome = withContext(Dispatchers.IO) {
-        mutex.withLock { syncLocked(adoptExisting = false) }
+        mutex.withLock {
+            val treeUri = resolveTreeUri() ?: return@withLock LibrarySyncOutcome.NotConfigured
+            syncLocked(treeUri, adoptExisting = false)
+        }
     }
 
     fun disconnect() {
-        val docs = listOfNotNull(
-            prefs.getString(KEY_DOC_URI, null),
-            prefs.getString(KEY_TREE_URI, null)
-        )
-        docs.forEach { stored -> releasePermission(Uri.parse(stored)) }
+        prefs.getString(KEY_TREE_URI, null)?.let { stored ->
+            releasePermission(Uri.parse(stored))
+        }
         prefs.edit()
-            .remove(KEY_DOC_URI)
             .remove(KEY_TREE_URI)
             .remove(KEY_TARGET_LABEL)
             .remove(KEY_UPDATED_AT)
@@ -164,9 +133,8 @@ class LibrarySyncService(
             .apply()
     }
 
-    /** Drops the grant for the target that was replaced, once the new one works. */
     private fun releasePreviousPermission(previous: ConfigSnapshot, current: String) {
-        val old = previous.docUri ?: previous.treeUri ?: return
+        val old = previous.treeUri ?: return
         if (old != current) releasePermission(Uri.parse(old))
     }
 
@@ -181,12 +149,7 @@ class LibrarySyncService(
     }
 
     /**
-     * Watches the full library (including tombstones) and writes to the file whenever the
-     * shareable content changes. The stored signature is updated after each write/apply,
-     * so applying a remote file cannot trigger an endless write loop.
-     *
-     * @param onError called when a background write fails (for example because the user
-     *   revoked access to the sync file). The library stays intact; the next write retries.
+     * Watches the full library and writes to the sync folder whenever shareable content changes.
      */
     @OptIn(FlowPreview::class)
     fun observeLibraryChanges(
@@ -202,8 +165,6 @@ class LibrarySyncService(
                     if (!isConfigured || sig == prefs.getString(KEY_SIGNATURE, "")) {
                         return@onEach
                     }
-                    // A local edit happened. Move the local version forward right away so
-                    // an unlock read of an older file cannot discard this pending change.
                     prefs.edit().putLong(KEY_UPDATED_AT, nextVersion()).apply()
                 }
                 .debounce(WRITE_DEBOUNCE_MS)
@@ -213,8 +174,9 @@ class LibrarySyncService(
                     }
                     withContext(Dispatchers.IO) {
                         mutex.withLock {
-                            runCatching { writeLocked(items) }
-                                .onFailure { onError(it.message ?: "Library sync failed") }
+                            val treeUri = resolveTreeUri() ?: return@withLock
+                            runCatching { writeLocked(treeUri, items) }
+                                .onFailure { onError(it.message ?: "Library folder sync failed") }
                         }
                     }
                 }
@@ -223,24 +185,21 @@ class LibrarySyncService(
 
     // ---- Core sync ----------------------------------------------------------------
 
-    private suspend fun syncLocked(adoptExisting: Boolean): LibrarySyncOutcome {
-        val target = resolveTarget() ?: return LibrarySyncOutcome.NotConfigured
-        val snapshot = readDocument(target)
+    private suspend fun syncLocked(treeUri: Uri, adoptExisting: Boolean): LibrarySyncOutcome {
+        val snapshot = readDocument(treeUri)
         val localItems = repository.getSyncableItemsSnapshot()
 
         if (snapshot == null || snapshot.items.isEmpty()) {
-            // No usable backup yet: seed it from this device.
-            return writeLocked(localItems, target, snapshot?.updatedAt ?: 0L)
+            // Seed folder from this device (writes json and exports all assigned posters).
+            return writeLocked(treeUri, localItems, snapshot?.updatedAt ?: 0L)
         }
 
         if (!snapshot.authoritative) {
-            // An export from an older build lists live games only, without tombstones.
-            // Merge it in and upgrade the file instead of deleting local games that the
-            // old format could not mention.
-            repository.mergeSyncedLibrary(snapshot.items)
+            val itemsToMerge = importPosters(snapshot.items, treeUri)
+            repository.mergeSyncedLibrary(itemsToMerge)
             return writeLocked(
+                treeUri,
                 repository.getSyncableItemsSnapshot(),
-                target,
                 snapshot.updatedAt
             )
         }
@@ -251,7 +210,8 @@ class LibrarySyncService(
         val fileIsNewer = adoptExisting || snapshot.updatedAt > localVersion
 
         if (differs && fileIsNewer) {
-            repository.replaceSyncedLibrary(snapshot.items)
+            val itemsToApply = importPosters(snapshot.items, treeUri)
+            repository.replaceSyncedLibrary(itemsToApply)
             val applied = repository.getSyncableItemsSnapshot()
             prefs.edit()
                 .putLong(KEY_UPDATED_AT, maxOf(snapshot.updatedAt, nextVersion()))
@@ -262,13 +222,12 @@ class LibrarySyncService(
         }
 
         if (differs) {
-            // This device has edits the file has not seen yet. Keep them, but never write
-            // a version older than the file's so the next read here still sees them as new.
-            return writeLocked(localItems, target, snapshot.updatedAt)
+            return writeLocked(treeUri, localItems, snapshot.updatedAt)
         }
 
-        // Same content: adopt the file's version too, so a later local edit outranks it
-        // even when the two devices' clocks disagree.
+        // Even when metadata matches, ensure any missing posters in the folder are exported
+        exportPosters(localItems, treeUri)
+
         prefs.edit()
             .putLong(KEY_UPDATED_AT, maxOf(localVersion, snapshot.updatedAt))
             .putString(KEY_SIGNATURE, localSignature)
@@ -278,31 +237,31 @@ class LibrarySyncService(
     }
 
     private suspend fun writeLocked(
+        treeUri: Uri,
         items: List<GameItem>,
-        resolvedTarget: Target? = null,
         minVersion: Long = 0L
     ): LibrarySyncOutcome {
-        val target = resolvedTarget ?: resolveTarget()
-            ?: return LibrarySyncOutcome.NotConfigured
-        val uri = try {
-            writableDocumentUri(target)
+        val docUri = try {
+            writableDocumentUri(treeUri)
         } catch (error: SecurityException) {
             throw fileAccessError(error)
-        }
-        if (uri == null) {
-            throw IllegalStateException("Could not open the sync file for writing")
-        }
+        } ?: throw IllegalStateException("Could not open $FILE_NAME in sync folder")
+
         val version = maxOf(nextVersion(), minVersion + 1L)
         val document = buildDocument(items, version).toString()
+
         try {
-            resolver.openOutputStream(uri, "wt")?.use { stream ->
+            resolver.openOutputStream(docUri, "wt")?.use { stream ->
                 stream.write(document.toByteArray(Charsets.UTF_8))
-            } ?: throw IllegalStateException("Could not open the sync file for writing")
+            } ?: throw IllegalStateException("Could not open $FILE_NAME for writing")
         } catch (error: SecurityException) {
             throw fileAccessError(error)
         } catch (error: FileNotFoundException) {
             throw fileAccessError(error)
         }
+
+        // Export all assigned game posters to posters/ directory
+        exportPosters(items, treeUri)
 
         prefs.edit()
             .putLong(KEY_UPDATED_AT, version)
@@ -315,9 +274,130 @@ class LibrarySyncService(
     private fun nextVersion(): Long =
         maxOf(System.currentTimeMillis(), prefs.getLong(KEY_UPDATED_AT, 0L) + 1L)
 
-    // ---- File access --------------------------------------------------------------
+    // ---- Poster Export & Import ---------------------------------------------------
 
-    private data class Target(val documentUri: Uri?, val treeUri: Uri?)
+    /**
+     * Exports all assigned game posters into a `posters/` folder inside the sync folder.
+     */
+    private fun exportPosters(items: List<GameItem>, treeUri: Uri) {
+        runCatching {
+            val postersFolderUri = findOrCreateChildDirectory(treeUri, POSTERS_DIR_NAME)
+                ?: return
+            val postersFolderDocId = DocumentsContract.getDocumentId(postersFolderUri)
+            val existingFiles = listChildDocuments(treeUri, postersFolderDocId)
+
+            items.forEach { item ->
+                if (item.isDeleted || item.posterUrl.isNullOrBlank()) return@forEach
+                val rawUrl = item.posterUrl
+                val fileName = posterFileNameFor(item.id)
+                val existingDocUri = existingFiles[fileName]
+
+                if (existingDocUri != null && documentSize(existingDocUri) > 0L) {
+                    return@forEach
+                }
+
+                val bytes = fetchPosterBytes(rawUrl) ?: return@forEach
+                val docUri = existingDocUri ?: DocumentsContract.createDocument(
+                    resolver,
+                    postersFolderUri,
+                    "image/png",
+                    fileName
+                ) ?: return@forEach
+
+                resolver.openOutputStream(docUri, "wt")?.use { out ->
+                    out.write(bytes)
+                }
+                existingFiles[fileName] = docUri
+            }
+        }
+    }
+
+    /**
+     * Restores poster images from the sync folder's `posters/` directory into local storage
+     * so that artwork displays reliably offline and across devices.
+     */
+    private fun importPosters(items: List<GameItem>, treeUri: Uri): List<GameItem> {
+        return runCatching {
+            val postersFolderUri = findChildDirectory(treeUri, POSTERS_DIR_NAME)
+                ?: return items
+            val postersFolderDocId = DocumentsContract.getDocumentId(postersFolderUri)
+            val existingFiles = listChildDocuments(treeUri, postersFolderDocId)
+            if (existingFiles.isEmpty()) return items
+
+            val localDir = File(context.filesDir, "custom_art").apply { mkdirs() }
+
+            items.map { item ->
+                val fileName = posterFileNameFor(item.id)
+                val posterDocUri = existingFiles[fileName]
+                if (posterDocUri != null) {
+                    val safeId = item.id.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                    val localFile = File(localDir, "$safeId-synced.png")
+                    val copied = runCatching {
+                        if (!localFile.exists() || localFile.length() == 0L) {
+                            resolver.openInputStream(posterDocUri)?.use { input ->
+                                localFile.outputStream().use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                        }
+                        localFile.exists() && localFile.length() > 0L
+                    }.getOrDefault(false)
+
+                    if (copied) {
+                        item.copy(
+                            posterUrl = Uri.fromFile(localFile).toString(),
+                            customArtworkSource = item.customArtworkSource ?: "SYNCED"
+                        )
+                    } else {
+                        item
+                    }
+                } else {
+                    item
+                }
+            }
+        }.getOrDefault(items)
+    }
+
+    private fun posterFileNameFor(itemId: String): String {
+        val safeId = itemId.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return "poster_$safeId.png"
+    }
+
+    private fun fetchPosterBytes(rawUrl: String): ByteArray? = runCatching {
+        when {
+            rawUrl.startsWith("file:") -> {
+                val path = Uri.parse(rawUrl).path ?: return null
+                File(path).takeIf { it.exists() && it.length() > 0 }?.readBytes()
+            }
+            rawUrl.startsWith("content:") -> {
+                resolver.openInputStream(Uri.parse(rawUrl))?.use { it.readBytes() }
+            }
+            rawUrl.startsWith("http://") || rawUrl.startsWith("https://") -> {
+                val conn = java.net.URL(rawUrl).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 4000
+                conn.readTimeout = 5000
+                conn.instanceFollowRedirects = true
+                if (conn.responseCode in 200..299) {
+                    conn.inputStream.use { it.readBytes() }
+                } else null
+            }
+            else -> null
+        }
+    }.getOrNull()
+
+    private fun documentSize(uri: Uri): Long = runCatching {
+        resolver.query(
+            uri,
+            arrayOf(DocumentsContract.Document.COLUMN_SIZE),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+        } ?: 0L
+    }.getOrDefault(0L)
+
+    // ---- File / Directory Access --------------------------------------------------
 
     private data class Snapshot(
         val updatedAt: Long,
@@ -326,32 +406,26 @@ class LibrarySyncService(
         val authoritative: Boolean
     )
 
-    private fun resolveTarget(): Target? {
-        prefs.getString(KEY_DOC_URI, null)?.let { return Target(Uri.parse(it), null) }
-        prefs.getString(KEY_TREE_URI, null)?.let { return Target(null, Uri.parse(it)) }
-        return null
-    }
+    private fun resolveTreeUri(): Uri? =
+        prefs.getString(KEY_TREE_URI, null)?.let(Uri::parse)
 
     private fun fileAccessError(cause: Exception): IllegalStateException =
         IllegalStateException(
-            "Nexus cannot open the sync file. Choose it again in Settings.",
+            "Nexus cannot access the sync folder. Please re-select it in Settings.",
             cause
         )
 
-    private fun readDocument(target: Target): Snapshot? {
-        // A missing child of a folder grant is the normal "first run" case. Read errors on
-        // a document that should exist are not: they must abort the sync rather than let
-        // the seed write overwrite the user's backup.
-        val uri = try {
-            readableDocumentUri(target)
+    private fun readDocument(treeUri: Uri): Snapshot? {
+        val docUri = try {
+            findChildDocument(treeUri)
         } catch (error: SecurityException) {
             throw fileAccessError(error)
-        }
-        if (uri == null) return null
+        } ?: return null
+
         val text = try {
-            resolver.openInputStream(uri)?.use {
+            resolver.openInputStream(docUri)?.use {
                 it.readBytes().toString(Charsets.UTF_8)
-            } ?: throw IllegalStateException("Could not read the sync file")
+            } ?: throw IllegalStateException("Could not read $FILE_NAME in sync folder")
         } catch (error: FileNotFoundException) {
             throw fileAccessError(error)
         } catch (error: SecurityException) {
@@ -361,20 +435,8 @@ class LibrarySyncService(
         return parseDocument(text)
     }
 
-    private fun readableDocumentUri(target: Target): Uri? =
-        target.documentUri ?: target.treeUri?.let(::findChildDocument)
-
-    private fun writableDocumentUri(target: Target): Uri? =
-        target.documentUri?.takeIf { documentExists(it) }
-            ?: target.treeUri?.let { tree ->
-                findChildDocument(tree) ?: createChildDocument(tree)
-            }
-            ?: target.documentUri
-
-    private fun documentExists(uri: Uri): Boolean =
-        runCatching {
-            resolver.openFileDescriptor(uri, "r")?.use { true } ?: false
-        }.getOrDefault(false)
+    private fun writableDocumentUri(treeUri: Uri): Uri? =
+        findChildDocument(treeUri) ?: createChildDocument(treeUri)
 
     private fun findChildDocument(treeUri: Uri): Uri? {
         val parentId = DocumentsContract.getTreeDocumentId(treeUri)
@@ -409,6 +471,74 @@ class LibrarySyncService(
         DocumentsContract.createDocument(resolver, parentUri, MIME_TYPE, FILE_NAME)
     }.getOrNull()
 
+    private fun findChildDirectory(treeUri: Uri, dirName: String): Uri? {
+        val parentId = DocumentsContract.getTreeDocumentId(treeUri)
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
+        return resolver.query(
+            childrenUri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE
+            ),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(1)
+                val mime = cursor.getString(2)
+                if (name == dirName && mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    return@use DocumentsContract.buildDocumentUriUsingTree(
+                        treeUri,
+                        cursor.getString(0)
+                    )
+                }
+            }
+            null
+        }
+    }
+
+    private fun findOrCreateChildDirectory(treeUri: Uri, dirName: String): Uri? {
+        findChildDirectory(treeUri, dirName)?.let { return it }
+        return runCatching {
+            val parentUri = DocumentsContract.buildDocumentUriUsingTree(
+                treeUri,
+                DocumentsContract.getTreeDocumentId(treeUri)
+            )
+            DocumentsContract.createDocument(
+                resolver,
+                parentUri,
+                DocumentsContract.Document.MIME_TYPE_DIR,
+                dirName
+            )
+        }.getOrNull()
+    }
+
+    private fun listChildDocuments(treeUri: Uri, parentDocId: String): MutableMap<String, Uri> {
+        val result = mutableMapOf<String, Uri>()
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        resolver.query(
+            childrenUri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME
+            ),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val docId = cursor.getString(0)
+                val name = cursor.getString(1)
+                if (!name.isNullOrBlank()) {
+                    result[name] = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                }
+            }
+        }
+        return result
+    }
+
     private fun persistPermission(uri: Uri) {
         runCatching {
             resolver.takePersistableUriPermission(
@@ -419,9 +549,13 @@ class LibrarySyncService(
         }
     }
 
-    private fun displayName(uri: Uri): String? = runCatching {
+    private fun treeDisplayName(treeUri: Uri): String? = runCatching {
+        val documentUri = DocumentsContract.buildDocumentUriUsingTree(
+            treeUri,
+            DocumentsContract.getTreeDocumentId(treeUri)
+        )
         resolver.query(
-            uri,
+            documentUri,
             arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
             null,
             null,
@@ -431,15 +565,7 @@ class LibrarySyncService(
         }
     }.getOrNull()
 
-    private fun treeDisplayName(treeUri: Uri): String? = runCatching {
-        val documentUri = DocumentsContract.buildDocumentUriUsingTree(
-            treeUri,
-            DocumentsContract.getTreeDocumentId(treeUri)
-        )
-        displayName(documentUri)
-    }.getOrNull()
-
-    // ---- JSON ---------------------------------------------------------------------
+    // ---- JSON & Codec -------------------------------------------------------------
 
     private fun buildDocument(items: List<GameItem>, updatedAt: Long): JSONObject =
         LibrarySyncCodec.buildDocument(items, updatedAt)
@@ -449,19 +575,17 @@ class LibrarySyncService(
             Snapshot(it.updatedAt, it.items, it.signature, it.authoritative)
         }
 
-    // ---- Canonical content --------------------------------------------------------
-
     private fun syncable(rows: List<GameItem>): List<GameItem> = LibrarySyncCodec.syncable(rows)
 
     private fun signature(items: List<GameItem>): String = LibrarySyncCodec.signature(items)
 
     companion object {
         const val FILE_NAME = "nexus-library.json"
+        const val POSTERS_DIR_NAME = "posters"
 
         private const val MIME_TYPE = "application/json"
         private const val WRITE_DEBOUNCE_MS = 750L
 
-        private const val KEY_DOC_URI = "library_sync_doc_uri"
         private const val KEY_TREE_URI = "library_sync_tree_uri"
         private const val KEY_TARGET_LABEL = "library_sync_target_label"
         private const val KEY_UPDATED_AT = "library_sync_updated_at"

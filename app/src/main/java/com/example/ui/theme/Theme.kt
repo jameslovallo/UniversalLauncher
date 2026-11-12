@@ -82,7 +82,7 @@ private fun paletteColorScheme(style: ThemeStyle, darkTheme: Boolean): ColorSche
         return schemeFromHue(hue = 0f, saturation = 0f, dark = darkTheme)
     }
     val hsl = FloatArray(3)
-    ColorUtils.colorToHSL(style.seedColor?.toInt() ?: 0xFF8E8E93.toInt(), hsl)
+    ColorUtils.colorToHSL(style.seedColor?.toInt() ?: 0xFF76777A.toInt(), hsl)
     return schemeFromHue(hue = hsl[0], saturation = hsl[1], dark = darkTheme)
 }
 

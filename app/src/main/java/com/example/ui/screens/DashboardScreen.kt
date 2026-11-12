@@ -4,6 +4,8 @@ import android.content.res.Configuration
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -470,8 +472,12 @@ fun DashboardScreen(
             )
         }
 
-        // Settings Modal (Gear Icon)
-        if (showSettingsModal) {
+        // Full Page Settings Screen
+        AnimatedVisibility(
+            visible = showSettingsModal,
+            enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
+            exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it })
+        ) {
             SettingsModal(
                 favoritesLayout = favoritesLayout,
                 steamGridDbApiKey = steamGridDbApiKey,
@@ -502,7 +508,6 @@ fun DashboardScreen(
                 onWeatherModeChange = { viewModel.setWeatherMode(it) },
                 onWeatherZipChange = { viewModel.setWeatherZip(it) },
                 onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() },
-                onChooseSyncFile = { viewModel.chooseSyncFile(it) },
                 onChooseSyncFolder = { viewModel.chooseSyncFolder(it) },
                 onSyncLibraryNow = { viewModel.syncLibraryNow() },
                 onDisconnectLibrarySync = { viewModel.disconnectLibrarySync() },

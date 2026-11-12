@@ -568,24 +568,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // ---- Library file sync ---------------------------------------------------------
+    // ---- Library folder sync -------------------------------------------------------
 
-    /** Uses the file the user picked as the continuous sync target. */
-    fun chooseSyncFile(uri: Uri) {
-        runLibrarySync("Reading library file…") { librarySyncService.configureFile(uri) }
-    }
-
-    /** Uses a folder as the sync target; Nexus creates nexus-library.json inside it. */
+    /** Uses a folder as the sync target; Nexus stores nexus-library.json and posters inside it. */
     fun chooseSyncFolder(uri: Uri) {
         runLibrarySync("Reading library folder…") { librarySyncService.configureFolder(uri) }
     }
 
     fun syncLibraryNow() {
         if (!librarySyncService.isConfigured) {
-            _librarySyncStatus.value = "Choose a sync file or folder first"
+            _librarySyncStatus.value = "Choose a sync folder first"
             return
         }
-        runLibrarySync("Syncing library…") { librarySyncService.syncNow() }
+        runLibrarySync("Syncing library folder…") { librarySyncService.syncNow() }
     }
 
     fun disconnectLibrarySync() {
@@ -594,7 +589,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _librarySyncStatus.value = "Library sync disconnected"
     }
 
-    /** Reads the sync file when the device is unlocked. */
+    /** Reads the sync folder when the device is unlocked. */
     fun onDeviceUnlocked() {
         if (!librarySyncService.isConfigured || _librarySyncBusy.value) return
         viewModelScope.launch {
@@ -602,11 +597,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 .onSuccess { outcome ->
                     if (outcome is LibrarySyncOutcome.Applied) {
                         _librarySyncStatus.value =
-                            "Restored ${outcome.itemCount} games from the sync file"
+                            "Restored ${outcome.itemCount} games and posters from sync folder"
                     }
                 }
                 .onFailure {
-                    _librarySyncStatus.value = it.message ?: "Library sync failed"
+                    _librarySyncStatus.value = it.message ?: "Library folder sync failed"
                 }
             refreshLibrarySyncState()
         }
