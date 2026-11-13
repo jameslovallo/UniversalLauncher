@@ -3,7 +3,10 @@ package com.example.data.service
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.database.Cursor
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
 import android.provider.DocumentsContract
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
@@ -322,15 +325,16 @@ class LibrarySyncService(
         minVersion: Long = 0L,
         existingSnapshot: Snapshot? = null
     ): LibrarySyncOutcome {
-        val docUri = try {
-            writableDocumentUri(treeUri)
+        val resolvedDoc = try {
+            resolveOrCreateLibraryDocument(treeUri)
         } catch (error: SecurityException) {
             throw fileAccessError(error)
         } ?: throw IllegalStateException("Could not open $FILE_NAME in sync folder")
+        val docUri = resolvedDoc.uri
 
         // Preserve remote appCustomizations for packages not installed on this device so we
         // never erase another device's installed-game posters when writing local edits.
-        val baseSnapshot = existingSnapshot ?: runCatching { readDocument(treeUri) }.getOrNull()
+        val baseSnapshot = existingSnapshot ?: resolvedDoc.snapshot
         val preservedRemoteApps = baseSnapshot?.appCustomizations
             ?.filter { it.id !in localInstalledAppIds }
             .orEmpty()
@@ -631,12 +635,9 @@ class LibrarySyncService(
     }.getOrNull()
 
     private fun documentSize(uri: Uri): Long = runCatching {
-        resolver.query(
+        queryDocumentCursor(
             uri,
-            arrayOf(DocumentsContract.Document.COLUMN_SIZE),
-            null,
-            null,
-            null
+            arrayOf(DocumentsContract.Document.COLUMN_SIZE)
         )?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getLong(0) else 0L
         } ?: 0L
@@ -664,52 +665,109 @@ class LibrarySyncService(
             cause
         )
 
-    private fun readDocument(treeUri: Uri): Snapshot? {
-        val docUri = try {
-            findChildDocument(treeUri)
+    private data class ResolvedLibraryDoc(
+        val uri: Uri,
+        val snapshot: Snapshot?
+    )
+
+    private data class ChildEntry(
+        val docId: String,
+        val uri: Uri,
+        val name: String,
+        val mimeType: String,
+        val lastModified: Long,
+        val size: Long
+    ) {
+        val isDirectory: Boolean
+            get() = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
+    }
+
+    private fun readDocument(treeUri: Uri): Snapshot? =
+        findAndDeduplicateLibraryDocument(treeUri)?.snapshot
+
+    private fun writableDocumentUri(treeUri: Uri): Uri? =
+        resolveOrCreateLibraryDocument(treeUri)?.uri
+
+    private fun resolveOrCreateLibraryDocument(treeUri: Uri): ResolvedLibraryDoc? {
+        val existing = findAndDeduplicateLibraryDocument(treeUri)
+        if (existing != null) return existing
+        val created = createChildDocument(treeUri) ?: return null
+        return ResolvedLibraryDoc(uri = created, snapshot = null)
+    }
+
+    /**
+     * Finds `nexus-library.json` inside [treeUri]. Cloud providers like Google Drive allow
+     * multiple files with the same name; when duplicates exist, the most recently updated
+     * snapshot wins (`updatedAt`, then SAF `lastModified`, then file size) and the older
+     * duplicates are deleted so only one library file remains.
+     */
+    private fun findAndDeduplicateLibraryDocument(treeUri: Uri): ResolvedLibraryDoc? {
+        val candidates = try {
+            listChildEntries(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+                .filter { !it.isDirectory && it.name == FILE_NAME }
         } catch (error: SecurityException) {
             throw fileAccessError(error)
-        } ?: return null
+        }
+        if (candidates.isEmpty()) return null
 
+        if (candidates.size == 1) {
+            val only = candidates.single()
+            return ResolvedLibraryDoc(
+                uri = only.uri,
+                snapshot = readAndParseCandidate(only.uri, throwOnError = true)
+            )
+        }
+
+        data class ScoredCandidate(
+            val entry: ChildEntry,
+            val snapshot: Snapshot?,
+            val parseError: Throwable?
+        )
+
+        val scored = candidates.map { entry ->
+            var parsedSnapshot: Snapshot? = null
+            var error: Throwable? = null
+            try {
+                parsedSnapshot = readAndParseCandidate(entry.uri, throwOnError = true)
+            } catch (t: Throwable) {
+                error = t
+            }
+            ScoredCandidate(entry, parsedSnapshot, error)
+        }
+
+        val winner = scored.maxWith(
+            compareBy<ScoredCandidate>(
+                { it.snapshot != null },
+                { it.snapshot?.updatedAt ?: -1L },
+                { it.entry.lastModified },
+                { it.entry.size }
+            )
+        )
+
+        scored.forEach { candidate ->
+            if (candidate.entry.uri != winner.entry.uri) {
+                runCatching { DocumentsContract.deleteDocument(resolver, candidate.entry.uri) }
+            }
+        }
+
+        if (winner.snapshot == null && winner.parseError != null) {
+            throw winner.parseError
+        }
+        return ResolvedLibraryDoc(uri = winner.entry.uri, snapshot = winner.snapshot)
+    }
+
+    private fun readAndParseCandidate(docUri: Uri, throwOnError: Boolean): Snapshot? {
         val text = try {
             resolver.openInputStream(docUri)?.use {
                 it.readBytes().toString(Charsets.UTF_8)
             } ?: throw IllegalStateException("Could not read $FILE_NAME in sync folder")
         } catch (error: FileNotFoundException) {
-            throw fileAccessError(error)
+            if (throwOnError) throw fileAccessError(error) else return null
         } catch (error: SecurityException) {
-            throw fileAccessError(error)
+            if (throwOnError) throw fileAccessError(error) else return null
         }
         if (text.isBlank()) return null
         return parseDocument(text)
-    }
-
-    private fun writableDocumentUri(treeUri: Uri): Uri? =
-        findChildDocument(treeUri) ?: createChildDocument(treeUri)
-
-    private fun findChildDocument(treeUri: Uri): Uri? {
-        val parentId = DocumentsContract.getTreeDocumentId(treeUri)
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
-        return resolver.query(
-            childrenUri,
-            arrayOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME
-            ),
-            null,
-            null,
-            null
-        )?.use { cursor ->
-            while (cursor.moveToNext()) {
-                if (cursor.getString(1) == FILE_NAME) {
-                    return@use DocumentsContract.buildDocumentUriUsingTree(
-                        treeUri,
-                        cursor.getString(0)
-                    )
-                }
-            }
-            null
-        }
     }
 
     private fun createChildDocument(treeUri: Uri): Uri? = runCatching {
@@ -720,73 +778,213 @@ class LibrarySyncService(
         DocumentsContract.createDocument(resolver, parentUri, MIME_TYPE, FILE_NAME)
     }.getOrNull()
 
-    private fun findChildDirectory(treeUri: Uri, dirName: String): Uri? {
-        val parentId = DocumentsContract.getTreeDocumentId(treeUri)
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
-        return resolver.query(
-            childrenUri,
-            arrayOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE
-            ),
-            null,
-            null,
-            null
-        )?.use { cursor ->
-            while (cursor.moveToNext()) {
-                val name = cursor.getString(1)
-                val mime = cursor.getString(2)
-                if (name == dirName && mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                    return@use DocumentsContract.buildDocumentUriUsingTree(
-                        treeUri,
-                        cursor.getString(0)
+    private fun findChildDirectory(treeUri: Uri, dirName: String): Uri? =
+        resolveCanonicalDirectory(treeUri, dirName, createIfMissing = false)
+
+    private fun findOrCreateChildDirectory(treeUri: Uri, dirName: String): Uri? =
+        resolveCanonicalDirectory(treeUri, dirName, createIfMissing = true)
+
+    /**
+     * Resolves a named child directory (such as `posters/`). If Google Drive or another
+     * provider created duplicate folders with the same name, selects the most recently
+     * updated folder (by folder or newest contained poster timestamp), merges any missing
+     * or newer files into it, and deletes the duplicate folders.
+     */
+    private fun resolveCanonicalDirectory(
+        treeUri: Uri,
+        dirName: String,
+        createIfMissing: Boolean
+    ): Uri? {
+        val dirs = runCatching {
+            listChildEntries(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+                .filter { it.isDirectory && it.name == dirName }
+        }.getOrDefault(emptyList())
+
+        if (dirs.isEmpty()) {
+            if (!createIfMissing) return null
+            return runCatching {
+                val parentUri = DocumentsContract.buildDocumentUriUsingTree(
+                    treeUri,
+                    DocumentsContract.getTreeDocumentId(treeUri)
+                )
+                DocumentsContract.createDocument(
+                    resolver,
+                    parentUri,
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    dirName
+                )
+            }.getOrNull()
+        }
+
+        if (dirs.size == 1) return dirs.single().uri
+
+        data class DirWithChildren(
+            val dir: ChildEntry,
+            val children: Map<String, ChildEntry>,
+            val effectiveLastModified: Long
+        )
+
+        val inspected = dirs.map { dir ->
+            val rawChildren = runCatching {
+                listChildEntries(treeUri, dir.docId).filter { !it.isDirectory }
+            }.getOrDefault(emptyList())
+            val deduped = deduplicateNamedFiles(rawChildren)
+            val newestChildTs = deduped.values.maxOfOrNull { it.lastModified } ?: 0L
+            DirWithChildren(
+                dir = dir,
+                children = deduped,
+                effectiveLastModified = maxOf(dir.lastModified, newestChildTs)
+            )
+        }
+
+        val winner = inspected.maxWith(
+            compareBy<DirWithChildren>(
+                { it.children.isNotEmpty() },
+                { it.effectiveLastModified },
+                { it.children.size },
+                { it.dir.lastModified }
+            )
+        )
+        val winnerFiles = winner.children.toMutableMap()
+
+        inspected.forEach { candidate ->
+            if (candidate.dir.uri == winner.dir.uri) return@forEach
+
+            candidate.children.forEach { (name, dupFile) ->
+                val existingInWinner = winnerFiles[name]
+                val shouldCopyToWinner = existingInWinner == null ||
+                    (existingInWinner.size <= 0L && dupFile.size > 0L) ||
+                    (dupFile.size > 0L && dupFile.lastModified > existingInWinner.lastModified)
+                if (shouldCopyToWinner) {
+                    val copiedUri = copyFileEntryToDirectory(
+                        source = dupFile,
+                        destFolderUri = winner.dir.uri,
+                        existingTargetUri = existingInWinner?.uri
                     )
+                    if (copiedUri != null) {
+                        winnerFiles[name] = dupFile.copy(uri = copiedUri)
+                    }
                 }
             }
-            null
+
+            // Delete remaining children before removing the duplicate directory so both
+            // cloud providers and local ExternalStorageProvider allow folder deletion.
+            runCatching {
+                listChildEntries(treeUri, candidate.dir.docId).forEach { child ->
+                    runCatching { DocumentsContract.deleteDocument(resolver, child.uri) }
+                }
+            }
+            runCatching { DocumentsContract.deleteDocument(resolver, candidate.dir.uri) }
         }
+
+        return winner.dir.uri
     }
 
-    private fun findOrCreateChildDirectory(treeUri: Uri, dirName: String): Uri? {
-        findChildDirectory(treeUri, dirName)?.let { return it }
-        return runCatching {
-            val parentUri = DocumentsContract.buildDocumentUriUsingTree(
-                treeUri,
-                DocumentsContract.getTreeDocumentId(treeUri)
-            )
-            DocumentsContract.createDocument(
-                resolver,
-                parentUri,
-                DocumentsContract.Document.MIME_TYPE_DIR,
-                dirName
-            )
-        }.getOrNull()
+    private fun copyFileEntryToDirectory(
+        source: ChildEntry,
+        destFolderUri: Uri,
+        existingTargetUri: Uri?
+    ): Uri? {
+        val bytes = runCatching {
+            resolver.openInputStream(source.uri)?.use { it.readBytes() }
+        }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return null
+
+        if (existingTargetUri != null && writeBytesToDocument(existingTargetUri, bytes)) {
+            return existingTargetUri
+        }
+        if (existingTargetUri != null) {
+            runCatching { DocumentsContract.deleteDocument(resolver, existingTargetUri) }
+        }
+        val mime = source.mimeType.takeIf { it.isNotBlank() && it != DocumentsContract.Document.MIME_TYPE_DIR }
+            ?: "image/png"
+        val created = runCatching {
+            DocumentsContract.createDocument(resolver, destFolderUri, mime, source.name)
+        }.getOrNull() ?: return null
+        return if (writeBytesToDocument(created, bytes)) created else null
     }
 
     private fun listChildDocuments(treeUri: Uri, parentDocId: String): MutableMap<String, Uri> {
-        val result = mutableMapOf<String, Uri>()
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
-        resolver.query(
-            childrenUri,
-            arrayOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME
-            ),
-            null,
-            null,
-            null
-        )?.use { cursor ->
-            while (cursor.moveToNext()) {
-                val docId = cursor.getString(0)
-                val name = cursor.getString(1)
-                if (!name.isNullOrBlank()) {
-                    result[name] = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+        val rawFiles = listChildEntries(treeUri, parentDocId).filter { !it.isDirectory }
+        return deduplicateNamedFiles(rawFiles)
+            .mapValuesTo(mutableMapOf()) { (_, entry) -> entry.uri }
+    }
+
+    /**
+     * When multiple files share the exact same display name in a folder (e.g. on Google
+     * Drive), keeps the most recently modified non-empty file and deletes the older copies.
+     */
+    private fun deduplicateNamedFiles(entries: List<ChildEntry>): Map<String, ChildEntry> {
+        val byName = LinkedHashMap<String, MutableList<ChildEntry>>()
+        entries.forEach { entry ->
+            byName.getOrPut(entry.name) { mutableListOf() }.add(entry)
+        }
+        val result = LinkedHashMap<String, ChildEntry>(byName.size)
+        byName.forEach { (name, group) ->
+            if (group.size == 1) {
+                result[name] = group.single()
+            } else {
+                val winner = group.maxWith(
+                    compareBy<ChildEntry>(
+                        { it.size > 0L },
+                        { it.lastModified },
+                        { it.size }
+                    )
+                )
+                group.forEach { entry ->
+                    if (entry.uri != winner.uri) {
+                        runCatching { DocumentsContract.deleteDocument(resolver, entry.uri) }
+                    }
                 }
+                result[name] = winner
             }
         }
         return result
     }
+
+    private fun listChildEntries(treeUri: Uri, parentDocId: String): List<ChildEntry> {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        val result = mutableListOf<ChildEntry>()
+        queryDocumentCursor(
+            childrenUri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                DocumentsContract.Document.COLUMN_SIZE
+            )
+        )?.use { cursor ->
+            val idIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val modIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            val sizeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+            while (cursor.moveToNext()) {
+                val docId = cursor.optString(idIdx) ?: continue
+                val name = cursor.optString(nameIdx)?.takeIf { it.isNotBlank() } ?: continue
+                val mime = cursor.optString(mimeIdx).orEmpty()
+                val lastModified = cursor.optLong(modIdx, 0L)
+                val size = cursor.optLong(sizeIdx, 0L)
+                result.add(
+                    ChildEntry(
+                        docId = docId,
+                        uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId),
+                        name = name,
+                        mimeType = mime,
+                        lastModified = lastModified,
+                        size = size
+                    )
+                )
+            }
+        }
+        return result
+    }
+
+    private fun Cursor.optString(index: Int): String? =
+        if (index >= 0 && !isNull(index)) getString(index) else null
+
+    private fun Cursor.optLong(index: Int, default: Long): Long =
+        if (index >= 0 && !isNull(index)) getLong(index) else default
 
     private fun persistPermission(uri: Uri) {
         runCatching {
@@ -803,16 +1001,21 @@ class LibrarySyncService(
             treeUri,
             DocumentsContract.getTreeDocumentId(treeUri)
         )
-        resolver.query(
+        queryDocumentCursor(
             documentUri,
-            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-            null,
-            null,
-            null
+            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
         )?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getString(0) else null
         }
     }.getOrNull()
+
+    private fun queryDocumentCursor(uri: Uri, projection: Array<String>): Cursor? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            resolver.query(uri, projection, Bundle.EMPTY, null)
+        } else {
+            @Suppress("DEPRECATION")
+            resolver.query(uri, projection, null, null, null)
+        }
 
     // ---- JSON & Codec -------------------------------------------------------------
 
