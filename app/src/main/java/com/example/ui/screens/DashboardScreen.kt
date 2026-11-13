@@ -466,6 +466,7 @@ fun DashboardScreen(
                                 games = gamesDisplay,
                                 focusedItemId = focusedItemId,
                                 showFocusEffects = controllerState.isConnected,
+                                showNsfwPoster = steamGridDbIncludeNsfw,
                                 isGamesTabOpen = currentTab == MainLibraryTab.GAMES &&
                                     pagerState.currentPage == 1 &&
                                     !pagerState.isScrollInProgress,
@@ -590,6 +591,7 @@ fun DashboardScreen(
         if (contextMenuItem != null) {
             ItemContextMenuSheet(
                 item = contextMenuItem!!,
+                showNsfwPoster = steamGridDbIncludeNsfw,
                 onCustomize = { viewModel.openEditCustomizer(contextMenuItem!!) },
                 onMove = {
                     if (contextMenuItem!!.isGame) {
@@ -630,21 +632,31 @@ fun DashboardScreen(
             )
         }
 
-        // Customize Name & Icon Dialog
+        // Customize Name & Artwork Dialog
         if (editingItem != null) {
             CustomizeItemDialog(
                 item = editingItem!!,
                 steamGridDbApiKey = steamGridDbApiKey,
                 includeNsfw = steamGridDbIncludeNsfw,
-                onSave = { id, newTitle, newPoster, newIcon ->
-                    viewModel.saveItemCustomization(id, newTitle, newPoster, newIcon)
+                onApplyTitle = { id, newTitle ->
+                    viewModel.applyItemTitle(id, newTitle)
+                },
+                onApplyPoster = { id, newTitle, isNsfwSlot, artworkUrl ->
+                    viewModel.applyItemPoster(id, newTitle, isNsfwSlot, artworkUrl)
+                },
+                onRemoveNsfwPoster = { id, newTitle ->
+                    viewModel.removeItemNsfwPoster(id, newTitle)
                 },
                 onDismiss = { viewModel.closeEditCustomizer() }
             )
         }
 
-        // Multi-Step Add Content Modal (+ Button)
-        if (showAddModal) {
+        // Full Page Discover Screen (+ Button)
+        AnimatedVisibility(
+            visible = showAddModal,
+            enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it }),
+            exit = fadeOut() + slideOutHorizontally(targetOffsetX = { -it })
+        ) {
             AddContentModal(
                 subView = addModalSubView,
                 onNavigateSubView = { viewModel.setAddModalSubView(it) },
@@ -749,6 +761,7 @@ private fun GamesPosterGrid(
     games: List<GameItem>,
     focusedItemId: String?,
     showFocusEffects: Boolean,
+    showNsfwPoster: Boolean,
     isGamesTabOpen: Boolean,
     isGamesPage: Boolean = false,
     gridState: LazyGridState,
@@ -915,6 +928,7 @@ private fun GamesPosterGrid(
                         game = game,
                         isFocused = isFocused,
                         showFocusOutline = false,
+                        showNsfwPoster = showNsfwPoster,
                         onClick = { onGameClick(game) },
                         onLongClick = { onGameLongClick(game) },
                         onFocus = { onGameFocus(game) },
@@ -965,6 +979,7 @@ private fun GamesPosterGrid(
                     SteamGamePosterCard(
                         game = game,
                         isFocused = game.id == focusedItemId && showFocusEffects,
+                        showNsfwPoster = showNsfwPoster,
                         onClick = { onGameClick(game) },
                         onLongClick = { onGameLongClick(game) },
                         onFocus = { onGameFocus(game) },

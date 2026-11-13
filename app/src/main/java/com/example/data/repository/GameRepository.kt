@@ -276,8 +276,16 @@ class GameRepository(
         gameDao.setHidden(id, isHidden)
     }
 
+    suspend fun updateTitle(id: String, title: String) {
+        gameDao.updateTitle(id, title)
+    }
+
     suspend fun updateTitleAndArtwork(id: String, title: String, posterUrl: String?, iconUrl: String?) {
         gameDao.updateTitleAndArtwork(id, title, posterUrl, iconUrl)
+    }
+
+    suspend fun updateTitleAndNsfwPoster(id: String, title: String, nsfwPosterUrl: String?) {
+        gameDao.updateTitleAndNsfwPoster(id, title, nsfwPosterUrl)
     }
 
     suspend fun deleteGame(gameId: String) {
@@ -317,6 +325,10 @@ class GameRepository(
                     isPinned = existing?.isPinned ?: false,
                     posterUrl = remote.posterUrl
                         ?: existing?.posterUrl?.takeIf { it.startsWith("file:") },
+                    nsfwPosterUrl = remote.nsfwPosterUrl
+                        ?: existing?.nsfwPosterUrl?.takeIf {
+                            it.startsWith("file:") && !it.endsWith("-nsfw-synced.png")
+                        },
                     heroBannerUrl = remote.heroBannerUrl
                         ?: existing?.heroBannerUrl?.takeIf { it.startsWith("file:") },
                     iconUrl = remote.iconUrl

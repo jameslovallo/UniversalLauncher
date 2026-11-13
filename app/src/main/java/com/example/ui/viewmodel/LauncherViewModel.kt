@@ -105,10 +105,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _steamGridDbApiKey = MutableStateFlow(prefs.getString("sgdb_api_key", ""))
     val steamGridDbApiKey: StateFlow<String?> = _steamGridDbApiKey.asStateFlow()
 
-    // Adult artwork is fetched alongside safe artwork (safe results first); this toggle
-    // only controls whether the adult results are shown at the end of the list.
+    // Adult artwork is only fetched and shown on posters when explicitly enabled in Settings.
     private val _steamGridDbIncludeNsfw = MutableStateFlow(
-        prefs.getBoolean("sgdb_include_nsfw", true)
+        prefs.getBoolean("sgdb_include_nsfw", false)
     )
     val steamGridDbIncludeNsfw: StateFlow<Boolean> = _steamGridDbIncludeNsfw.asStateFlow()
 
@@ -485,10 +484,54 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _editingItem.value = null
     }
 
-    fun saveItemCustomization(id: String, newTitle: String, newPosterUrl: String?, newIconUrl: String?) {
+    fun applyItemTitle(id: String, newTitle: String) {
+        val current = _editingItem.value?.takeIf { it.id == id } ?: return
+        val resolvedTitle = newTitle.trim().ifBlank { current.title }
+        if (resolvedTitle == current.title) return
+        _editingItem.value = current.copy(title = resolvedTitle, isCustomized = true)
         viewModelScope.launch {
-            repository.updateTitleAndArtwork(id, newTitle, newPosterUrl, newIconUrl)
-            _editingItem.value = null
+            repository.updateTitle(id, resolvedTitle)
+        }
+    }
+
+    fun applyItemPoster(id: String, newTitle: String, isNsfwSlot: Boolean, artworkUrl: String?) {
+        val current = _editingItem.value?.takeIf { it.id == id } ?: return
+        val resolvedTitle = newTitle.trim().ifBlank { current.title }
+        val sanitizedUrl = artworkUrl?.trim()?.ifBlank { null }
+        if (current.isGame && isNsfwSlot) {
+            _editingItem.value = current.copy(
+                title = resolvedTitle,
+                nsfwPosterUrl = sanitizedUrl,
+                isCustomized = true
+            )
+            viewModelScope.launch {
+                repository.updateTitleAndNsfwPoster(id, resolvedTitle, sanitizedUrl)
+            }
+        } else {
+            val updatedPoster = if (current.isGame) sanitizedUrl else current.posterUrl
+            val updatedIcon = if (!current.isGame) sanitizedUrl else current.iconUrl
+            _editingItem.value = current.copy(
+                title = resolvedTitle,
+                posterUrl = updatedPoster,
+                iconUrl = updatedIcon,
+                isCustomized = true
+            )
+            viewModelScope.launch {
+                repository.updateTitleAndArtwork(id, resolvedTitle, updatedPoster, updatedIcon)
+            }
+        }
+    }
+
+    fun removeItemNsfwPoster(id: String, newTitle: String) {
+        val current = _editingItem.value?.takeIf { it.id == id } ?: return
+        val resolvedTitle = newTitle.trim().ifBlank { current.title }
+        _editingItem.value = current.copy(
+            title = resolvedTitle,
+            nsfwPosterUrl = null,
+            isCustomized = true
+        )
+        viewModelScope.launch {
+            repository.updateTitleAndNsfwPoster(id, resolvedTitle, null)
         }
     }
 

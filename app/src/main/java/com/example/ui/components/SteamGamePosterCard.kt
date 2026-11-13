@@ -51,6 +51,7 @@ fun SteamGamePosterCard(
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
     showFocusOutline: Boolean = true,
+    showNsfwPoster: Boolean = false,
     onFocus: (() -> Unit)? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -108,7 +109,12 @@ fun SteamGamePosterCard(
             )
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                val imageUrl = game.posterUrl ?: game.heroBannerUrl ?: game.iconUrl
+                val activePoster = if (showNsfwPoster && !game.nsfwPosterUrl.isNullOrBlank()) {
+                    game.nsfwPosterUrl
+                } else {
+                    game.posterUrl
+                }
+                val imageUrl = activePoster ?: game.heroBannerUrl ?: game.iconUrl
                 // A broken or unreachable URL should fall back to the type icon rather
                 // than leaving an empty card.
                 var imageFailed by remember(imageUrl) { mutableStateOf(false) }

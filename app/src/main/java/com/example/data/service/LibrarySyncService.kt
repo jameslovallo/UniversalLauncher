@@ -277,7 +277,8 @@ class LibrarySyncService(
     // ---- Poster Export & Import ---------------------------------------------------
 
     /**
-     * Exports all assigned game posters into a `posters/` folder inside the sync folder.
+     * Exports all assigned game posters (default and optional NSFW) into a `posters/` folder
+     * inside the sync folder, and removes exported poster files when artwork is cleared or deleted.
      */
     private fun exportPosters(items: List<GameItem>, treeUri: Uri) {
         runCatching {
@@ -287,34 +288,63 @@ class LibrarySyncService(
             val existingFiles = listChildDocuments(treeUri, postersFolderDocId)
 
             items.forEach { item ->
-                if (item.isDeleted || item.posterUrl.isNullOrBlank()) return@forEach
-                val rawUrl = item.posterUrl
-                val fileName = posterFileNameFor(item.id)
-                val existingDocUri = existingFiles[fileName]
-
-                if (existingDocUri != null && documentSize(existingDocUri) > 0L) {
-                    return@forEach
-                }
-
-                val bytes = fetchPosterBytes(rawUrl) ?: return@forEach
-                val docUri = existingDocUri ?: DocumentsContract.createDocument(
-                    resolver,
-                    postersFolderUri,
-                    "image/png",
-                    fileName
-                ) ?: return@forEach
-
-                resolver.openOutputStream(docUri, "wt")?.use { out ->
-                    out.write(bytes)
-                }
-                existingFiles[fileName] = docUri
+                exportSinglePosterSlot(
+                    postersFolderUri = postersFolderUri,
+                    existingFiles = existingFiles,
+                    fileName = posterFileNameFor(item.id),
+                    rawUrl = if (item.isDeleted) null else item.posterUrl
+                )
+                exportSinglePosterSlot(
+                    postersFolderUri = postersFolderUri,
+                    existingFiles = existingFiles,
+                    fileName = nsfwPosterFileNameFor(item.id),
+                    rawUrl = if (item.isDeleted) null else item.nsfwPosterUrl
+                )
             }
         }
     }
 
+    private fun exportSinglePosterSlot(
+        postersFolderUri: Uri,
+        existingFiles: MutableMap<String, Uri>,
+        fileName: String,
+        rawUrl: String?
+    ) {
+        val existingDocUri = existingFiles[fileName]
+        if (rawUrl.isNullOrBlank()) {
+            if (existingDocUri != null) {
+                runCatching { DocumentsContract.deleteDocument(resolver, existingDocUri) }
+                existingFiles.remove(fileName)
+            }
+            return
+        }
+
+        val isLocal = rawUrl.startsWith("file:") || rawUrl.startsWith("content:")
+        if (!isLocal && existingDocUri != null && documentSize(existingDocUri) > 0L) {
+            return
+        }
+
+        val bytes = fetchPosterBytes(rawUrl) ?: return
+        if (existingDocUri != null && documentSize(existingDocUri) == bytes.size.toLong()) {
+            return
+        }
+
+        val docUri = existingDocUri ?: DocumentsContract.createDocument(
+            resolver,
+            postersFolderUri,
+            "image/png",
+            fileName
+        ) ?: return
+
+        resolver.openOutputStream(docUri, "wt")?.use { out ->
+            out.write(bytes)
+        }
+        existingFiles[fileName] = docUri
+    }
+
     /**
-     * Restores poster images from the sync folder's `posters/` directory into local storage
-     * so that artwork displays reliably offline and across devices.
+     * Restores local poster images from the sync folder's `posters/` directory when the JSON
+     * metadata omits a shareable URL (for example `file:` artwork picked on another device).
      */
     private fun importPosters(items: List<GameItem>, treeUri: Uri): List<GameItem> {
         return runCatching {
@@ -327,40 +357,64 @@ class LibrarySyncService(
             val localDir = File(context.filesDir, "custom_art").apply { mkdirs() }
 
             items.map { item ->
-                val fileName = posterFileNameFor(item.id)
-                val posterDocUri = existingFiles[fileName]
-                if (posterDocUri != null) {
-                    val safeId = item.id.replace(Regex("[^A-Za-z0-9._-]"), "_")
-                    val localFile = File(localDir, "$safeId-synced.png")
-                    val copied = runCatching {
-                        if (!localFile.exists() || localFile.length() == 0L) {
-                            resolver.openInputStream(posterDocUri)?.use { input ->
-                                localFile.outputStream().use { output ->
-                                    input.copyTo(output)
-                                }
-                            }
-                        }
-                        localFile.exists() && localFile.length() > 0L
-                    }.getOrDefault(false)
+                val safeId = item.id.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                var updated = item
 
-                    if (copied) {
-                        item.copy(
-                            posterUrl = Uri.fromFile(localFile).toString(),
-                            customArtworkSource = item.customArtworkSource ?: "SYNCED"
+                if (item.posterUrl.isNullOrBlank()) {
+                    val importedPoster = copyPosterFromSyncFolder(
+                        posterDocUri = existingFiles[posterFileNameFor(item.id)],
+                        localFile = File(localDir, "$safeId-synced.png")
+                    )
+                    if (importedPoster != null) {
+                        updated = updated.copy(
+                            posterUrl = importedPoster,
+                            customArtworkSource = updated.customArtworkSource ?: "SYNCED"
                         )
-                    } else {
-                        item
                     }
-                } else {
-                    item
                 }
+
+                if (item.nsfwPosterUrl.isNullOrBlank()) {
+                    val importedNsfw = copyPosterFromSyncFolder(
+                        posterDocUri = existingFiles[nsfwPosterFileNameFor(item.id)],
+                        localFile = File(localDir, "$safeId-nsfw-synced.png")
+                    )
+                    if (importedNsfw != null) {
+                        updated = updated.copy(nsfwPosterUrl = importedNsfw)
+                    }
+                }
+
+                updated
             }
         }.getOrDefault(items)
+    }
+
+    private fun copyPosterFromSyncFolder(posterDocUri: Uri?, localFile: File): String? {
+        if (posterDocUri == null) return null
+        val remoteSize = documentSize(posterDocUri)
+        val copied = runCatching {
+            val needsCopy = !localFile.exists() ||
+                localFile.length() == 0L ||
+                (remoteSize > 0L && localFile.length() != remoteSize)
+            if (needsCopy) {
+                resolver.openInputStream(posterDocUri)?.use { input ->
+                    localFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+            localFile.exists() && localFile.length() > 0L
+        }.getOrDefault(false)
+        return if (copied) Uri.fromFile(localFile).toString() else null
     }
 
     private fun posterFileNameFor(itemId: String): String {
         val safeId = itemId.replace(Regex("[^A-Za-z0-9._-]"), "_")
         return "poster_$safeId.png"
+    }
+
+    private fun nsfwPosterFileNameFor(itemId: String): String {
+        val safeId = itemId.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return "poster_nsfw_$safeId.png"
     }
 
     private fun fetchPosterBytes(rawUrl: String): ByteArray? = runCatching {

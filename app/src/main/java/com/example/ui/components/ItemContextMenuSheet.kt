@@ -64,6 +64,7 @@ import com.example.data.model.GameType
 @Composable
 fun ItemContextMenuSheet(
     item: GameItem,
+    showNsfwPoster: Boolean = false,
     onCustomize: () -> Unit,
     onMove: () -> Unit,
     onToggleFavorite: () -> Unit,
@@ -126,7 +127,12 @@ fun ItemContextMenuSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    val previewImage = item.posterUrl ?: item.heroBannerUrl ?: item.iconUrl
+                    val activePoster = if (showNsfwPoster && !item.nsfwPosterUrl.isNullOrBlank()) {
+                        item.nsfwPosterUrl
+                    } else {
+                        item.posterUrl
+                    }
+                    val previewImage = activePoster ?: item.heroBannerUrl ?: item.iconUrl
                     Box(
                         modifier = Modifier
                             .size(54.dp)

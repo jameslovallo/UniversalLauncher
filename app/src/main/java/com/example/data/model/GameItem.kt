@@ -23,6 +23,7 @@ data class GameItem(
     val launchUrl: String? = null,
     val gfnCmsId: String? = null,
     val posterUrl: String? = null,
+    val nsfwPosterUrl: String? = null,
     val heroBannerUrl: String? = null,
     val iconUrl: String? = null,
     val genre: String = "Game",

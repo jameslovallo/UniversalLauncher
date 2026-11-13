@@ -142,6 +142,7 @@ internal object LibrarySyncCodec {
         item.gfnCmsId?.let { put("gfnCmsId", it) }
         // Local artwork paths only exist on this device.
         shareableUrl(item.posterUrl)?.let { put("posterUrl", it) }
+        shareableUrl(item.nsfwPosterUrl)?.let { put("nsfwPosterUrl", it) }
         shareableUrl(item.heroBannerUrl)?.let { put("heroBannerUrl", it) }
         shareableUrl(item.iconUrl)?.let { put("iconUrl", it) }
         put("genre", item.genre)
@@ -171,6 +172,7 @@ internal object LibrarySyncCodec {
                 launchUrl = json.optNullableString("launchUrl"),
                 gfnCmsId = json.optNullableString("gfnCmsId"),
                 posterUrl = json.optNullableString("posterUrl"),
+                nsfwPosterUrl = json.optNullableString("nsfwPosterUrl"),
                 heroBannerUrl = json.optNullableString("heroBannerUrl"),
                 iconUrl = json.optNullableString("iconUrl"),
                 genre = json.optString("genre", "Game"),
@@ -208,6 +210,7 @@ internal object LibrarySyncCodec {
         item.launchUrl.orEmpty(),
         item.gfnCmsId.orEmpty(),
         shareableUrl(item.posterUrl).orEmpty(),
+        shareableUrl(item.nsfwPosterUrl).orEmpty(),
         shareableUrl(item.heroBannerUrl).orEmpty(),
         shareableUrl(item.iconUrl).orEmpty(),
         item.genre,

@@ -17,7 +17,8 @@ data class ArtworkOption(
     val thumbnailUrl: String,
     val fullUrl: String,
     val type: ArtworkType, // POSTER (vertical 2:3 / 600x900), HERO (horizontal 16:9), ICON (square)
-    val authorOrSource: String = "SteamGridDB"
+    val authorOrSource: String = "SteamGridDB",
+    val isNsfw: Boolean = false
 )
 
 enum class ArtworkType {
@@ -102,12 +103,30 @@ object SteamGridDbService {
         includeNsfw: Boolean
     ): List<ArtworkOption> {
         val match = findGameWithPublicApi(query, requireExact = false) ?: return emptyList()
-        return fetchPublicAssets(match.id, limit = 40, includeNsfw = includeNsfw)
+        val safeAssets = requestPublicAssets(match.id, limit = 40, includeRestricted = false)
             .filter(::isPortraitGrid)
-            .filter { includeNsfw || !it.optBoolean("nsfw") }
-            .sortedWith(artworkPreference)
-            .take(30)
-            .toArtworkOptions(match.name)
+            .filterNot { it.optBoolean("nsfw") }
+
+        val combined = if (includeNsfw) {
+            val restricted = requestPublicAssets(match.id, limit = 40, includeRestricted = true)
+                .filter(::isPortraitGrid)
+            val safe = safeAssets.ifEmpty {
+                restricted.filterNot { it.optBoolean("nsfw") }
+            }
+            val safeIds = safe.ids()
+            val adult = restricted
+                .filter { it.optBoolean("nsfw") }
+                .filterNot { it.optInt("id", 0) in safeIds }
+            safe.portraitFirst().take(30) + adult.portraitFirst().take(30)
+        } else {
+            val safe = safeAssets.ifEmpty {
+                requestPublicAssets(match.id, limit = 40, includeRestricted = true)
+                    .filter(::isPortraitGrid)
+                    .filterNot { it.optBoolean("nsfw") }
+            }
+            safe.portraitFirst().take(30)
+        }
+        return combined.toArtworkOptions(match.name)
     }
 
     private fun searchArtworkWithApiKey(
@@ -132,7 +151,8 @@ object SteamGridDbService {
         } else {
             emptyList()
         }
-        return (safe.portraitFirst() + adult.portraitFirst()).toArtworkOptions(match.name)
+        return (safe.portraitFirst().take(30) + adult.portraitFirst().take(30))
+            .toArtworkOptions(match.name)
     }
 
     private fun fetchV2Grids(
@@ -169,19 +189,10 @@ object SteamGridDbService {
                 fullUrl = url,
                 type = ArtworkType.POSTER,
                 authorOrSource = item.optJSONObject("author")?.optString("name", "SteamGridDB")
-                    ?: "SteamGridDB"
+                    ?: "SteamGridDB",
+                isNsfw = item.optBoolean("nsfw")
             )
         }
-
-    /**
-     * Safe artwork before adult artwork, and the 600x900 portrait size before anything
-     * else within each group, so the picker opens on the conventional box art.
-     */
-    private val artworkPreference: Comparator<JSONObject> =
-        compareBy<JSONObject> { it.optBoolean("nsfw") }
-            .thenByDescending {
-                it.optInt("width", 0) == 600 && it.optInt("height", 0) == 900
-            }
 
     private fun authorizedRequest(url: String, apiKey: String): Request =
         Request.Builder()

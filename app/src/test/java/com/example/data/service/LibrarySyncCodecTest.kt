@@ -162,4 +162,58 @@ class LibrarySyncCodecTest {
 
         assertTrue(error is IllegalStateException)
     }
+
+    @Test
+    fun `nsfw poster url round trips and affects signature`() {
+        val safeOnly = gfnGame()
+        val withNsfw = safeOnly.copy(nsfwPosterUrl = "https://cdn.example/nsfw-poster.jpg")
+
+        val document = LibrarySyncCodec.buildDocument(listOf(withNsfw), 42L).toString()
+        val parsed = LibrarySyncCodec.parse(document)
+
+        assertEquals("https://cdn.example/nsfw-poster.jpg", parsed.items.single().nsfwPosterUrl)
+        assertEquals(safeOnly.posterUrl, parsed.items.single().posterUrl)
+        assertNotEquals(
+            LibrarySyncCodec.signature(listOf(safeOnly)),
+            LibrarySyncCodec.signature(listOf(withNsfw))
+        )
+    }
+
+    @Test
+    fun `local nsfw artwork paths are omitted from sync document`() {
+        val localNsfw = gfnGame().copy(nsfwPosterUrl = "file:/art/nsfw.png")
+        val document = LibrarySyncCodec.buildDocument(listOf(localNsfw), 42L).toString()
+        val parsed = LibrarySyncCodec.parse(document)
+
+        assertNull(parsed.items.single().nsfwPosterUrl)
+        assertEquals(
+            LibrarySyncCodec.signature(listOf(gfnGame())),
+            LibrarySyncCodec.signature(listOf(localNsfw))
+        )
+    }
+
+    @Test
+    fun `version two documents without nsfwPosterUrl remain compatible and authoritative`() {
+        val legacyV2 = """
+            {
+              "format": "nexus_library",
+              "version": 2,
+              "updatedAt": 100,
+              "items": [
+                {
+                  "id": "gfn_1",
+                  "title": "Control",
+                  "type": "GEFORCE_NOW",
+                  "posterUrl": "https://cdn.example/poster.jpg"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val parsed = LibrarySyncCodec.parse(legacyV2)
+
+        assertTrue(parsed.authoritative)
+        assertEquals("https://cdn.example/poster.jpg", parsed.items.single().posterUrl)
+        assertNull(parsed.items.single().nsfwPosterUrl)
+    }
 }
