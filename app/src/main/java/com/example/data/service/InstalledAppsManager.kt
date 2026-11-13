@@ -1,14 +1,17 @@
 package com.example.data.service
 
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.net.Uri
 import android.os.Build
+import android.os.UserManager
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.Settings
@@ -316,6 +319,49 @@ class InstalledAppsManager(private val context: Context) {
     }
 
     /**
+     * Returns true when [packageName] is protected by the OS or device policy and cannot be
+     * uninstalled by the user according to standard Android APIs:
+     * - User/parental restrictions (`DISALLOW_UNINSTALL_APPS` or `DISALLOW_APPS_CONTROL`)
+     * - Active device administrators (`DevicePolicyManager.getActiveAdmins`)
+     * - Pre-installed system/persistent flags (`FLAG_SYSTEM`, `FLAG_UPDATED_SYSTEM_APP`,
+     *   `FLAG_PERSISTENT`), which cover Fire OS / OEM built-in apps.
+     */
+    fun isProtectedApp(packageName: String): Boolean {
+        if (packageName == context.packageName) return true
+
+        val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager
+        val userRestricted = runCatching {
+            userManager?.hasUserRestriction(UserManager.DISALLOW_UNINSTALL_APPS) == true ||
+                userManager?.hasUserRestriction(UserManager.DISALLOW_APPS_CONTROL) == true
+        }.getOrDefault(false)
+        if (userRestricted) return true
+
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+        val isActiveAdmin = runCatching {
+            dpm?.activeAdmins?.any { it.packageName == packageName } == true
+        }.getOrDefault(false)
+        if (isActiveAdmin) return true
+
+        val appInfo = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getApplicationInfo(
+                    packageName,
+                    PackageManager.ApplicationInfoFlags.of(0L)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getApplicationInfo(packageName, 0)
+            }
+        } catch (_: PackageManager.NameNotFoundException) {
+            return false
+        } catch (_: Exception) {
+            return false
+        }
+
+        return isProtectedApplicationFlags(appInfo.flags)
+    }
+
+    /**
      * Open the system app-info screen for an installed package.
      */
     fun openAppInfo(packageName: String) {
@@ -470,3 +516,10 @@ private val UUID_PATTERN = Regex(
         "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
+internal fun isProtectedApplicationFlags(flags: Int): Boolean =
+    (flags and PROTECTED_APP_FLAGS) != 0
+
+private const val PROTECTED_APP_FLAGS =
+    ApplicationInfo.FLAG_SYSTEM or
+        ApplicationInfo.FLAG_UPDATED_SYSTEM_APP or
+        ApplicationInfo.FLAG_PERSISTENT

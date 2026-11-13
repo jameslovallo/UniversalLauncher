@@ -71,6 +71,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _contextMenuItem = MutableStateFlow<GameItem?>(null)
     val contextMenuItem: StateFlow<GameItem?> = _contextMenuItem.asStateFlow()
 
+    private val _canDeleteContextMenuItem = MutableStateFlow(true)
+    val canDeleteContextMenuItem: StateFlow<Boolean> = _canDeleteContextMenuItem.asStateFlow()
+
     // Item being customized (Name, Icon, Poster)
     private val _editingItem = MutableStateFlow<GameItem?>(null)
     val editingItem: StateFlow<GameItem?> = _editingItem.asStateFlow()
@@ -327,7 +330,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     // Context Menu Handlers
     fun openContextMenu(item: GameItem) {
+        _canDeleteContextMenuItem.value = canDeleteLibraryItem(item)
         _contextMenuItem.value = item
+    }
+
+    private fun canDeleteLibraryItem(item: GameItem): Boolean {
+        if (item.type != GameType.INSTALLED_APP) return true
+        val pkg = item.packageName?.takeIf { it.isNotBlank() } ?: return true
+        return !installedAppsManager.isProtectedApp(pkg)
     }
 
     /** Clear a game's last-played timestamp so it drops out of the recents ordering. */
@@ -444,6 +454,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun deleteItem(item: GameItem) {
+        if (!canDeleteLibraryItem(item)) return
         viewModelScope.launch {
             // Native apps in the Apps tab get a real uninstall prompt; shortcuts and
             // other library entries are simply removed. Deleting records a tombstone so

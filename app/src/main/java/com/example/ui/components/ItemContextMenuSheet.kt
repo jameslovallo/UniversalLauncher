@@ -65,6 +65,7 @@ import com.example.data.model.GameType
 fun ItemContextMenuSheet(
     item: GameItem,
     showNsfwPoster: Boolean = false,
+    canDelete: Boolean = true,
     onCustomize: () -> Unit,
     onMove: () -> Unit,
     onToggleFavorite: () -> Unit,
@@ -244,39 +245,41 @@ fun ItemContextMenuSheet(
                 testTag = "context_menu_hide"
             )
 
-            // Explicit destructive action: uninstall a native app, delete a shortcut, or
-            // remove a game tile from the library.
-            val isNativeApp = item.type == GameType.INSTALLED_APP &&
-                !item.isGame && !item.packageName.isNullOrBlank()
-            val deleteLabel = when {
-                isNativeApp -> "Uninstall app"
-                item.isGame -> "Remove from library"
-                else -> "Delete shortcut"
-            }
+            if (canDelete) {
+                // Explicit destructive action: uninstall a native app, delete a shortcut, or
+                // remove a game tile from the library. Hidden for protected/system apps.
+                val isNativeApp = item.type == GameType.INSTALLED_APP &&
+                    !item.isGame && !item.packageName.isNullOrBlank()
+                val deleteLabel = when {
+                    isNativeApp -> "Uninstall app"
+                    item.isGame -> "Remove from library"
+                    else -> "Delete shortcut"
+                }
 
-            Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-            Button(
-                onClick = onDelete,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer
-                ),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-                    .testTag("context_menu_delete")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = null
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = deleteLabel,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Button(
+                    onClick = onDelete,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("context_menu_delete")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = null
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = deleteLabel,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))

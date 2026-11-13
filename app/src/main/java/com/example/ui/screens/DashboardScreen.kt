@@ -142,6 +142,7 @@ fun DashboardScreen(
     val focusedItemId by viewModel.focusedItemId.collectAsStateWithLifecycle()
 
     val contextMenuItem by viewModel.contextMenuItem.collectAsStateWithLifecycle()
+    val canDeleteContextMenuItem by viewModel.canDeleteContextMenuItem.collectAsStateWithLifecycle()
     val editingItem by viewModel.editingItem.collectAsStateWithLifecycle()
     val showAddModal by viewModel.showAddModal.collectAsStateWithLifecycle()
     val addModalSubView by viewModel.addModalSubView.collectAsStateWithLifecycle()
@@ -592,6 +593,7 @@ fun DashboardScreen(
             ItemContextMenuSheet(
                 item = contextMenuItem!!,
                 showNsfwPoster = steamGridDbIncludeNsfw,
+                canDelete = canDeleteContextMenuItem,
                 onCustomize = { viewModel.openEditCustomizer(contextMenuItem!!) },
                 onMove = {
                     if (contextMenuItem!!.isGame) {
