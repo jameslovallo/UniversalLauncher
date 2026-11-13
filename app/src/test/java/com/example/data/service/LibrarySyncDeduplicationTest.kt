@@ -7,6 +7,7 @@ import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
+import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
@@ -197,6 +198,193 @@ class LibrarySyncDeduplicationTest {
                 LibrarySyncCodec.localFileSha256(syncedGame.nsfwPosterUrl!!)
             )
         }
+
+    @Test
+    fun `sync forces refresh of Drive posters folder and pulls missing image assets even when metadata matches`() =
+        runBlocking {
+            val prefs = context.getSharedPreferences(
+                "sync_refresh_test_${System.nanoTime()}",
+                Context.MODE_PRIVATE
+            )
+            val syncService = LibrarySyncService(context, repository, prefs)
+
+            val staleBytes = byteArrayOf(1, 2, 3)
+            val latestPosterBytes = byteArrayOf(11, 22, 33, 44, 55, 66)
+            val latestHash = LibrarySyncCodec.sha256Hex(latestPosterBytes)
+
+            val game = GameItem(
+                id = "gfn_refresh",
+                title = "Cyberpunk 2077",
+                type = GameType.GEFORCE_NOW,
+                isGame = true,
+                customArtworkSource = "FILE"
+            )
+            val docJson = LibrarySyncCodec.buildDocument(
+                items = listOf(game),
+                updatedAt = 800L,
+                localHashForUrl = { null }
+            ).apply {
+                getJSONArray("items").getJSONObject(0).put("posterHash", latestHash)
+            }.toString()
+
+            provider.addFile(
+                parentId = FakeDriveDocumentsProvider.ROOT_ID,
+                docId = "json_main",
+                name = LibrarySyncService.FILE_NAME,
+                mimeType = "application/json",
+                bytes = docJson.toByteArray(),
+                lastModified = 2000L
+            )
+            provider.addDir(
+                parentId = FakeDriveDocumentsProvider.ROOT_ID,
+                docId = "posters_dir",
+                name = LibrarySyncService.POSTERS_DIR_NAME,
+                lastModified = 2000L
+            )
+            provider.addFile(
+                parentId = "posters_dir",
+                docId = "poster_refresh_file",
+                name = "poster_gfn_refresh.png",
+                mimeType = "image/png",
+                bytes = staleBytes,
+                lastModified = 2500L
+            )
+
+            // Simulate Google Drive SAF caching:
+            // 1) posters_dir hides its children until refresh() is called on the folder
+            // 2) poster_refresh_file serves staleBytes until refresh() is called on that file.
+            provider.hideChildrenUntilRefreshed("posters_dir")
+            provider.updateFileOnRefresh("poster_refresh_file", latestPosterBytes)
+
+            val treeUri = DocumentsContract.buildTreeDocumentUri(
+                FakeDriveDocumentsProvider.AUTHORITY,
+                FakeDriveDocumentsProvider.ROOT_ID
+            )
+
+            val outcome = syncService.configureFolder(treeUri)
+            assertTrue(outcome is LibrarySyncOutcome.Applied)
+            assertTrue(provider.refreshedIds.contains("posters_dir"))
+            assertTrue(provider.refreshedIds.contains("poster_refresh_file"))
+
+            val imported = repository.getGameById("gfn_refresh")
+            assertNotNull(imported?.posterUrl)
+            assertEquals(latestHash, LibrarySyncCodec.localFileSha256(imported!!.posterUrl!!))
+
+            // Delete the local cached poster file to simulate missing local asset while
+            // nexus-library.json metadata and version otherwise already match, then syncNow().
+            val localFile = File(Uri.parse(imported.posterUrl!!).path!!)
+            assertTrue(localFile.delete())
+
+            provider.refreshedIds.clear()
+            val secondOutcome = syncService.syncNow()
+            assertTrue(secondOutcome is LibrarySyncOutcome.Applied)
+            assertTrue(provider.refreshedIds.contains("posters_dir"))
+
+            val restored = repository.getGameById("gfn_refresh")
+            assertNotNull(restored?.posterUrl)
+            assertEquals(latestHash, LibrarySyncCodec.localFileSha256(restored!!.posterUrl!!))
+        }
+
+    @Test
+    fun `sync never overwrites or imports favorites for games or installed apps`() =
+        runBlocking {
+            val prefs = context.getSharedPreferences(
+                "sync_no_favorites_test_${System.nanoTime()}",
+                Context.MODE_PRIVATE
+            )
+            val syncService = LibrarySyncService(context, repository, prefs)
+
+            // Seed local database with an installed app favorited on THIS device, plus a game
+            // favorited on THIS device at order 2.
+            val localApp = GameItem(
+                id = "app_com.example.browser",
+                title = "Browser",
+                type = GameType.INSTALLED_APP,
+                isGame = false,
+                packageName = "com.example.browser",
+                isFavorite = true,
+                favoriteOrder = 0
+            )
+            val localGame = GameItem(
+                id = "gfn_fav",
+                title = "Control",
+                type = GameType.GEFORCE_NOW,
+                isGame = true,
+                isFavorite = true,
+                favoriteOrder = 2
+            )
+            db.gameDao().insertGames(listOf(localApp, localGame))
+
+            // Remote sync JSON contains legacy favorite flags (different order / false locally)
+            // and a renamed app + updated game.
+            val remoteJson = """
+                {
+                  "format": "nexus_library",
+                  "version": 2,
+                  "updatedAt": 900,
+                  "localPosters": true,
+                  "items": [
+                    {
+                      "id": "gfn_fav",
+                      "title": "Control Ultimate",
+                      "type": "GEFORCE_NOW",
+                      "isGame": true,
+                      "isFavorite": false,
+                      "favoriteOrder": 0
+                    },
+                    {
+                      "id": "gfn_remote_only",
+                      "title": "Hades",
+                      "type": "GEFORCE_NOW",
+                      "isGame": true,
+                      "isFavorite": true,
+                      "favoriteOrder": 1
+                    }
+                  ],
+                  "appCustomizations": [
+                    {
+                      "id": "app_com.example.browser",
+                      "title": "Custom Browser",
+                      "type": "INSTALLED_APP",
+                      "isGame": false,
+                      "isCustomized": true,
+                      "isFavorite": false,
+                      "favoriteOrder": 0
+                    }
+                  ]
+                }
+            """.trimIndent()
+
+            provider.addFile(
+                parentId = FakeDriveDocumentsProvider.ROOT_ID,
+                docId = "json_main",
+                name = LibrarySyncService.FILE_NAME,
+                mimeType = "application/json",
+                bytes = remoteJson.toByteArray(),
+                lastModified = 3000L
+            )
+
+            val treeUri = DocumentsContract.buildTreeDocumentUri(
+                FakeDriveDocumentsProvider.AUTHORITY,
+                FakeDriveDocumentsProvider.ROOT_ID
+            )
+            val outcome = syncService.configureFolder(treeUri)
+            assertTrue(outcome is LibrarySyncOutcome.Applied)
+
+            val syncedApp = repository.getGameById("app_com.example.browser")!!
+            assertEquals("Custom Browser", syncedApp.title)
+            assertTrue(syncedApp.isFavorite)
+            assertEquals(0, syncedApp.favoriteOrder)
+
+            val syncedExistingGame = repository.getGameById("gfn_fav")!!
+            assertEquals("Control Ultimate", syncedExistingGame.title)
+            assertTrue(syncedExistingGame.isFavorite)
+            assertEquals(2, syncedExistingGame.favoriteOrder)
+
+            val syncedRemoteGame = repository.getGameById("gfn_remote_only")!!
+            assertEquals(false, syncedRemoteGame.isFavorite)
+            assertEquals(0, syncedRemoteGame.favoriteOrder)
+        }
 }
 
 class FakeDriveDocumentsProvider : DocumentsProvider() {
@@ -211,11 +399,17 @@ class FakeDriveDocumentsProvider : DocumentsProvider() {
 
     private lateinit var storageDir: File
     private val nodes = linkedMapOf<String, Node>()
+    private val hiddenUntilRefresh = mutableSetOf<String>()
+    private val pendingRefreshContent = mutableMapOf<String, ByteArray>()
+    val refreshedIds = mutableSetOf<String>()
     private var nextId = 1
 
     fun reset(dir: File) {
         storageDir = dir.apply { deleteRecursively(); mkdirs() }
         nodes.clear()
+        hiddenUntilRefresh.clear()
+        pendingRefreshContent.clear()
+        refreshedIds.clear()
         nodes[ROOT_ID] = Node(
             docId = ROOT_ID,
             parentId = null,
@@ -223,6 +417,14 @@ class FakeDriveDocumentsProvider : DocumentsProvider() {
             mimeType = DocumentsContract.Document.MIME_TYPE_DIR,
             lastModified = 100L
         )
+    }
+
+    fun hideChildrenUntilRefreshed(dirId: String) {
+        hiddenUntilRefresh.add(dirId)
+    }
+
+    fun updateFileOnRefresh(docId: String, newBytes: ByteArray) {
+        pendingRefreshContent[docId] = newBytes
     }
 
     fun addDir(parentId: String, docId: String, name: String, lastModified: Long) {
@@ -259,6 +461,20 @@ class FakeDriveDocumentsProvider : DocumentsProvider() {
 
     override fun onCreate(): Boolean = true
 
+    override fun refresh(
+        uri: Uri,
+        args: Bundle?,
+        signal: CancellationSignal?
+    ): Boolean {
+        val docId = runCatching { DocumentsContract.getDocumentId(uri) }.getOrNull() ?: return false
+        refreshedIds.add(docId)
+        hiddenUntilRefresh.remove(docId)
+        pendingRefreshContent.remove(docId)?.let { freshBytes ->
+            nodes[docId]?.file?.writeBytes(freshBytes)
+        }
+        return true
+    }
+
     override fun queryRoots(projection: Array<out String>?): Cursor = MatrixCursor(emptyArray())
 
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor {
@@ -273,7 +489,9 @@ class FakeDriveDocumentsProvider : DocumentsProvider() {
         sortOrder: String?
     ): Cursor {
         val cursor = MatrixCursor(projection ?: DEFAULT_PROJECTION)
-        nodes.values.filter { it.parentId == parentDocumentId }.forEach { addRow(cursor, it) }
+        if (parentDocumentId !in hiddenUntilRefresh) {
+            nodes.values.filter { it.parentId == parentDocumentId }.forEach { addRow(cursor, it) }
+        }
         return cursor
     }
 

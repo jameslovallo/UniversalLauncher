@@ -3,19 +3,24 @@ package com.example.data.service
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.database.ContentObserver
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.DocumentsContract
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
 import java.io.File
 import java.io.FileNotFoundException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
@@ -24,6 +29,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 /** Result of a library folder sync or write. */
@@ -212,7 +218,7 @@ class LibrarySyncService(
     // ---- Core sync ----------------------------------------------------------------
 
     private suspend fun syncLocked(treeUri: Uri, adoptExisting: Boolean): LibrarySyncOutcome {
-        val snapshot = readDocument(treeUri)
+        val snapshot = readDocument(treeUri, forceRefresh = true)
         val allRows = repository.getAllItemsSnapshot()
         val localItems = syncable(allRows)
         val localApps = syncableAppCustomizations(allRows)
@@ -296,6 +302,45 @@ class LibrarySyncService(
         }
 
         if (differs) {
+            if (snapshot.updatedAt >= localVersion) {
+                val repairedItems = importPosters(
+                    items = localItems,
+                    posterHashes = snapshot.posterHashes,
+                    treeUri = treeUri,
+                    forceRefresh = true
+                )
+                val repairedApps = importPosters(
+                    items = localApps,
+                    posterHashes = snapshot.appPosterHashes,
+                    treeUri = treeUri,
+                    forceRefresh = true
+                )
+                val changedItems = repairedItems.items.filterIndexed { index, updated ->
+                    updated != localItems[index]
+                }
+                val changedApps = repairedApps.items.filterIndexed { index, updated ->
+                    updated != localApps[index]
+                }
+                if (changedItems.isNotEmpty() || changedApps.isNotEmpty()) {
+                    repository.updateSyncedPosters(changedItems + changedApps)
+                }
+                val repairedSignature = librarySignature(repairedItems.items, repairedApps.items)
+                if (repairedSignature == remoteSignature) {
+                    val missingAnyPoster = repairedItems.missingExpectedPoster ||
+                        repairedApps.missingExpectedPoster
+                    val storedVersion = if (missingAnyPoster) {
+                        (snapshot.updatedAt - 1L).coerceAtLeast(0L)
+                    } else {
+                        snapshot.updatedAt
+                    }
+                    prefs.edit()
+                        .putLong(KEY_UPDATED_AT, storedVersion)
+                        .putString(KEY_SIGNATURE, repairedSignature)
+                        .putLong(KEY_LAST_SYNC, System.currentTimeMillis())
+                        .apply()
+                    return LibrarySyncOutcome.Applied(repairedItems.items.size)
+                }
+            }
             return writeLocked(
                 treeUri = treeUri,
                 items = localItems,
@@ -306,15 +351,60 @@ class LibrarySyncService(
             )
         }
 
-        // Even when metadata matches, ensure any missing posters in the folder are exported
-        exportPosters(localItems + localApps, treeUri)
+        // Metadata matches, yet Google Drive's posters/ folder can lag or have updated
+        // image assets; force-refresh posters/ and pull any missing or newer images first.
+        val reconciledItems = importPosters(
+            items = localItems,
+            posterHashes = snapshot.posterHashes,
+            treeUri = treeUri,
+            forceRefresh = true
+        )
+        val reconciledApps = importPosters(
+            items = localApps,
+            posterHashes = snapshot.appPosterHashes,
+            treeUri = treeUri,
+            forceRefresh = true
+        )
+        val changedItems = reconciledItems.items.filterIndexed { index, updated ->
+            updated != localItems[index]
+        }
+        val changedApps = reconciledApps.items.filterIndexed { index, updated ->
+            updated != localApps[index]
+        }
+        val pulledAny = reconciledItems.pulledCount > 0 || reconciledApps.pulledCount > 0
+        if (changedItems.isNotEmpty() || changedApps.isNotEmpty()) {
+            repository.updateSyncedPosters(changedItems + changedApps)
+        }
 
+        // Also ensure any local posters not yet uploaded to the folder are exported.
+        exportPosters(reconciledItems.items + reconciledApps.items, treeUri)
+
+        val updatedRows = if (changedItems.isNotEmpty() || changedApps.isNotEmpty()) {
+            repository.getAllItemsSnapshot()
+        } else {
+            allRows
+        }
+        val finalSignature = librarySignature(
+            items = syncable(updatedRows),
+            appCustomizations = syncableAppCustomizations(updatedRows)
+        )
+        val missingAnyPoster = reconciledItems.missingExpectedPoster ||
+            reconciledApps.missingExpectedPoster
+        val storedVersion = if (missingAnyPoster) {
+            (snapshot.updatedAt - 1L).coerceAtLeast(0L)
+        } else {
+            maxOf(localVersion, snapshot.updatedAt)
+        }
         prefs.edit()
-            .putLong(KEY_UPDATED_AT, maxOf(localVersion, snapshot.updatedAt))
-            .putString(KEY_SIGNATURE, localSignature)
+            .putLong(KEY_UPDATED_AT, storedVersion)
+            .putString(KEY_SIGNATURE, finalSignature)
             .putLong(KEY_LAST_SYNC, System.currentTimeMillis())
             .apply()
-        return LibrarySyncOutcome.UpToDate
+        return if (changedItems.isNotEmpty() || changedApps.isNotEmpty() || pulledAny) {
+            LibrarySyncOutcome.Applied(reconciledItems.items.size)
+        } else {
+            LibrarySyncOutcome.UpToDate
+        }
     }
 
     private suspend fun writeLocked(
@@ -381,7 +471,7 @@ class LibrarySyncService(
      * Exports all assigned game posters (default and optional NSFW) into a `posters/` folder
      * inside the sync folder, and removes exported poster files when artwork is cleared or deleted.
      */
-    private fun exportPosters(items: List<GameItem>, treeUri: Uri) {
+    private suspend fun exportPosters(items: List<GameItem>, treeUri: Uri) {
         runCatching {
             val postersFolderUri = findOrCreateChildDirectory(treeUri, POSTERS_DIR_NAME)
                 ?: return
@@ -476,43 +566,54 @@ class LibrarySyncService(
 
     private data class ImportResult(
         val items: List<GameItem>,
-        val missingExpectedPoster: Boolean
+        val missingExpectedPoster: Boolean,
+        val pulledCount: Int = 0
     )
 
     /**
      * Restores local poster images from the sync folder's `posters/` directory when the JSON
-     * metadata omits a shareable URL (for example `file:` artwork picked on another device).
+     * metadata omits a shareable URL (for example `file:` artwork picked on another device) or
+     * when the local cached poster file is missing/outdated.
      */
-    private fun importPosters(
+    private suspend fun importPosters(
         items: List<GameItem>,
         posterHashes: Map<String, LibrarySyncCodec.PosterHashes>,
-        treeUri: Uri
+        treeUri: Uri,
+        forceRefresh: Boolean = true
     ): ImportResult {
         return runCatching {
-            val postersFolderUri = findChildDirectory(treeUri, POSTERS_DIR_NAME)
-            val existingFiles = if (postersFolderUri != null) {
+            val postersFolderUri = findChildDirectory(
+                treeUri = treeUri,
+                dirName = POSTERS_DIR_NAME,
+                forceRefresh = forceRefresh
+            )
+            val existingEntries = if (postersFolderUri != null) {
                 val postersFolderDocId = DocumentsContract.getDocumentId(postersFolderUri)
-                listChildDocuments(treeUri, postersFolderDocId)
+                listChildDocumentEntries(treeUri, postersFolderDocId)
             } else {
                 emptyMap()
             }
 
             val localDir = File(context.filesDir, "custom_art").apply { mkdirs() }
             var missingExpectedPoster = false
+            var pulledCount = 0
 
             val updatedItems = items.map { item ->
                 val safeId = item.id.replace(Regex("[^A-Za-z0-9._-]"), "_")
                 val expectedHashes = posterHashes[item.id]
                 var updated = item
 
-                if (item.posterUrl.isNullOrBlank()) {
+                val posterEntry = existingEntries[posterFileNameFor(item.id)]
+                if (slotNeedsPosterPull(item.posterUrl, expectedHashes?.posterHash, posterEntry)) {
                     val importedPoster = copyPosterFromSyncFolder(
-                        posterDocUri = existingFiles[posterFileNameFor(item.id)],
+                        posterEntry = posterEntry,
                         localDir = localDir,
                         filePrefix = "$safeId-synced",
-                        expectedHash = expectedHashes?.posterHash
+                        expectedHash = expectedHashes?.posterHash,
+                        forceRefresh = forceRefresh
                     )
                     if (importedPoster != null) {
+                        pulledCount++
                         updated = updated.copy(
                             posterUrl = importedPoster,
                             customArtworkSource = updated.customArtworkSource ?: "SYNCED"
@@ -522,14 +623,17 @@ class LibrarySyncService(
                     }
                 }
 
-                if (item.nsfwPosterUrl.isNullOrBlank()) {
+                val nsfwEntry = existingEntries[nsfwPosterFileNameFor(item.id)]
+                if (slotNeedsPosterPull(item.nsfwPosterUrl, expectedHashes?.nsfwPosterHash, nsfwEntry)) {
                     val importedNsfw = copyPosterFromSyncFolder(
-                        posterDocUri = existingFiles[nsfwPosterFileNameFor(item.id)],
+                        posterEntry = nsfwEntry,
                         localDir = localDir,
                         filePrefix = "$safeId-nsfw-synced",
-                        expectedHash = expectedHashes?.nsfwPosterHash
+                        expectedHash = expectedHashes?.nsfwPosterHash,
+                        forceRefresh = forceRefresh
                     )
                     if (importedNsfw != null) {
+                        pulledCount++
                         updated = updated.copy(nsfwPosterUrl = importedNsfw)
                     } else if (expectedHashes?.nsfwPosterHash != null) {
                         missingExpectedPoster = true
@@ -538,22 +642,43 @@ class LibrarySyncService(
 
                 updated
             }
-            ImportResult(updatedItems, missingExpectedPoster)
+            ImportResult(updatedItems, missingExpectedPoster, pulledCount)
         }.getOrElse {
             val expectsAnyPoster = posterHashes.values.any {
                 it.posterHash != null || it.nsfwPosterHash != null
             }
-            ImportResult(items, missingExpectedPoster = expectsAnyPoster)
+            ImportResult(items, missingExpectedPoster = expectsAnyPoster, pulledCount = 0)
         }
     }
 
-    private fun copyPosterFromSyncFolder(
-        posterDocUri: Uri?,
+    private fun slotNeedsPosterPull(
+        currentUrl: String?,
+        expectedHash: String?,
+        remoteEntry: ChildEntry?
+    ): Boolean {
+        if (currentUrl.isNullOrBlank()) return true
+        if (!currentUrl.startsWith("file:")) return false
+
+        val path = runCatching { Uri.parse(currentUrl).path }.getOrNull() ?: return true
+        val localFile = File(path)
+        if (!localFile.exists() || localFile.length() <= 0L) return true
+
+        if (!expectedHash.isNullOrBlank()) {
+            return localHashForUrl(currentUrl) != expectedHash
+        }
+        return remoteEntry != null &&
+            currentUrl.contains("-synced") &&
+            remoteEntry.lastModified > localFile.lastModified()
+    }
+
+    private suspend fun copyPosterFromSyncFolder(
+        posterEntry: ChildEntry?,
         localDir: File,
         filePrefix: String,
-        expectedHash: String?
+        expectedHash: String?,
+        forceRefresh: Boolean
     ): String? {
-        if (posterDocUri == null) return null
+        val posterDocUri = posterEntry?.uri ?: return null
 
         // Fast path: if the expected hash already matches an imported local file, reuse it.
         if (!expectedHash.isNullOrBlank()) {
@@ -569,21 +694,41 @@ class LibrarySyncService(
             }
         }
 
-        val remoteBytes = runCatching {
-            resolver.openInputStream(posterDocUri)?.use { it.readBytes() }
-        }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return null
+        if (forceRefresh) {
+            refreshDocumentUri(posterDocUri)
+        }
 
-        val actualHash = LibrarySyncCodec.sha256Hex(remoteBytes)
-        if (!expectedHash.isNullOrBlank() && actualHash != expectedHash) {
+        var remoteBytes = runCatching {
+            resolver.openInputStream(posterDocUri)?.use { it.readBytes() }
+        }.getOrNull()?.takeIf { it.isNotEmpty() }
+
+        var actualHash = remoteBytes?.let(LibrarySyncCodec::sha256Hex)
+        val staleOrEmpty = remoteBytes == null ||
+            (!expectedHash.isNullOrBlank() && actualHash != expectedHash)
+        if (staleOrEmpty) {
+            // Ask Google Drive / cloud provider again and give the refreshed content a moment
+            // to flush so a newly uploaded poster isn't lost behind stale SAF file cache.
+            refreshDocumentUri(posterDocUri)
+            delay(DRIVE_FILE_RETRY_DELAY_MS)
+            remoteBytes = runCatching {
+                resolver.openInputStream(posterDocUri)?.use { it.readBytes() }
+            }.getOrNull()?.takeIf { it.isNotEmpty() }
+            actualHash = remoteBytes?.let(LibrarySyncCodec::sha256Hex)
+        }
+
+        val verifiedBytes = remoteBytes ?: return null
+        val verifiedHash = actualHash ?: return null
+        if (!expectedHash.isNullOrBlank() && verifiedHash != expectedHash) {
             return null
         }
-        val targetFile = File(localDir, "${filePrefix}-${actualHash.take(12)}.png")
+
+        val targetFile = File(localDir, "${filePrefix}-${verifiedHash.take(12)}.png")
         val written = runCatching {
             val needsWrite = !targetFile.exists() ||
-                targetFile.length() != remoteBytes.size.toLong() ||
-                LibrarySyncCodec.sha256Hex(targetFile.readBytes()) != actualHash
+                targetFile.length() != verifiedBytes.size.toLong() ||
+                LibrarySyncCodec.sha256Hex(targetFile.readBytes()) != verifiedHash
             if (needsWrite) {
-                targetFile.writeBytes(remoteBytes)
+                targetFile.writeBytes(verifiedBytes)
             }
             cleanupOlderSyncedFiles(localDir, filePrefix, targetFile)
             targetFile.exists() && targetFile.length() > 0L
@@ -682,14 +827,14 @@ class LibrarySyncService(
             get() = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
     }
 
-    private fun readDocument(treeUri: Uri): Snapshot? =
-        findAndDeduplicateLibraryDocument(treeUri)?.snapshot
+    private suspend fun readDocument(treeUri: Uri, forceRefresh: Boolean = false): Snapshot? =
+        findAndDeduplicateLibraryDocument(treeUri, forceRefresh)?.snapshot
 
-    private fun writableDocumentUri(treeUri: Uri): Uri? =
+    private suspend fun writableDocumentUri(treeUri: Uri): Uri? =
         resolveOrCreateLibraryDocument(treeUri)?.uri
 
-    private fun resolveOrCreateLibraryDocument(treeUri: Uri): ResolvedLibraryDoc? {
-        val existing = findAndDeduplicateLibraryDocument(treeUri)
+    private suspend fun resolveOrCreateLibraryDocument(treeUri: Uri): ResolvedLibraryDoc? {
+        val existing = findAndDeduplicateLibraryDocument(treeUri, forceRefresh = false)
         if (existing != null) return existing
         val created = createChildDocument(treeUri) ?: return null
         return ResolvedLibraryDoc(uri = created, snapshot = null)
@@ -701,9 +846,16 @@ class LibrarySyncService(
      * snapshot wins (`updatedAt`, then SAF `lastModified`, then file size) and the older
      * duplicates are deleted so only one library file remains.
      */
-    private fun findAndDeduplicateLibraryDocument(treeUri: Uri): ResolvedLibraryDoc? {
+    private suspend fun findAndDeduplicateLibraryDocument(
+        treeUri: Uri,
+        forceRefresh: Boolean = false
+    ): ResolvedLibraryDoc? {
+        val rootDocId = DocumentsContract.getTreeDocumentId(treeUri)
+        if (forceRefresh) {
+            forceRefreshFolder(treeUri, rootDocId)
+        }
         val candidates = try {
-            listChildEntries(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+            listChildEntries(treeUri, rootDocId)
                 .filter { !it.isDirectory && it.name == FILE_NAME }
         } catch (error: SecurityException) {
             throw fileAccessError(error)
@@ -712,6 +864,7 @@ class LibrarySyncService(
 
         if (candidates.size == 1) {
             val only = candidates.single()
+            if (forceRefresh) refreshDocumentUri(only.uri)
             return ResolvedLibraryDoc(
                 uri = only.uri,
                 snapshot = readAndParseCandidate(only.uri, throwOnError = true)
@@ -728,6 +881,7 @@ class LibrarySyncService(
             var parsedSnapshot: Snapshot? = null
             var error: Throwable? = null
             try {
+                if (forceRefresh) refreshDocumentUri(entry.uri)
                 parsedSnapshot = readAndParseCandidate(entry.uri, throwOnError = true)
             } catch (t: Throwable) {
                 error = t
@@ -778,11 +932,17 @@ class LibrarySyncService(
         DocumentsContract.createDocument(resolver, parentUri, MIME_TYPE, FILE_NAME)
     }.getOrNull()
 
-    private fun findChildDirectory(treeUri: Uri, dirName: String): Uri? =
-        resolveCanonicalDirectory(treeUri, dirName, createIfMissing = false)
+    private suspend fun findChildDirectory(
+        treeUri: Uri,
+        dirName: String,
+        forceRefresh: Boolean = false
+    ): Uri? = resolveCanonicalDirectory(treeUri, dirName, createIfMissing = false, forceRefresh = forceRefresh)
 
-    private fun findOrCreateChildDirectory(treeUri: Uri, dirName: String): Uri? =
-        resolveCanonicalDirectory(treeUri, dirName, createIfMissing = true)
+    private suspend fun findOrCreateChildDirectory(
+        treeUri: Uri,
+        dirName: String,
+        forceRefresh: Boolean = true
+    ): Uri? = resolveCanonicalDirectory(treeUri, dirName, createIfMissing = true, forceRefresh = forceRefresh)
 
     /**
      * Resolves a named child directory (such as `posters/`). If Google Drive or another
@@ -790,13 +950,18 @@ class LibrarySyncService(
      * updated folder (by folder or newest contained poster timestamp), merges any missing
      * or newer files into it, and deletes the duplicate folders.
      */
-    private fun resolveCanonicalDirectory(
+    private suspend fun resolveCanonicalDirectory(
         treeUri: Uri,
         dirName: String,
-        createIfMissing: Boolean
+        createIfMissing: Boolean,
+        forceRefresh: Boolean = false
     ): Uri? {
+        val rootDocId = DocumentsContract.getTreeDocumentId(treeUri)
+        if (forceRefresh) {
+            forceRefreshFolder(treeUri, rootDocId)
+        }
         val dirs = runCatching {
-            listChildEntries(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+            listChildEntries(treeUri, rootDocId)
                 .filter { it.isDirectory && it.name == dirName }
         }.getOrDefault(emptyList())
 
@@ -805,7 +970,7 @@ class LibrarySyncService(
             return runCatching {
                 val parentUri = DocumentsContract.buildDocumentUriUsingTree(
                     treeUri,
-                    DocumentsContract.getTreeDocumentId(treeUri)
+                    rootDocId
                 )
                 DocumentsContract.createDocument(
                     resolver,
@@ -816,7 +981,13 @@ class LibrarySyncService(
             }.getOrNull()
         }
 
-        if (dirs.size == 1) return dirs.single().uri
+        if (dirs.size == 1) {
+            val onlyDir = dirs.single()
+            if (forceRefresh) {
+                forceRefreshFolder(treeUri, onlyDir.docId)
+            }
+            return onlyDir.uri
+        }
 
         data class DirWithChildren(
             val dir: ChildEntry,
@@ -825,6 +996,9 @@ class LibrarySyncService(
         )
 
         val inspected = dirs.map { dir ->
+            if (forceRefresh) {
+                forceRefreshFolder(treeUri, dir.docId)
+            }
             val rawChildren = runCatching {
                 listChildEntries(treeUri, dir.docId).filter { !it.isDirectory }
             }.getOrDefault(emptyList())
@@ -903,11 +1077,14 @@ class LibrarySyncService(
         return if (writeBytesToDocument(created, bytes)) created else null
     }
 
-    private fun listChildDocuments(treeUri: Uri, parentDocId: String): MutableMap<String, Uri> {
+    private fun listChildDocumentEntries(treeUri: Uri, parentDocId: String): Map<String, ChildEntry> {
         val rawFiles = listChildEntries(treeUri, parentDocId).filter { !it.isDirectory }
         return deduplicateNamedFiles(rawFiles)
-            .mapValuesTo(mutableMapOf()) { (_, entry) -> entry.uri }
     }
+
+    private fun listChildDocuments(treeUri: Uri, parentDocId: String): MutableMap<String, Uri> =
+        listChildDocumentEntries(treeUri, parentDocId)
+            .mapValuesTo(mutableMapOf()) { (_, entry) -> entry.uri }
 
     /**
      * When multiple files share the exact same display name in a folder (e.g. on Google
@@ -1009,6 +1186,74 @@ class LibrarySyncService(
         }
     }.getOrNull()
 
+    /**
+     * Triggers an explicit SAF refresh on a directory (both its document URI and children URI)
+     * so cloud providers such as Google Drive pull fresh folder listings from the server rather
+     * than serving a stale local cache. If the provider signals `EXTRA_LOADING`, waits briefly
+     * for its content notification before proceeding.
+     */
+    private suspend fun forceRefreshFolder(treeUri: Uri, docId: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
+        runCatching { resolver.refresh(docUri, Bundle.EMPTY, null) }
+        runCatching { resolver.refresh(childrenUri, Bundle.EMPTY, null) }
+        awaitProviderLoadingIfNeeded(childrenUri)
+    }
+
+    private fun refreshDocumentUri(docUri: Uri) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            runCatching { resolver.refresh(docUri, Bundle.EMPTY, null) }
+        }
+    }
+
+    private suspend fun awaitProviderLoadingIfNeeded(childrenUri: Uri) {
+        var isLoading = false
+        var notifyUri: Uri? = null
+        runCatching {
+            queryDocumentCursor(
+                childrenUri,
+                arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            )?.use { cursor ->
+                val extras = cursor.extras
+                isLoading = extras?.getBoolean(DocumentsContract.EXTRA_LOADING, false) == true
+                if (isLoading) {
+                    notifyUri = cursor.notificationUri ?: childrenUri
+                }
+            }
+        }
+        if (!isLoading) return
+
+        val targetUri = notifyUri ?: childrenUri
+        val changed = CompletableDeferred<Unit>()
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                changed.complete(Unit)
+            }
+
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                changed.complete(Unit)
+            }
+        }
+        val registered = runCatching {
+            resolver.registerContentObserver(targetUri, true, observer)
+            true
+        }.getOrDefault(false)
+        try {
+            if (registered) {
+                withTimeoutOrNull(DRIVE_LOADING_TIMEOUT_MS) {
+                    changed.await()
+                }
+            } else {
+                delay(DRIVE_FILE_RETRY_DELAY_MS)
+            }
+        } finally {
+            if (registered) {
+                runCatching { resolver.unregisterContentObserver(observer) }
+            }
+        }
+    }
+
     private fun queryDocumentCursor(uri: Uri, projection: Array<String>): Cursor? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             resolver.query(uri, projection, Bundle.EMPTY, null)
@@ -1077,6 +1322,8 @@ class LibrarySyncService(
 
         private const val MIME_TYPE = "application/json"
         private const val WRITE_DEBOUNCE_MS = 750L
+        private const val DRIVE_LOADING_TIMEOUT_MS = 3_000L
+        private const val DRIVE_FILE_RETRY_DELAY_MS = 250L
 
         private const val KEY_TREE_URI = "library_sync_tree_uri"
         private const val KEY_TARGET_LABEL = "library_sync_target_label"

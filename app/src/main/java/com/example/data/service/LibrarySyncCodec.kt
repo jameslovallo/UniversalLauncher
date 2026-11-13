@@ -16,7 +16,7 @@ import org.json.JSONObject
  * shortcuts, including tombstones) with an `updatedAt` version. Device-local details are
  * deliberately excluded from both the file and the comparison [signature]:
  *
- * - `isPinned`, play counts and last-played times
+ * - `isPinned`, `isFavorite`, `favoriteOrder`, play counts and last-played times
  * - Raw `file:` artwork paths (which are local to a device); instead, existing local
  *   poster files contribute a content SHA-256 hash (`posterHash` / `nsfwPosterHash`) so
  *   chosen-file posters sync through the folder's `posters/` directory.
@@ -69,7 +69,6 @@ internal object LibrarySyncCodec {
                     !item.nsfwPosterUrl.isNullOrBlank() ||
                     item.overlayNsfwLogo ||
                     !item.nsfwLogoUrl.isNullOrBlank() ||
-                    item.isFavorite ||
                     item.isHidden
                 )
 
@@ -278,8 +277,6 @@ internal object LibrarySyncCodec {
         put("genre", item.genre)
         put("publisher", item.publisher)
         put("description", item.description)
-        put("isFavorite", item.isFavorite)
-        put("favoriteOrder", item.favoriteOrder)
         put("isHidden", item.isHidden)
         put("isCustomized", item.isCustomized)
         put("isDeleted", item.isDeleted)
@@ -310,8 +307,9 @@ internal object LibrarySyncCodec {
                 genre = json.optString("genre", "Game"),
                 publisher = json.optString("publisher", ""),
                 description = json.optString("description", ""),
-                isFavorite = json.optBoolean("isFavorite", false),
-                favoriteOrder = json.optInt("favoriteOrder", 0),
+                // Favorites and their display order are strictly per-device.
+                isFavorite = false,
+                favoriteOrder = 0,
                 isHidden = json.optBoolean("isHidden", false),
                 isCustomized = json.optBoolean("isCustomized", false),
                 isDeleted = json.optBoolean("isDeleted", false),
@@ -364,8 +362,6 @@ internal object LibrarySyncCodec {
             item.genre,
             item.publisher,
             item.description,
-            item.isFavorite.toString(),
-            item.favoriteOrder.toString(),
             item.isHidden.toString(),
             item.isDeleted.toString(),
             item.isCustomized.toString(),

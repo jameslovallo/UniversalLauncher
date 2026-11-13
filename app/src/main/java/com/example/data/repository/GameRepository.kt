@@ -352,6 +352,8 @@ class GameRepository(
             gameDao.insertGame(
                 remote.copy(
                     isPinned = existing?.isPinned ?: false,
+                    isFavorite = existing?.isFavorite ?: false,
+                    favoriteOrder = existing?.favoriteOrder ?: 0,
                     posterUrl = resolvedPosterUrl,
                     nsfwPosterUrl = resolvedNsfwPosterUrl,
                     nsfwLogoUrl = remote.nsfwLogoUrl,
@@ -398,8 +400,8 @@ class GameRepository(
                 existing.copy(
                     title = if (remote.isCustomized && remote.title.isNotBlank()) remote.title else existing.title,
                     isGame = remote.isGame,
-                    isFavorite = remote.isFavorite,
-                    favoriteOrder = remote.favoriteOrder,
+                    isFavorite = existing.isFavorite,
+                    favoriteOrder = existing.favoriteOrder,
                     isHidden = remote.isHidden,
                     isCustomized = remote.isCustomized,
                     posterUrl = resolvedPosterUrl,
@@ -414,6 +416,12 @@ class GameRepository(
         }
     }
 
+    suspend fun updateSyncedPosters(items: List<GameItem>) {
+        if (items.isNotEmpty()) {
+            gameDao.insertGames(items)
+        }
+    }
+
     /**
      * Adds live items from an older export file without removing or overwriting local
      * rows. Used once when such a file is adopted, before it is rewritten in the current
@@ -425,7 +433,13 @@ class GameRepository(
             .filter { !it.isDeleted && isSyncableItem(it) }
             .forEach { remote ->
                 if (knownIds.add(remote.id)) {
-                    gameDao.insertGame(remote.copy(isPinned = false))
+                    gameDao.insertGame(
+                        remote.copy(
+                            isPinned = false,
+                            isFavorite = false,
+                            favoriteOrder = 0
+                        )
+                    )
                 }
             }
     }

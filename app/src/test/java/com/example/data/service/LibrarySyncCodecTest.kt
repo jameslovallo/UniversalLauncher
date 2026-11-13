@@ -32,9 +32,7 @@ class LibrarySyncCodecTest {
         id = id,
         title = title,
         type = GameType.GEFORCE_NOW,
-        posterUrl = posterUrl,
-        isFavorite = true,
-        favoriteOrder = 2
+        posterUrl = posterUrl
     )
 
     private fun moonlightGame(
@@ -350,6 +348,72 @@ class LibrarySyncCodecTest {
         assertEquals(
             parsed.appPosterHashes["app_com.example.game"]?.nsfwPosterHash,
             reparsed.appPosterHashes["app_com.example.game"]?.nsfwPosterHash
+        )
+    }
+
+    @Test
+    fun `favorites are never serialized parsed synced or included in signatures`() {
+        val favoritedGame = gfnGame().copy(isFavorite = true, favoriteOrder = 3)
+        val favoritedApp = GameItem(
+            id = "app_com.example.mail",
+            title = "Mail",
+            type = GameType.INSTALLED_APP,
+            isGame = false,
+            packageName = "com.example.mail",
+            isFavorite = true,
+            favoriteOrder = 1
+        )
+        val customizedFavoritedApp = favoritedApp.copy(
+            id = "app_com.example.music",
+            title = "Music",
+            packageName = "com.example.music",
+            isCustomized = true
+        )
+
+        // Favoriting an uncustomized app does not make it syncable.
+        val syncableApps = LibrarySyncCodec.syncableAppCustomizations(
+            listOf(favoritedApp, customizedFavoritedApp)
+        )
+        assertEquals(listOf("app_com.example.music"), syncableApps.map { it.id })
+
+        // Document never writes favorite fields and parses them as false/0 even from legacy JSON.
+        val json = LibrarySyncCodec.buildDocument(
+            items = listOf(favoritedGame),
+            updatedAt = 200L,
+            appCustomizations = syncableApps
+        ).toString()
+        assertFalse(json.contains("isFavorite"))
+        assertFalse(json.contains("favoriteOrder"))
+
+        val parsed = LibrarySyncCodec.parse(json)
+        assertFalse(parsed.items.single().isFavorite)
+        assertEquals(0, parsed.items.single().favoriteOrder)
+        assertFalse(parsed.appCustomizations.single().isFavorite)
+        assertEquals(0, parsed.appCustomizations.single().favoriteOrder)
+
+        val legacyJsonWithFavorites = """
+            {
+              "format": "nexus_library",
+              "version": 2,
+              "updatedAt": 200,
+              "items": [
+                {"id":"gfn_1","title":"Control","type":"GEFORCE_NOW","isFavorite":true,"favoriteOrder":5}
+              ],
+              "appCustomizations": [
+                {"id":"app_com.example.music","title":"Music","type":"INSTALLED_APP","isGame":false,"isCustomized":true,"isFavorite":true,"favoriteOrder":4}
+              ]
+            }
+        """.trimIndent()
+        val parsedLegacy = LibrarySyncCodec.parse(legacyJsonWithFavorites)
+        assertFalse(parsedLegacy.items.single().isFavorite)
+        assertEquals(0, parsedLegacy.items.single().favoriteOrder)
+        assertFalse(parsedLegacy.appCustomizations.single().isFavorite)
+        assertEquals(0, parsedLegacy.appCustomizations.single().favoriteOrder)
+
+        // Toggling or reordering favorites does not affect the library signature.
+        assertEquals(
+            LibrarySyncCodec.librarySignature(listOf(gfnGame()), listOf(customizedFavoritedApp.copy(isFavorite = false, favoriteOrder = 0))),
+            LibrarySyncCodec.librarySignature(listOf(favoritedGame), listOf(customizedFavoritedApp))
         )
     }
 }
