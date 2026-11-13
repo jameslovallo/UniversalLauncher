@@ -19,30 +19,35 @@ import com.example.data.model.GameType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/** A launchable app that can be used as the weather shortcut target. */
+data class WeatherApp(
+    val packageName: String,
+    val label: String
+)
+
 class InstalledAppsManager(private val context: Context) {
     private val packageManager: PackageManager = context.packageManager
+
+    private fun queryLauncherActivities(): List<ResolveInfo> {
+        val launcherIntent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.queryIntentActivities(
+                launcherIntent,
+                PackageManager.ResolveInfoFlags.of(0L)
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.queryIntentActivities(launcherIntent, 0)
+        }
+    }
 
     /**
      * Query all launchable apps on the device.
      */
     suspend fun getInstalledApps(): List<GameItem> = withContext(Dispatchers.IO) {
-        val launcherIntent = Intent(Intent.ACTION_MAIN, null).apply {
-            addCategory(Intent.CATEGORY_LAUNCHER)
-        }
-
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            PackageManager.ResolveInfoFlags.of(0L)
-        } else {
-            0
-        }
-
-        val resolveInfos: List<ResolveInfo> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            packageManager.queryIntentActivities(launcherIntent, flags as PackageManager.ResolveInfoFlags)
-        } else {
-            @Suppress("DEPRECATION")
-            packageManager.queryIntentActivities(launcherIntent, flags as Int)
-        }
-
+        val resolveInfos = queryLauncherActivities()
         val myPackageName = context.packageName
 
         resolveInfos.filter { it.activityInfo.packageName != myPackageName }.map { resolveInfo ->
@@ -76,6 +81,32 @@ class InstalledAppsManager(private val context: Context) {
                 tags = if (isGameApp) "Installed,Game,Android" else "Installed,Android,App"
             )
         }.sortedBy { it.title.lowercase() }
+    }
+
+    /**
+     * Launchable weather apps, used by the favorites weather shortcut and its Settings
+     * picker. There is no public weather intent in the Android SDK, so the list is built
+     * from known weather packages plus packages/labels that identify themselves as weather.
+     */
+    suspend fun getWeatherApps(): List<WeatherApp> = withContext(Dispatchers.IO) {
+        val myPackageName = context.packageName
+        queryLauncherActivities()
+            .asSequence()
+            .mapNotNull { resolveInfo ->
+                val pkg = resolveInfo.activityInfo.packageName
+                if (pkg == myPackageName) return@mapNotNull null
+                val label = resolveInfo.loadLabel(packageManager).toString()
+                val normalizedPackage = pkg.lowercase()
+                val normalizedLabel = label.lowercase()
+                val looksLikeWeather =
+                    pkg in WEATHER_PACKAGES ||
+                        WEATHER_PACKAGE_HINTS.any { normalizedPackage.contains(it) } ||
+                        WEATHER_LABEL_HINTS.any { normalizedLabel.contains(it) }
+                if (!looksLikeWeather) null else WeatherApp(pkg, label)
+            }
+            .distinctBy { it.packageName }
+            .sortedBy { it.label.lowercase() }
+            .toList()
     }
 
     /**
@@ -403,6 +434,25 @@ internal fun buildMoonlightShortcutIntent(
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 }
+
+/** Known launchable weather apps across common Android vendors. */
+private val WEATHER_PACKAGES = setOf(
+    "com.google.android.apps.weather",
+    "com.sec.android.app.weather",
+    "com.weather.Weather",
+    "com.accuweather.android",
+    "com.wunderground.android.weather",
+    "com.yahoo.mobile.client.android.weather",
+    "com.miui.weather2",
+    "com.coloros.weather2",
+    "com.oneplus.weather",
+    "com.huawei.android.totemweather",
+    "com.motorola.weather",
+    "com.asus.weather"
+)
+
+private val WEATHER_PACKAGE_HINTS = listOf("weather", "meteo", "forecast", "accuweather")
+private val WEATHER_LABEL_HINTS = listOf("weather", "meteo", "forecast", "accuweather")
 
 /** Moonlight launches pinned games through this activity. */
 private const val MOONLIGHT_TRAMPOLINE = "com.limelight.ShortcutTrampoline"

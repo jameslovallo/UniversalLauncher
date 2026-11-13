@@ -7,7 +7,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -53,6 +56,7 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -60,6 +64,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -67,6 +72,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.Alignment
@@ -77,16 +83,21 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -111,6 +122,7 @@ import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -147,6 +159,10 @@ fun DashboardScreen(
     val weatherZip by viewModel.weatherZip.collectAsStateWithLifecycle()
     val weatherInfo by viewModel.weatherInfo.collectAsStateWithLifecycle()
     val weatherError by viewModel.weatherError.collectAsStateWithLifecycle()
+    val temperatureUnit by viewModel.temperatureUnit.collectAsStateWithLifecycle()
+    val weatherApps by viewModel.weatherApps.collectAsStateWithLifecycle()
+    val weatherAppPackage by viewModel.weatherAppPackage.collectAsStateWithLifecycle()
+    val weatherAppChooser by viewModel.weatherAppChooser.collectAsStateWithLifecycle()
     val librarySyncBusy by viewModel.librarySyncBusy.collectAsStateWithLifecycle()
     val librarySyncStatus by viewModel.librarySyncStatus.collectAsStateWithLifecycle()
     val librarySyncConfigured by viewModel.librarySyncConfigured.collectAsStateWithLifecycle()
@@ -158,6 +174,7 @@ fun DashboardScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         viewModel.refreshInstalledApps()
         viewModel.refreshWeather()
+        viewModel.refreshWeatherApps()
     }
 
     // Phones held sideways get a compact horizontal poster row instead of a grid.
@@ -173,6 +190,12 @@ fun DashboardScreen(
     val gamesRowState = rememberLazyListState()
     val appsListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    // Requesters for the first item of each context. When a context changes we move
+    // controller focus to its first item instead of letting Compose pick whichever item
+    // happens to sit at the old focus position.
+    val favoritesFirstFocusRequester = remember { FocusRequester() }
+    val appsListFirstFocusRequester = remember { FocusRequester() }
 
     // Filter each page by the search query. Keeping both lists separate means swiping
     // between pages shows the correct results even before the tab state catches up.
@@ -235,6 +258,59 @@ fun DashboardScreen(
         }
     }
 
+    // Move controller focus to the first item of the new context. Without this, focus
+    // search keeps the old spatial position and lands on whatever item happens to be
+    // below the previously selected element.
+    var focusedAppsContext by remember { mutableStateOf(Int.MIN_VALUE) }
+    LaunchedEffect(
+        currentTab,
+        appsPagerState.currentPage,
+        appsPagerState.isScrollInProgress,
+        controllerState.isConnected,
+        favoriteApps.firstOrNull()?.id,
+        appListEntries.firstOrNull { it is AppListEntry.App },
+    ) {
+        if (!controllerState.isConnected || currentTab != MainLibraryTab.APPS) {
+            focusedAppsContext = Int.MIN_VALUE
+            return@LaunchedEffect
+        }
+        // Wait until the vertical pager has settled so the focus request is not lost
+        // while the old page is still on screen.
+        if (appsPagerState.isScrollInProgress) return@LaunchedEffect
+
+        val context = appsPagerState.currentPage
+        if (context == focusedAppsContext) return@LaunchedEffect
+
+        if (context == 0) {
+            val firstFavorite = favoriteApps.firstOrNull() ?: return@LaunchedEffect
+            focusedAppsContext = context
+            viewModel.setFocusedItem(firstFavorite.id)
+            delay(60)
+            runCatching { favoritesFirstFocusRequester.requestFocus() }
+        } else {
+            val firstAppIndex = appListEntries.indexOfFirst { it is AppListEntry.App }
+            val firstApp = appListEntries.getOrNull(firstAppIndex) as? AppListEntry.App
+                ?: return@LaunchedEffect
+            focusedAppsContext = context
+            viewModel.setFocusedItem(firstApp.item.id)
+            // The first row may not be composed if the drawer was left scrolled down.
+            val firstRowVisible = if (favoritesLayout == FavoritesLayout.ICONS) {
+                appsGridState.layoutInfo.visibleItemsInfo.any { it.index == firstAppIndex }
+            } else {
+                appsListState.layoutInfo.visibleItemsInfo.any { it.index == firstAppIndex }
+            }
+            if (!firstRowVisible) {
+                if (favoritesLayout == FavoritesLayout.ICONS) {
+                    runCatching { appsGridState.scrollToItem(0) }
+                } else {
+                    runCatching { appsListState.scrollToItem(0) }
+                }
+            }
+            delay(60)
+            runCatching { appsListFirstFocusRequester.requestFocus() }
+        }
+    }
+
     // 0f on the Apps page, 1f on the Games page. Drives the wallpaper scrim so the
     // native wallpaper is visible behind Apps and fades into a dark Material surface
     // for Games, following the swipe continuously.
@@ -271,7 +347,11 @@ fun DashboardScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .displayCutoutPadding()
+                // In the compact landscape game row the cutout inset is handled inside
+                // the row, so the row can draw the previous poster underneath the camera.
+                .then(
+                    if (isCompactLandscape) Modifier else Modifier.displayCutoutPadding()
+                )
         ) {
             // Top Navigation Bar (+ Icon Left, Apps/Games Center, Settings Gear Right)
             TopNavBar(
@@ -279,7 +359,8 @@ fun DashboardScreen(
                 alignEnd = isCompactLandscape,
                 onTabSelected = { viewModel.setTab(it) },
                 onOpenAddModal = { viewModel.openAddModal() },
-                onOpenSettings = { viewModel.openSettingsModal() }
+                onOpenSettings = { viewModel.openSettingsModal() },
+                modifier = if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
             )
 
             // Optional Search Bar
@@ -287,6 +368,9 @@ fun DashboardScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .then(
+                            if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
+                        )
                         .padding(horizontal = 20.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -313,6 +397,13 @@ fun DashboardScreen(
             // Main Content Area: swipe horizontally between the Games grid and Apps list.
             HorizontalPager(
                 state = pagerState,
+                // On the compact landscape Games page the poster row owns horizontal
+                // drags. Disabling pager dragging here stops its overscroll from
+                // revealing the Apps page; a drag above/below the row still switches.
+                userScrollEnabled = !(isCompactLandscape &&
+                    gamesDisplay.isNotEmpty() &&
+                    pagerState.currentPage == 1 &&
+                    !pagerState.isScrollInProgress),
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
@@ -337,20 +428,34 @@ fun DashboardScreen(
                             }
                     ) {
                         if (gamesDisplay.isEmpty()) {
-                            EmptyLibraryState(
-                                isGamesTab = true,
-                                searchQuery = searchQuery,
-                                onAddClicked = { viewModel.openAddModal() }
-                            )
+                            Box(
+                                modifier = if (isCompactLandscape) {
+                                    Modifier.displayCutoutPadding()
+                                } else {
+                                    Modifier
+                                }
+                            ) {
+                                EmptyLibraryState(
+                                    isGamesTab = true,
+                                    searchQuery = searchQuery,
+                                    onAddClicked = { viewModel.openAddModal() }
+                                )
+                            }
                         } else {
                             GamesPosterGrid(
                                 games = gamesDisplay,
                                 focusedItemId = focusedItemId,
                                 showFocusEffects = controllerState.isConnected,
-                                isGamesTabOpen = currentTab == MainLibraryTab.GAMES && pagerState.currentPage == 1,
+                                isGamesTabOpen = currentTab == MainLibraryTab.GAMES &&
+                                    pagerState.currentPage == 1 &&
+                                    !pagerState.isScrollInProgress,
+                                isGamesPage = currentTab == MainLibraryTab.GAMES,
                                 gridState = gridState,
                                 rowState = gamesRowState,
                                 compactLandscape = isCompactLandscape,
+                                onSwipeToApps = {
+                                    scope.launch { pagerState.animateScrollToPage(0) }
+                                },
                                 onGameClick = { game ->
                                     viewModel.setFocusedItem(game.id)
                                     viewModel.launchItem(game)
@@ -372,6 +477,9 @@ fun DashboardScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .then(
+                                if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
+                            )
                             .focusGroup()
                             .focusProperties {
                                 exit = { direction ->
@@ -398,6 +506,8 @@ fun DashboardScreen(
                                     showFocusEffects = controllerState.isConnected,
                                     weatherEnabled = weatherEnabled,
                                     weather = weatherInfo,
+                                    temperatureUnit = temperatureUnit,
+                                    firstItemFocusRequester = favoritesFirstFocusRequester,
                                     onLaunchFavorite = { app ->
                                         viewModel.setFocusedItem(app.id)
                                         viewModel.launchItem(app)
@@ -407,6 +517,7 @@ fun DashboardScreen(
                                     },
                                     onOpenClock = { viewModel.openClockApp() },
                                     onOpenCalendar = { viewModel.openCalendarApp() },
+                                    onOpenWeather = { viewModel.openWeatherApp() },
                                     onPullDown = { viewModel.expandNotificationShade() },
                                     onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
                                 )
@@ -421,6 +532,7 @@ fun DashboardScreen(
                                         showFocusEffects = controllerState.isConnected,
                                         listState = appsListState,
                                         gridState = appsGridState,
+                                        firstItemFocusRequester = appsListFirstFocusRequester,
                                         onAppClick = { app ->
                                             viewModel.setFocusedItem(app.id)
                                             viewModel.launchItem(app)
@@ -539,6 +651,9 @@ fun DashboardScreen(
                 weatherZip = weatherZip,
                 weatherInfo = weatherInfo,
                 weatherError = weatherError,
+                temperatureUnit = temperatureUnit,
+                weatherApps = weatherApps,
+                weatherAppPackage = weatherAppPackage,
                 librarySyncBusy = librarySyncBusy,
                 librarySyncStatus = librarySyncStatus,
                 librarySyncConfigured = librarySyncConfigured,
@@ -557,11 +672,49 @@ fun DashboardScreen(
                 onWeatherEnabledChange = { viewModel.setWeatherEnabled(it) },
                 onWeatherModeChange = { viewModel.setWeatherMode(it) },
                 onWeatherZipChange = { viewModel.setWeatherZip(it) },
+                onTemperatureUnitChange = { viewModel.setTemperatureUnit(it) },
+                onSelectWeatherApp = { viewModel.setWeatherAppPackage(it) },
                 onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() },
                 onChooseSyncFolder = { viewModel.chooseSyncFolder(it) },
                 onSyncLibraryNow = { viewModel.syncLibraryNow() },
                 onDisconnectLibrarySync = { viewModel.disconnectLibrarySync() },
                 onDismiss = { viewModel.closeSettingsModal() }
+            )
+        }
+
+        // Shown when the weather shortcut is tapped and several weather apps are
+        // installed without a saved choice. The selection is remembered in Settings.
+        weatherAppChooser?.let { apps ->
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissWeatherAppChooser() },
+                title = { Text("Open weather with") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        apps.forEach { app ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { viewModel.chooseWeatherApp(app.packageName) }
+                                    .padding(horizontal = 8.dp, vertical = 12.dp)
+                                    .testTag("weather_chooser_${app.packageName}"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = app.label,
+                                    fontSize = 15.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { viewModel.dismissWeatherAppChooser() }) {
+                        Text("Cancel")
+                    }
+                }
             )
         }
     }
@@ -574,82 +727,172 @@ private fun GamesPosterGrid(
     focusedItemId: String?,
     showFocusEffects: Boolean,
     isGamesTabOpen: Boolean,
+    isGamesPage: Boolean = false,
     gridState: LazyGridState,
     rowState: LazyListState,
     compactLandscape: Boolean,
+    onSwipeToApps: () -> Unit = {},
     onGameClick: (GameItem) -> Unit,
     onGameLongClick: (GameItem) -> Unit,
     onGameFocus: (GameItem) -> Unit = {}
 ) {
     val firstItemFocusRequester = remember { FocusRequester() }
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val navigationBarInset =
+        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    // The grid draws behind the app-switcher bar, so keep focused posters that extra
+    // distance above the viewport edge in addition to a small scale/outline margin.
+    val focusMarginPx = with(density) { (10.dp + navigationBarInset).toPx() }
 
     // When the Games grid opens, focus the first game so an active element is visibly
-    // highlighted and controller navigation starts from the top-left item.
-    LaunchedEffect(isGamesTabOpen, games.isNotEmpty()) {
-        if (isGamesTabOpen && games.isNotEmpty()) {
-            val firstGame = games.first()
-            onGameFocus(firstGame)
-            if (compactLandscape) {
-                runCatching { rowState.scrollToItem(0) }
-            } else {
-                runCatching { gridState.scrollToItem(0) }
-            }
-            delay(50)
-            runCatching { firstItemFocusRequester.requestFocus() }
-            delay(100)
+    // highlighted and controller navigation starts from the top-left item. The pager
+    // only reports isGamesTabOpen after it has settled, but retry briefly in case the
+    // focus system briefly parks on the navigation bar while the page changes.
+    var focusedForCurrentOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(isGamesPage, isGamesTabOpen, games.isNotEmpty()) {
+        if (!isGamesPage) {
+            // Left the Games view, so the next visit focuses the first poster again.
+            focusedForCurrentOpen = false
+            return@LaunchedEffect
+        }
+        if (!isGamesTabOpen || games.isEmpty() || focusedForCurrentOpen) {
+            return@LaunchedEffect
+        }
+        focusedForCurrentOpen = true
+        val firstGame = games.first()
+        onGameFocus(firstGame)
+        if (compactLandscape) {
+            runCatching { rowState.scrollToItem(0) }
+        } else {
+            runCatching { gridState.scrollToItem(0) }
+        }
+        repeat(3) {
+            delay(80)
             runCatching { firstItemFocusRequester.requestFocus() }
         }
     }
 
     LaunchedEffect(focusedItemId, compactLandscape) {
-        if (compactLandscape && focusedItemId != null) {
-            val idx = games.indexOfFirst { it.id == focusedItemId }
-            if (idx >= 0) {
-                runCatching { rowState.animateScrollToItem(idx) }
+        val idx = focusedItemId?.let { id -> games.indexOfFirst { it.id == id } } ?: -1
+        if (idx < 0) return@LaunchedEffect
+
+        if (compactLandscape) {
+            // The content padding keeps the focused poster just to the right of the
+            // camera cutout while earlier posters can scroll underneath it.
+            runCatching { rowState.animateScrollToItem(idx) }
+        } else {
+            // Focus search only scrolls the item until it is technically visible. The
+            // poster's focus scale (and outline) then extends past the viewport edge,
+            // so leave a small margin at the top and bottom of the grid.
+            while (gridState.isScrollInProgress) delay(16)
+            delay(32)
+            val layout = gridState.layoutInfo
+            val info = layout.visibleItemsInfo.firstOrNull { it.index == idx }
+                ?: return@LaunchedEffect
+            val bottomOverflow =
+                info.offset.y + info.size.height - (layout.viewportEndOffset - focusMarginPx)
+            val topOverflow =
+                (layout.viewportStartOffset + focusMarginPx) - info.offset.y
+            when {
+                bottomOverflow > 0f -> gridState.scrollBy(bottomOverflow)
+                topOverflow > 0f -> gridState.scrollBy(-topOverflow)
             }
         }
     }
 
     if (compactLandscape) {
         // Small landscape screens: a single horizontal row that steps one poster at a
-        // time. The focused poster sits at the left edge and is visibly larger.
+        // time. The row is centered vertically and does not fill the screen height, so a
+        // horizontal drag above/below the posters can still switch between Apps/Games.
         val snapFling = rememberSnapFlingBehavior(lazyListState = rowState)
+        val cutoutPadding = WindowInsets.displayCutout.asPaddingValues()
+        val navigationPadding = WindowInsets.navigationBars.asPaddingValues()
+        val startInset = cutoutPadding.calculateLeftPadding(layoutDirection) +
+            navigationPadding.calculateLeftPadding(layoutDirection)
+        val endInset = cutoutPadding.calculateRightPadding(layoutDirection) +
+            navigationPadding.calculateRightPadding(layoutDirection)
+        val topInset = navigationPadding.calculateTopPadding()
+        val bottomInset = navigationPadding.calculateBottomPadding()
+        val swipeThreshold = with(density) { 48.dp.toPx() }
+        val swipeToApps by rememberUpdatedState(onSwipeToApps)
+        // Bounds of the poster row relative to this Box. Drags that start on the row
+        // belong to the row's own scrolling, even when it cannot scroll further.
+        var rowBounds by remember { mutableStateOf(Rect.Zero) }
 
-        LazyRow(
-            state = rowState,
-            flingBehavior = snapFling,
-            contentPadding = PaddingValues(start = 20.dp, top = 10.dp, end = 28.dp, bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .navigationBarsPadding()
-                .testTag("games_poster_row")
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        // Never turn a drag on the posters into a page swipe.
+                        if (rowBounds.contains(down.position)) return@awaitEachGesture
+                        var totalX = 0f
+                        var totalY = 0f
+                        var claimed = false
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            // Another child (e.g. a scrollable) owns this gesture.
+                            if (change.isConsumed) break
+                            totalX += change.position.x - change.previousPosition.x
+                            totalY += change.position.y - change.previousPosition.y
+                            if (!claimed &&
+                                totalX > swipeThreshold &&
+                                abs(totalX) > abs(totalY)
+                            ) {
+                                claimed = true
+                                change.consume()
+                            } else if (claimed) {
+                                change.consume()
+                            }
+                        }
+                        if (claimed && totalX > 0f) swipeToApps()
+                    }
+                },
+            contentAlignment = Alignment.Center
         ) {
-            itemsIndexed(games, key = { _, game -> game.id }) { index, game ->
-                val isFocused = game.id == focusedItemId && showFocusEffects
+            LazyRow(
+                state = rowState,
+                flingBehavior = snapFling,
+                contentPadding = PaddingValues(
+                    start = 20.dp + startInset,
+                    top = 10.dp + topInset,
+                    end = 28.dp + endInset,
+                    bottom = 10.dp + bottomInset
+                ),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onGloballyPositioned { rowBounds = it.boundsInParent() }
+                    .testTag("games_poster_row")
+            ) {
+                itemsIndexed(games, key = { _, game -> game.id }) { index, game ->
+                    val isFocused = game.id == focusedItemId && showFocusEffects
 
-                SteamGamePosterCard(
-                    game = game,
-                    isFocused = isFocused,
-                    showFocusOutline = false,
-                    onClick = { onGameClick(game) },
-                    onLongClick = { onGameLongClick(game) },
-                    onFocus = { onGameFocus(game) },
-                    modifier = Modifier
-                        .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
-                        .then(if (index == 0) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
-                        .width(if (isFocused) 168.dp else 112.dp)
-                )
+                    SteamGamePosterCard(
+                        game = game,
+                        isFocused = isFocused,
+                        showFocusOutline = false,
+                        onClick = { onGameClick(game) },
+                        onLongClick = { onGameLongClick(game) },
+                        onFocus = { onGameFocus(game) },
+                        modifier = Modifier
+                            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                            .then(if (index == 0) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
+                            .width(if (isFocused) 168.dp else 112.dp)
+                    )
+                }
             }
         }
         return
     }
 
     BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .navigationBarsPadding()
+        modifier = Modifier.fillMaxSize()
     ) {
         val horizontalPadding = 16.dp
         val spacing = 10.dp
@@ -664,7 +907,14 @@ private fun GamesPosterGrid(
         LazyVerticalGrid(
             columns = GridCells.Fixed(columnCount),
             state = gridState,
-            contentPadding = PaddingValues(horizontal = horizontalPadding, vertical = 12.dp),
+            contentPadding = PaddingValues(
+                start = horizontalPadding,
+                end = horizontalPadding,
+                top = 12.dp,
+                // Keep the last row clear of the app-switcher bar. The extra margin
+                // also leaves room for the focus scale/outline when the row is focused.
+                bottom = 20.dp + navigationBarInset
+            ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalArrangement = Arrangement.spacedBy(spacing),
             modifier = Modifier
@@ -716,6 +966,7 @@ private fun AppsAlphabeticalList(
     showFocusEffects: Boolean,
     listState: LazyListState,
     gridState: LazyGridState,
+    firstItemFocusRequester: FocusRequester? = null,
     onAppClick: (GameItem) -> Unit,
     onAppLongClick: (GameItem) -> Unit,
     onLetterSelected: (String) -> Unit,
@@ -723,6 +974,9 @@ private fun AppsAlphabeticalList(
 ) {
     val letters = remember(entries) {
         entries.filterIsInstance<AppListEntry.Letter>().map { it.letter }
+    }
+    val firstAppId = remember(entries) {
+        entries.filterIsInstance<AppListEntry.App>().firstOrNull()?.item?.id
     }
     val activeLetter = remember(entries, focusedItemId) {
         entries.filterIsInstance<AppListEntry.App>()
@@ -783,7 +1037,16 @@ private fun AppsAlphabeticalList(
                                 onLongClick = { onAppLongClick(entry.item) },
                                 onFocus = { onAppFocus(entry.item) },
                                 contentPadding = PaddingValues(horizontal = 5.dp, vertical = 10.dp),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(
+                                        if (entry.item.id == firstAppId) {
+                                            firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                ?: Modifier
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                             )
                         }
                     }
@@ -820,7 +1083,16 @@ private fun AppsAlphabeticalList(
                                 onLongClick = { onAppLongClick(entry.item) },
                                 onFocus = { onAppFocus(entry.item) },
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(
+                                        if (entry.item.id == firstAppId) {
+                                            firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                ?: Modifier
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                             )
                         }
                     }

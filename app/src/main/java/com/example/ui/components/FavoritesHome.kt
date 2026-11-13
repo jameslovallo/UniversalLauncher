@@ -59,6 +59,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -71,14 +73,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.data.model.GameItem
+import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherInfo
+import com.example.data.service.resolveTemperatureUnit
+import com.example.data.service.temperatureDisplay
 import com.example.ui.theme.FavoritesLayout
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.roundToInt
 
 /**
  * Full-height favorites home shown on the Apps tab. Favorites are laid out in as many
@@ -97,10 +101,13 @@ fun FavoritesHome(
     showFocusEffects: Boolean,
     weatherEnabled: Boolean = false,
     weather: WeatherInfo? = null,
+    temperatureUnit: TemperatureUnit = TemperatureUnit.AUTO,
+    firstItemFocusRequester: FocusRequester? = null,
     onLaunchFavorite: (GameItem) -> Unit,
     onLongPressFavorite: (GameItem) -> Unit,
     onOpenClock: () -> Unit,
     onOpenCalendar: () -> Unit,
+    onOpenWeather: () -> Unit = {},
     onPullDown: () -> Unit,
     modifier: Modifier = Modifier,
     onFocusFavorite: (GameItem) -> Unit = {},
@@ -135,6 +142,7 @@ fun FavoritesHome(
     val dateFormatter = remember {
         SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
     }
+    val displayUnit = remember(temperatureUnit) { resolveTemperatureUnit(temperatureUnit) }
     val nowDate = Date(now)
 
     Column(
@@ -221,20 +229,30 @@ fun FavoritesHome(
 
                 if (weatherEnabled && weather != null) {
                     Spacer(modifier = Modifier.width(10.dp))
-                    Icon(
-                        imageVector = weatherIcon(weather.weatherCode),
-                        contentDescription = weatherDescription(weather.weatherCode),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "${weather.temperatureC.roundToInt()}°",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("favorites_weather")
-                    )
+                    // Separate click target from the date row: tapping the conditions
+                    // opens the user's weather app, while tapping the date opens Calendar.
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onOpenWeather() }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .testTag("favorites_weather"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = weatherIcon(weather.weatherCode),
+                            contentDescription = weatherDescription(weather.weatherCode),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = weather.temperatureDisplay(displayUnit),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
@@ -294,7 +312,7 @@ fun FavoritesHome(
                         verticalArrangement = Arrangement.spacedBy(0.dp),
                         maxItemsInEachRow = columns
                     ) {
-                        favorites.forEach { app ->
+                        favorites.forEachIndexed { index, app ->
                             AppTextRow(
                                 app = app,
                                 isFocused = app.id == focusedItemId,
@@ -307,7 +325,16 @@ fun FavoritesHome(
                                     horizontal = 6.dp + spacing / 2,
                                     vertical = 9.dp + rowGap / 2
                                 ),
-                                modifier = Modifier.width(itemWidth)
+                                modifier = Modifier
+                                    .width(itemWidth)
+                                    .then(
+                                        if (index == 0) {
+                                            firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                ?: Modifier
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                             )
                         }
                     }
@@ -333,7 +360,7 @@ fun FavoritesHome(
                         verticalArrangement = Arrangement.spacedBy(0.dp),
                         maxItemsInEachRow = columns
                     ) {
-                        favorites.forEach { app ->
+                        favorites.forEachIndexed { index, app ->
                             AppIconTile(
                                 app = app,
                                 isFocused = app.id == focusedItemId,
@@ -346,7 +373,16 @@ fun FavoritesHome(
                                     horizontal = tileGap / 2,
                                     vertical = 6.dp + rowGap / 2
                                 ),
-                                modifier = Modifier.width(tilePitch)
+                                modifier = Modifier
+                                    .width(tilePitch)
+                                    .then(
+                                        if (index == 0) {
+                                            firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                ?: Modifier
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                             )
                         }
                     }

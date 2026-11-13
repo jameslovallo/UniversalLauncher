@@ -14,6 +14,8 @@ import com.example.data.service.InstalledAppsManager
 import com.example.data.service.LibrarySyncOutcome
 import com.example.data.service.LibrarySyncService
 import com.example.data.service.MOONLIGHT_PACKAGES
+import com.example.data.service.TemperatureUnit
+import com.example.data.service.WeatherApp
 import com.example.data.service.WeatherInfo
 import com.example.data.service.WeatherLocationMode
 import com.example.data.service.WeatherService
@@ -132,6 +134,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _weatherZip = MutableStateFlow(prefs.getString("weather_zip", "").orEmpty())
     val weatherZip: StateFlow<String> = _weatherZip.asStateFlow()
 
+    private val _temperatureUnit = MutableStateFlow(
+        TemperatureUnit.fromStorage(prefs.getString("temperature_unit", TemperatureUnit.AUTO.name))
+    )
+    val temperatureUnit: StateFlow<TemperatureUnit> = _temperatureUnit.asStateFlow()
+
+    private val _weatherAppPackage = MutableStateFlow(
+        prefs.getString("weather_app_package", "").orEmpty()
+    )
+    val weatherAppPackage: StateFlow<String> = _weatherAppPackage.asStateFlow()
+
+    private val _weatherApps = MutableStateFlow<List<WeatherApp>>(emptyList())
+    val weatherApps: StateFlow<List<WeatherApp>> = _weatherApps.asStateFlow()
+
+    // Non-null while the user is choosing between multiple installed weather apps.
+    private val _weatherAppChooser = MutableStateFlow<List<WeatherApp>?>(null)
+    val weatherAppChooser: StateFlow<List<WeatherApp>?> = _weatherAppChooser.asStateFlow()
+
     private val _weatherInfo = MutableStateFlow<WeatherInfo?>(null)
     val weatherInfo: StateFlow<WeatherInfo?> = _weatherInfo.asStateFlow()
 
@@ -210,6 +229,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             repository.matchMissingGamePosters()
         }
         if (_weatherEnabled.value) refreshWeather()
+        refreshWeatherApps()
     }
 
     fun setTab(tab: MainLibraryTab) {
@@ -533,6 +553,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // Settings Modal
     fun openSettingsModal() {
         refreshLibrarySyncState()
+        refreshWeatherApps()
         _showSettingsModal.value = true
     }
 
@@ -576,6 +597,53 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         prefs.edit().putString("weather_zip", trimmed).apply()
         _weatherZip.value = trimmed
         if (_weatherMode.value == WeatherLocationMode.ZIP_CODE) refreshWeather()
+    }
+
+    fun setTemperatureUnit(unit: TemperatureUnit) {
+        prefs.edit().putString("temperature_unit", unit.name).apply()
+        _temperatureUnit.value = unit
+    }
+
+    /** Refresh the installed weather apps shown in Settings and used by the shortcut. */
+    fun refreshWeatherApps() {
+        viewModelScope.launch {
+            _weatherApps.value = runCatching { installedAppsManager.getWeatherApps() }
+                .getOrDefault(emptyList())
+        }
+    }
+
+    fun setWeatherAppPackage(packageName: String) {
+        prefs.edit().putString("weather_app_package", packageName).apply()
+        _weatherAppPackage.value = packageName
+        _weatherAppChooser.value = null
+    }
+
+    fun dismissWeatherAppChooser() {
+        _weatherAppChooser.value = null
+    }
+
+    /**
+     * Opens the weather app chosen in Settings. When more than one weather app is
+     * installed and the user has not chosen one yet, the UI shows a picker.
+     */
+    fun openWeatherApp() {
+        viewModelScope.launch {
+            val apps = runCatching { installedAppsManager.getWeatherApps() }
+                .getOrDefault(emptyList())
+            _weatherApps.value = apps
+            val selectedPackage = _weatherAppPackage.value
+            val selectedApp = apps.firstOrNull { it.packageName == selectedPackage }
+            when {
+                selectedApp != null -> installedAppsManager.launchApp(selectedApp.packageName)
+                apps.size == 1 -> installedAppsManager.launchApp(apps.first().packageName)
+                apps.size > 1 -> _weatherAppChooser.value = apps
+            }
+        }
+    }
+
+    fun chooseWeatherApp(packageName: String) {
+        setWeatherAppPackage(packageName)
+        installedAppsManager.launchApp(packageName)
     }
 
     /** Fetch current conditions for the favorites date row. */

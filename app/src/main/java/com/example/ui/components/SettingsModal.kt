@@ -82,8 +82,12 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.GameItem
+import com.example.data.service.TemperatureUnit
+import com.example.data.service.WeatherApp
 import com.example.data.service.WeatherInfo
 import com.example.data.service.WeatherLocationMode
+import com.example.data.service.resolveTemperatureUnit
+import com.example.data.service.temperatureDisplay
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
 
@@ -100,6 +104,9 @@ fun SettingsModal(
     weatherZip: String,
     weatherInfo: WeatherInfo?,
     weatherError: String?,
+    temperatureUnit: TemperatureUnit,
+    weatherApps: List<WeatherApp>,
+    weatherAppPackage: String?,
     librarySyncBusy: Boolean,
     librarySyncStatus: String?,
     librarySyncConfigured: Boolean,
@@ -118,6 +125,8 @@ fun SettingsModal(
     onWeatherEnabledChange: (Boolean) -> Unit,
     onWeatherModeChange: (WeatherLocationMode) -> Unit,
     onWeatherZipChange: (String) -> Unit,
+    onTemperatureUnitChange: (TemperatureUnit) -> Unit,
+    onSelectWeatherApp: (String) -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onChooseSyncFolder: (Uri) -> Unit,
     onSyncLibraryNow: () -> Unit,
@@ -161,18 +170,20 @@ fun SettingsModal(
 
     BackHandler(onBack = onDismiss)
 
+    // The Surface fills the whole window (including behind the status bar and the
+    // app-switcher bar); only the scrollable content is inset, so the background colour
+    // extends edge to edge without moving the controls under the system bars.
     Surface(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .displayCutoutPadding()
-            .navigationBarsPadding(),
+        modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
         contentColor = MaterialTheme.colorScheme.onBackground
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
+                .displayCutoutPadding()
+                .navigationBarsPadding()
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -393,6 +404,32 @@ fun SettingsModal(
                     )
                 }
 
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Temperature unit",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TemperatureUnit.values().forEach { unit ->
+                        FilterChip(
+                            selected = temperatureUnit == unit,
+                            onClick = { onTemperatureUnitChange(unit) },
+                            label = { Text(unit.chipLabel) },
+                            modifier = Modifier.testTag("weather_unit_${unit.name.lowercase()}")
+                        )
+                    }
+                }
+                val resolvedUnit = resolveTemperatureUnit(temperatureUnit)
+                Text(
+                    text = "Showing ${resolvedUnit.label}",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("weather_unit_status")
+                )
+
                 if (weatherMode == WeatherLocationMode.DEVICE_LOCATION && !locationGranted) {
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedButton(
@@ -431,11 +468,67 @@ fun SettingsModal(
                     }
                 }
 
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Weather app",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                if (weatherApps.isEmpty()) {
+                    Text(
+                        text = "No weather app found. Install one to open it from the favorites weather.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("weather_apps_empty")
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().testTag("weather_apps_list"),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        weatherApps.forEach { app ->
+                            val selected = app.packageName == weatherAppPackage
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (selected) MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                    )
+                                    .clickable { onSelectWeatherApp(app.packageName) }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                                    .testTag("weather_app_${app.packageName}"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = app.label,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                    else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (selected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(8.dp))
                 val status = when {
                     weatherError != null -> weatherError
                     weatherInfo != null -> buildString {
-                        append("${weatherInfo.temperatureC.toInt()}° in ${weatherInfo.locationLabel}")
+                        append("${weatherInfo.temperatureDisplay(resolvedUnit)} in ${weatherInfo.locationLabel}")
                     }
                     else -> "Fetching current conditions…"
                 }
