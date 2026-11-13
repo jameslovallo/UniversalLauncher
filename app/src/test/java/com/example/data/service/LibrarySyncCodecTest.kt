@@ -1,12 +1,18 @@
 package com.example.data.service
 
+import android.net.Uri
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
+import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -14,6 +20,9 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class LibrarySyncCodecTest {
+
+    @get:Rule
+    val tempFolder = TemporaryFolder()
 
     private fun gfnGame(
         id: String = "gfn_1",
@@ -237,5 +246,46 @@ class LibrarySyncCodecTest {
             LibrarySyncCodec.signature(listOf(base)),
             LibrarySyncCodec.signature(listOf(withLogo))
         )
+    }
+
+    @Test
+    fun `chosen local file nsfw poster records content hash and changes signature`() {
+        val deviceAFile = File(tempFolder.root, "picked_nsfw.img").apply {
+            writeBytes(byteArrayOf(1, 2, 3, 4, 5, 6))
+        }
+        val deviceBFile = File(tempFolder.root, "gfn_1-nsfw-synced-hash.png").apply {
+            writeBytes(byteArrayOf(1, 2, 3, 4, 5, 6))
+        }
+
+        val withoutNsfw = gfnGame()
+        val withLocalNsfw = withoutNsfw.copy(nsfwPosterUrl = Uri.fromFile(deviceAFile).toString())
+
+        val document = LibrarySyncCodec.buildDocument(listOf(withLocalNsfw), 77L).toString()
+        val parsed = LibrarySyncCodec.parse(document)
+
+        assertTrue(parsed.tracksLocalPosters)
+        // Raw device file path is never written to JSON.
+        assertNull(parsed.items.single().nsfwPosterUrl)
+        assertNotNull(parsed.posterHashes["gfn_1"]?.nsfwPosterHash)
+
+        // Assigning or updating a local file changes the signature so sync triggers.
+        assertNotEquals(
+            LibrarySyncCodec.signature(listOf(withoutNsfw)),
+            LibrarySyncCodec.signature(listOf(withLocalNsfw))
+        )
+
+        // Device B importing the exact same image bytes matches the remote signature.
+        val deviceBItem = withoutNsfw.copy(nsfwPosterUrl = Uri.fromFile(deviceBFile).toString())
+        assertEquals(parsed.signature, LibrarySyncCodec.signature(listOf(deviceBItem)))
+
+        // Modifying the local file on Device A produces a different signature.
+        deviceAFile.writeBytes(byteArrayOf(9, 8, 7, 6))
+        assertNotEquals(parsed.signature, LibrarySyncCodec.signature(listOf(withLocalNsfw)))
+    }
+
+    @Test
+    fun `legacy version two documents do not claim local poster hash tracking`() {
+        val legacyV2 = """{"format":"nexus_library","version":2,"updatedAt":10,"items":[]}"""
+        assertFalse(LibrarySyncCodec.parse(legacyV2).tracksLocalPosters)
     }
 }

@@ -322,7 +322,10 @@ class GameRepository(
      * artwork files survive when the backup has no artwork for that item, and play stats
      * never move backwards. Installed apps and other non-syncable rows are untouched.
      */
-    suspend fun replaceSyncedLibrary(remoteItems: List<GameItem>) {
+    suspend fun replaceSyncedLibrary(
+        remoteItems: List<GameItem>,
+        tracksLocalPosters: Boolean = false
+    ) {
         val remoteById = remoteItems.associateBy { it.id }
         val local = gameDao.getAllItemsNow()
         val localById = local.associateBy { it.id }
@@ -333,15 +336,21 @@ class GameRepository(
 
         remoteItems.forEach { remote ->
             val existing = localById[remote.id]
+            val resolvedPosterUrl = remote.posterUrl
+                ?: if (tracksLocalPosters) null
+                else existing?.posterUrl?.takeIf {
+                    it.startsWith("file:") && !it.contains("-synced")
+                }
+            val resolvedNsfwPosterUrl = remote.nsfwPosterUrl
+                ?: if (tracksLocalPosters) null
+                else existing?.nsfwPosterUrl?.takeIf {
+                    it.startsWith("file:") && !it.contains("-nsfw-synced")
+                }
             gameDao.insertGame(
                 remote.copy(
                     isPinned = existing?.isPinned ?: false,
-                    posterUrl = remote.posterUrl
-                        ?: existing?.posterUrl?.takeIf { it.startsWith("file:") },
-                    nsfwPosterUrl = remote.nsfwPosterUrl
-                        ?: existing?.nsfwPosterUrl?.takeIf {
-                            it.startsWith("file:") && !it.endsWith("-nsfw-synced.png")
-                        },
+                    posterUrl = resolvedPosterUrl,
+                    nsfwPosterUrl = resolvedNsfwPosterUrl,
                     nsfwLogoUrl = remote.nsfwLogoUrl,
                     overlayNsfwLogo = remote.overlayNsfwLogo,
                     heroBannerUrl = remote.heroBannerUrl

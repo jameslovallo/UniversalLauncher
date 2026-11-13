@@ -1,7 +1,9 @@
 package com.example.data.service
 
+import android.net.Uri
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
+import java.io.File
 import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONException
@@ -15,11 +17,16 @@ import org.json.JSONObject
  * deliberately excluded from both the file and the comparison [signature]:
  *
  * - `isPinned`, play counts and last-played times
- * - `file:` artwork, which only exists on the device that chose it
- *
- * That keeps two devices from fighting over the file because of state that cannot travel.
+ * - Raw `file:` artwork paths (which are local to a device); instead, existing local
+ *   poster files contribute a content SHA-256 hash (`posterHash` / `nsfwPosterHash`) so
+ *   chosen-file posters sync through the folder's `posters/` directory.
  */
 internal object LibrarySyncCodec {
+
+    data class PosterHashes(
+        val posterHash: String? = null,
+        val nsfwPosterHash: String? = null
+    )
 
     data class Parsed(
         val updatedAt: Long,
@@ -30,7 +37,10 @@ internal object LibrarySyncCodec {
          * (including tombstones). Older exports only list live games, so adopting them as
          * authoritative would delete local games they never knew about.
          */
-        val authoritative: Boolean = false
+        val authoritative: Boolean = false,
+        /** True when the file tracks local chosen-file poster hashes (`posterHash` / `nsfwPosterHash`). */
+        val tracksLocalPosters: Boolean = false,
+        val posterHashes: Map<String, PosterHashes> = emptyMap()
     )
 
     const val FORMAT_NAME = "nexus_library"
@@ -46,15 +56,20 @@ internal object LibrarySyncCodec {
     fun syncable(rows: List<GameItem>): List<GameItem> =
         rows.filter(::isSyncable).sortedBy { it.id }
 
-    fun buildDocument(items: List<GameItem>, updatedAt: Long): JSONObject {
+    fun buildDocument(
+        items: List<GameItem>,
+        updatedAt: Long,
+        localHashForUrl: (String) -> String? = ::localFileSha256
+    ): JSONObject {
         val payload = JSONArray()
-        items.sortedBy { it.id }.forEach { payload.put(itemToJson(it)) }
+        items.sortedBy { it.id }.forEach { payload.put(itemToJson(it, localHashForUrl)) }
         return JSONObject()
             .put("format", FORMAT_NAME)
             .put("version", FORMAT_VERSION)
             .put("updatedAt", updatedAt)
             // Kept for compatibility with the old export format.
             .put("exportedAt", updatedAt)
+            .put("localPosters", true)
             .put("items", payload)
     }
 
@@ -66,11 +81,13 @@ internal object LibrarySyncCodec {
         val array: JSONArray
         val updatedAt: Long
         val version: Int
+        val tracksLocalPosters: Boolean
         if (trimmed.startsWith("[")) {
             // Bare array written by older builds; its age and deletions are unknown.
             array = parseArrayOrFail(trimmed)
             updatedAt = 0L
             version = 0
+            tracksLocalPosters = false
         } else {
             val document = try {
                 JSONObject(trimmed)
@@ -92,37 +109,57 @@ internal object LibrarySyncCodec {
                 document.optLong("exportedAt", 0L)
             )
             version = document.optInt("version", 0)
+            tracksLocalPosters = document.optBoolean("localPosters", false)
             array = itemArray ?: JSONArray()
         }
 
+        val posterHashes = mutableMapOf<String, PosterHashes>()
         val items = buildList {
             for (index in 0 until array.length()) {
-                jsonToItem(array.optJSONObject(index))
-                    ?.takeIf(::isSyncable)
-                    ?.let(::add)
+                val obj = array.optJSONObject(index)
+                val item = jsonToItem(obj)?.takeIf(::isSyncable) ?: continue
+                add(item)
+                if (obj != null) {
+                    val pHash = obj.optNullableString("posterHash")
+                    val nHash = obj.optNullableString("nsfwPosterHash")
+                    if (pHash != null || nHash != null) {
+                        posterHashes[item.id] = PosterHashes(pHash, nHash)
+                    }
+                }
             }
         }
         return Parsed(
             updatedAt = updatedAt,
             items = items,
-            signature = signature(items),
-            authoritative = version >= FORMAT_VERSION
+            signature = signatureWithOverrides(items, posterHashes),
+            authoritative = version >= FORMAT_VERSION,
+            tracksLocalPosters = tracksLocalPosters,
+            posterHashes = posterHashes
         )
     }
 
     /**
      * Content signature used to decide whether the file and the local library differ.
-     * Device-local fields (pin state, play stats and `file:` artwork paths) are ignored
-     * so they never cause a write loop or a false conflict.
+     * Device-local fields (pin state, play stats, and raw `file:` path strings) are excluded,
+     * while existing local poster files contribute their SHA-256 hash so changes sync cleanly.
      */
-    fun signature(items: List<GameItem>): String {
+    fun signature(
+        items: List<GameItem>,
+        localHashForUrl: (String) -> String? = ::localFileSha256
+    ): String = signatureWithOverrides(items, emptyMap(), localHashForUrl)
+
+    private fun signatureWithOverrides(
+        items: List<GameItem>,
+        hashOverrides: Map<String, PosterHashes>,
+        localHashForUrl: (String) -> String? = ::localFileSha256
+    ): String {
         val canonical = items
-            .map(::canonicalItem)
+            .map { item ->
+                canonicalItem(item, hashOverrides[item.id], localHashForUrl)
+            }
             .sorted()
             .joinToString(RECORD_SEPARATOR)
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest(canonical.toByteArray(Charsets.UTF_8))
-        return digest.joinToString("") { byte -> "%02x".format(byte) }
+        return sha256Hex(canonical.toByteArray(Charsets.UTF_8))
     }
 
     private fun parseArrayOrFail(text: String): JSONArray = try {
@@ -131,7 +168,10 @@ internal object LibrarySyncCodec {
         throw IllegalStateException("That file is not a Nexus library file", error)
     }
 
-    private fun itemToJson(item: GameItem): JSONObject = JSONObject().apply {
+    private fun itemToJson(
+        item: GameItem,
+        localHashForUrl: (String) -> String?
+    ): JSONObject = JSONObject().apply {
         put("id", item.id)
         put("title", item.title)
         put("type", item.type.name)
@@ -140,9 +180,19 @@ internal object LibrarySyncCodec {
         item.activityName?.let { put("activityName", it) }
         item.launchUrl?.let { put("launchUrl", it) }
         item.gfnCmsId?.let { put("gfnCmsId", it) }
-        // Local artwork paths only exist on this device.
-        shareableUrl(item.posterUrl)?.let { put("posterUrl", it) }
-        shareableUrl(item.nsfwPosterUrl)?.let { put("nsfwPosterUrl", it) }
+        // Raw local file paths stay off the JSON; existing local artwork contributes a content hash.
+        val remotePoster = shareableUrl(item.posterUrl)
+        if (remotePoster != null) {
+            put("posterUrl", remotePoster)
+        } else {
+            item.posterUrl?.let(localHashForUrl)?.let { put("posterHash", it) }
+        }
+        val remoteNsfwPoster = shareableUrl(item.nsfwPosterUrl)
+        if (remoteNsfwPoster != null) {
+            put("nsfwPosterUrl", remoteNsfwPoster)
+        } else {
+            item.nsfwPosterUrl?.let(localHashForUrl)?.let { put("nsfwPosterHash", it) }
+        }
         shareableUrl(item.nsfwLogoUrl)?.let { put("nsfwLogoUrl", it) }
         if (item.overlayNsfwLogo) put("overlayNsfwLogo", true)
         shareableUrl(item.heroBannerUrl)?.let { put("heroBannerUrl", it) }
@@ -204,35 +254,64 @@ internal object LibrarySyncCodec {
         return optString(key).takeIf { it.isNotBlank() }
     }
 
-    private fun canonicalItem(item: GameItem): String = listOf(
-        item.id,
-        item.title,
-        item.type.name,
-        item.isGame.toString(),
-        item.packageName.orEmpty(),
-        item.activityName.orEmpty(),
-        item.launchUrl.orEmpty(),
-        item.gfnCmsId.orEmpty(),
-        shareableUrl(item.posterUrl).orEmpty(),
-        shareableUrl(item.nsfwPosterUrl).orEmpty(),
-        shareableUrl(item.nsfwLogoUrl).orEmpty(),
-        item.overlayNsfwLogo.toString(),
-        shareableUrl(item.heroBannerUrl).orEmpty(),
-        shareableUrl(item.iconUrl).orEmpty(),
-        item.genre,
-        item.publisher,
-        item.description,
-        item.isFavorite.toString(),
-        item.favoriteOrder.toString(),
-        item.isHidden.toString(),
-        item.isDeleted.toString(),
-        item.isCustomized.toString(),
-        item.customArtworkSource.orEmpty(),
-        item.tags
-    ).joinToString(FIELD_SEPARATOR)
+    private fun canonicalItem(
+        item: GameItem,
+        hashOverride: PosterHashes?,
+        localHashForUrl: (String) -> String?
+    ): String {
+        val posterToken = shareableUrl(item.posterUrl)
+            ?: hashOverride?.posterHash
+            ?: item.posterUrl?.let(localHashForUrl)
+            ?: ""
+        val nsfwPosterToken = shareableUrl(item.nsfwPosterUrl)
+            ?: hashOverride?.nsfwPosterHash
+            ?: item.nsfwPosterUrl?.let(localHashForUrl)
+            ?: ""
+
+        return listOf(
+            item.id,
+            item.title,
+            item.type.name,
+            item.isGame.toString(),
+            item.packageName.orEmpty(),
+            item.activityName.orEmpty(),
+            item.launchUrl.orEmpty(),
+            item.gfnCmsId.orEmpty(),
+            posterToken,
+            nsfwPosterToken,
+            shareableUrl(item.nsfwLogoUrl).orEmpty(),
+            item.overlayNsfwLogo.toString(),
+            shareableUrl(item.heroBannerUrl).orEmpty(),
+            shareableUrl(item.iconUrl).orEmpty(),
+            item.genre,
+            item.publisher,
+            item.description,
+            item.isFavorite.toString(),
+            item.favoriteOrder.toString(),
+            item.isHidden.toString(),
+            item.isDeleted.toString(),
+            item.isCustomized.toString(),
+            item.customArtworkSource.orEmpty(),
+            item.tags
+        ).joinToString(FIELD_SEPARATOR)
+    }
 
     private fun shareableUrl(url: String?): String? =
-        url?.takeUnless { it.startsWith("file:") }?.takeIf { it.isNotBlank() }
+        url?.takeUnless { it.startsWith("file:") || it.startsWith("content:") }
+            ?.takeIf { it.isNotBlank() }
+
+    internal fun localFileSha256(url: String): String? {
+        if (!url.startsWith("file:")) return null
+        val path = runCatching { Uri.parse(url).path }.getOrNull() ?: return null
+        val file = File(path)
+        if (!file.exists() || !file.isFile || file.length() <= 0L) return null
+        return runCatching { sha256Hex(file.readBytes()) }.getOrNull()
+    }
+
+    internal fun sha256Hex(bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+        return digest.joinToString("") { byte -> "%02x".format(byte) }
+    }
 
     private const val RECORD_SEPARATOR = "\u001e"
     private const val FIELD_SEPARATOR = "\u001f"

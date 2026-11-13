@@ -195,8 +195,8 @@ class LibrarySyncService(
         }
 
         if (!snapshot.authoritative) {
-            val itemsToMerge = importPosters(snapshot.items, treeUri)
-            repository.mergeSyncedLibrary(itemsToMerge)
+            val imported = importPosters(snapshot.items, snapshot.posterHashes, treeUri)
+            repository.mergeSyncedLibrary(imported.items)
             return writeLocked(
                 treeUri,
                 repository.getSyncableItemsSnapshot(),
@@ -210,11 +210,18 @@ class LibrarySyncService(
         val fileIsNewer = adoptExisting || snapshot.updatedAt > localVersion
 
         if (differs && fileIsNewer) {
-            val itemsToApply = importPosters(snapshot.items, treeUri)
-            repository.replaceSyncedLibrary(itemsToApply)
+            val imported = importPosters(snapshot.items, snapshot.posterHashes, treeUri)
+            repository.replaceSyncedLibrary(imported.items, snapshot.tracksLocalPosters)
             val applied = repository.getSyncableItemsSnapshot()
+            val storedVersion = if (imported.missingExpectedPoster) {
+                // Keep localVersion behind snapshot.updatedAt so a partially synced Drive
+                // posters/ folder gets imported on the next sync instead of being overwritten.
+                (snapshot.updatedAt - 1L).coerceAtLeast(0L)
+            } else {
+                maxOf(snapshot.updatedAt, nextVersion())
+            }
             prefs.edit()
-                .putLong(KEY_UPDATED_AT, maxOf(snapshot.updatedAt, nextVersion()))
+                .putLong(KEY_UPDATED_AT, storedVersion)
                 .putString(KEY_SIGNATURE, signature(applied))
                 .putLong(KEY_LAST_SYNC, System.currentTimeMillis())
                 .apply()
@@ -325,7 +332,7 @@ class LibrarySyncService(
         }
 
         val bytes = fetchPosterBytes(rawUrl) ?: return
-        if (existingDocUri != null && documentSize(existingDocUri) == bytes.size.toLong()) {
+        if (existingDocUri != null && documentMatchesBytes(existingDocUri, bytes)) {
             return
         }
 
@@ -336,75 +343,169 @@ class LibrarySyncService(
             fileName
         ) ?: return
 
-        resolver.openOutputStream(docUri, "wt")?.use { out ->
-            out.write(bytes)
+        val wrote = writeBytesToDocument(docUri, bytes)
+        if (!wrote && existingDocUri != null) {
+            runCatching { DocumentsContract.deleteDocument(resolver, existingDocUri) }
+            existingFiles.remove(fileName)
+            val recreated = DocumentsContract.createDocument(
+                resolver,
+                postersFolderUri,
+                "image/png",
+                fileName
+            ) ?: return
+            if (writeBytesToDocument(recreated, bytes)) {
+                existingFiles[fileName] = recreated
+            }
+            return
         }
         existingFiles[fileName] = docUri
     }
+
+    private fun documentMatchesBytes(docUri: Uri, bytes: ByteArray): Boolean {
+        val remoteSize = documentSize(docUri)
+        if (remoteSize > 0L && remoteSize != bytes.size.toLong()) return false
+        val remoteBytes = runCatching {
+            resolver.openInputStream(docUri)?.use { it.readBytes() }
+        }.getOrNull() ?: return false
+        return remoteBytes.size == bytes.size &&
+            LibrarySyncCodec.sha256Hex(remoteBytes) == LibrarySyncCodec.sha256Hex(bytes)
+    }
+
+    private fun writeBytesToDocument(docUri: Uri, bytes: ByteArray): Boolean =
+        runCatching {
+            val stream = runCatching { resolver.openOutputStream(docUri, "wt") }.getOrNull()
+                ?: resolver.openOutputStream(docUri, "w")
+                ?: return false
+            stream.use { out -> out.write(bytes) }
+            true
+        }.getOrDefault(false)
+
+    private data class ImportResult(
+        val items: List<GameItem>,
+        val missingExpectedPoster: Boolean
+    )
 
     /**
      * Restores local poster images from the sync folder's `posters/` directory when the JSON
      * metadata omits a shareable URL (for example `file:` artwork picked on another device).
      */
-    private fun importPosters(items: List<GameItem>, treeUri: Uri): List<GameItem> {
+    private fun importPosters(
+        items: List<GameItem>,
+        posterHashes: Map<String, LibrarySyncCodec.PosterHashes>,
+        treeUri: Uri
+    ): ImportResult {
         return runCatching {
             val postersFolderUri = findChildDirectory(treeUri, POSTERS_DIR_NAME)
-                ?: return items
-            val postersFolderDocId = DocumentsContract.getDocumentId(postersFolderUri)
-            val existingFiles = listChildDocuments(treeUri, postersFolderDocId)
-            if (existingFiles.isEmpty()) return items
+            val existingFiles = if (postersFolderUri != null) {
+                val postersFolderDocId = DocumentsContract.getDocumentId(postersFolderUri)
+                listChildDocuments(treeUri, postersFolderDocId)
+            } else {
+                emptyMap()
+            }
 
             val localDir = File(context.filesDir, "custom_art").apply { mkdirs() }
+            var missingExpectedPoster = false
 
-            items.map { item ->
+            val updatedItems = items.map { item ->
                 val safeId = item.id.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                val expectedHashes = posterHashes[item.id]
                 var updated = item
 
                 if (item.posterUrl.isNullOrBlank()) {
                     val importedPoster = copyPosterFromSyncFolder(
                         posterDocUri = existingFiles[posterFileNameFor(item.id)],
-                        localFile = File(localDir, "$safeId-synced.png")
+                        localDir = localDir,
+                        filePrefix = "$safeId-synced",
+                        expectedHash = expectedHashes?.posterHash
                     )
                     if (importedPoster != null) {
                         updated = updated.copy(
                             posterUrl = importedPoster,
                             customArtworkSource = updated.customArtworkSource ?: "SYNCED"
                         )
+                    } else if (expectedHashes?.posterHash != null) {
+                        missingExpectedPoster = true
                     }
                 }
 
                 if (item.nsfwPosterUrl.isNullOrBlank()) {
                     val importedNsfw = copyPosterFromSyncFolder(
                         posterDocUri = existingFiles[nsfwPosterFileNameFor(item.id)],
-                        localFile = File(localDir, "$safeId-nsfw-synced.png")
+                        localDir = localDir,
+                        filePrefix = "$safeId-nsfw-synced",
+                        expectedHash = expectedHashes?.nsfwPosterHash
                     )
                     if (importedNsfw != null) {
                         updated = updated.copy(nsfwPosterUrl = importedNsfw)
+                    } else if (expectedHashes?.nsfwPosterHash != null) {
+                        missingExpectedPoster = true
                     }
                 }
 
                 updated
             }
-        }.getOrDefault(items)
+            ImportResult(updatedItems, missingExpectedPoster)
+        }.getOrElse {
+            val expectsAnyPoster = posterHashes.values.any {
+                it.posterHash != null || it.nsfwPosterHash != null
+            }
+            ImportResult(items, missingExpectedPoster = expectsAnyPoster)
+        }
     }
 
-    private fun copyPosterFromSyncFolder(posterDocUri: Uri?, localFile: File): String? {
+    private fun copyPosterFromSyncFolder(
+        posterDocUri: Uri?,
+        localDir: File,
+        filePrefix: String,
+        expectedHash: String?
+    ): String? {
         if (posterDocUri == null) return null
-        val remoteSize = documentSize(posterDocUri)
-        val copied = runCatching {
-            val needsCopy = !localFile.exists() ||
-                localFile.length() == 0L ||
-                (remoteSize > 0L && localFile.length() != remoteSize)
-            if (needsCopy) {
-                resolver.openInputStream(posterDocUri)?.use { input ->
-                    localFile.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
+
+        // Fast path: if the expected hash already matches an imported local file, reuse it.
+        if (!expectedHash.isNullOrBlank()) {
+            val expectedTarget = File(localDir, "${filePrefix}-${expectedHash.take(12)}.png")
+            if (expectedTarget.exists() && expectedTarget.length() > 0L) {
+                val existingHash = runCatching {
+                    LibrarySyncCodec.sha256Hex(expectedTarget.readBytes())
+                }.getOrNull()
+                if (existingHash == expectedHash) {
+                    cleanupOlderSyncedFiles(localDir, filePrefix, expectedTarget)
+                    return Uri.fromFile(expectedTarget).toString()
                 }
             }
-            localFile.exists() && localFile.length() > 0L
+        }
+
+        val remoteBytes = runCatching {
+            resolver.openInputStream(posterDocUri)?.use { it.readBytes() }
+        }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return null
+
+        val actualHash = LibrarySyncCodec.sha256Hex(remoteBytes)
+        if (!expectedHash.isNullOrBlank() && actualHash != expectedHash) {
+            return null
+        }
+        val targetFile = File(localDir, "${filePrefix}-${actualHash.take(12)}.png")
+        val written = runCatching {
+            val needsWrite = !targetFile.exists() ||
+                targetFile.length() != remoteBytes.size.toLong() ||
+                LibrarySyncCodec.sha256Hex(targetFile.readBytes()) != actualHash
+            if (needsWrite) {
+                targetFile.writeBytes(remoteBytes)
+            }
+            cleanupOlderSyncedFiles(localDir, filePrefix, targetFile)
+            targetFile.exists() && targetFile.length() > 0L
         }.getOrDefault(false)
-        return if (copied) Uri.fromFile(localFile).toString() else null
+        return if (written) Uri.fromFile(targetFile).toString() else null
+    }
+
+    private fun cleanupOlderSyncedFiles(
+        localDir: File,
+        filePrefix: String,
+        keepFile: File
+    ) {
+        localDir.listFiles { file ->
+            file != keepFile &&
+                (file.name == "$filePrefix.png" || file.name.startsWith("$filePrefix-"))
+        }?.forEach { it.delete() }
     }
 
     private fun posterFileNameFor(itemId: String): String {
@@ -457,7 +558,9 @@ class LibrarySyncService(
         val updatedAt: Long,
         val items: List<GameItem>,
         val signature: String,
-        val authoritative: Boolean
+        val authoritative: Boolean,
+        val tracksLocalPosters: Boolean,
+        val posterHashes: Map<String, LibrarySyncCodec.PosterHashes>
     )
 
     private fun resolveTreeUri(): Uri? =
@@ -622,16 +725,35 @@ class LibrarySyncService(
     // ---- JSON & Codec -------------------------------------------------------------
 
     private fun buildDocument(items: List<GameItem>, updatedAt: Long): JSONObject =
-        LibrarySyncCodec.buildDocument(items, updatedAt)
+        LibrarySyncCodec.buildDocument(items, updatedAt, ::localHashForUrl)
 
     private fun parseDocument(text: String): Snapshot =
         LibrarySyncCodec.parse(text).let {
-            Snapshot(it.updatedAt, it.items, it.signature, it.authoritative)
+            Snapshot(
+                updatedAt = it.updatedAt,
+                items = it.items,
+                signature = it.signature,
+                authoritative = it.authoritative,
+                tracksLocalPosters = it.tracksLocalPosters,
+                posterHashes = it.posterHashes
+            )
         }
 
     private fun syncable(rows: List<GameItem>): List<GameItem> = LibrarySyncCodec.syncable(rows)
 
-    private fun signature(items: List<GameItem>): String = LibrarySyncCodec.signature(items)
+    private fun signature(items: List<GameItem>): String =
+        LibrarySyncCodec.signature(items, ::localHashForUrl)
+
+    private fun localHashForUrl(url: String): String? = when {
+        url.startsWith("file:") -> LibrarySyncCodec.localFileSha256(url)
+        url.startsWith("content:") -> runCatching {
+            resolver.openInputStream(Uri.parse(url))?.use { stream ->
+                val bytes = stream.readBytes()
+                if (bytes.isEmpty()) null else LibrarySyncCodec.sha256Hex(bytes)
+            }
+        }.getOrNull()
+        else -> null
+    }
 
     companion object {
         const val FILE_NAME = "nexus-library.json"
