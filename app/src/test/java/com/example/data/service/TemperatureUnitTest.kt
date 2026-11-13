@@ -66,6 +66,12 @@ class TemperatureUnitTest {
     }
 
     @Test
+    fun displayCanHideTheScaleLetter() {
+        assertEquals("20°", conditions.temperatureDisplay(TemperatureUnit.CELSIUS, showUnit = false))
+        assertEquals("68°", conditions.temperatureDisplay(TemperatureUnit.FAHRENHEIT, showUnit = false))
+    }
+
+    @Test
     fun unknownStoredValueFallsBackToAutomatic() {
         assertEquals(TemperatureUnit.AUTO, TemperatureUnit.fromStorage(null))
         assertEquals(TemperatureUnit.AUTO, TemperatureUnit.fromStorage("kelvin"))

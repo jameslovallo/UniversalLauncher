@@ -107,20 +107,7 @@ object SteamGridDbService {
             .filter { includeNsfw || !it.optBoolean("nsfw") }
             .sortedWith(artworkPreference)
             .take(30)
-            .mapIndexedNotNull { index, asset ->
-                val url = asset.optString("url").ifBlank { asset.optString("thumb") }
-                if (url.isBlank()) return@mapIndexedNotNull null
-                val thumb = asset.optString("thumb").ifBlank { url }
-                ArtworkOption(
-                    id = "sgdb_${asset.optInt("id", index)}",
-                    title = "${match.name} Poster #${index + 1}",
-                    thumbnailUrl = thumb,
-                    fullUrl = url,
-                    type = ArtworkType.POSTER,
-                    authorOrSource = asset.optJSONObject("author")?.optString("name", "SteamGridDB")
-                        ?: "SteamGridDB"
-                )
-            }
+            .toArtworkOptions(match.name)
     }
 
     private fun searchArtworkWithApiKey(
@@ -133,30 +120,58 @@ object SteamGridDbService {
         val matches = executeJson(searchRequest)?.let(::parseMatches).orEmpty()
         val match = selectMatch(query, matches, requireExact = false) ?: return emptyList()
 
-        // The v2 `nsfw` parameter acts as a filter: true returns only adult grids. Omit it
-        // so safe and adult results come back together, then order the safe ones first.
-        val gridsRequest = authorizedRequest("$V2_BASE_URL/grids/game/${match.id}", apiKey)
-        val grids = executeJson(gridsRequest)?.optJSONArray("data") ?: return emptyList()
-        return (0 until grids.length())
-            .mapNotNull { grids.optJSONObject(it) }
-            .filter(::isPortraitGrid)
-            .filter { includeNsfw || !it.optBoolean("nsfw") }
-            .sortedWith(artworkPreference)
-            .mapIndexedNotNull { index, item ->
-                val url = item.optString("url").ifBlank { item.optString("thumb") }
-                if (url.isBlank()) return@mapIndexedNotNull null
-                val thumb = item.optString("thumb").ifBlank { url }
-                ArtworkOption(
-                    id = "sgdb_${item.optInt("id", index)}",
-                    title = "${match.name} Poster #${index + 1}",
-                    thumbnailUrl = thumb,
-                    fullUrl = url,
-                    type = ArtworkType.POSTER,
-                    authorOrSource = item.optJSONObject("author")?.optString("name", "SteamGridDB")
-                        ?: "SteamGridDB"
-                )
-            }
+        // The v2 `nsfw` flag is an exclusive filter: `true` returns only adult grids and
+        // omitting it returns only safe grids. So fetch the safe group first, then the
+        // adult group, and keep that order (safe posters lead, adult posters trail).
+        val safe = fetchV2Grids(match.id, apiKey, adultOnly = false)
+            .filterNot { it.optBoolean("nsfw") }
+        val adult = if (includeNsfw) {
+            val safeIds = safe.ids()
+            fetchV2Grids(match.id, apiKey, adultOnly = true)
+                .filterNot { it.optInt("id", 0) in safeIds }
+        } else {
+            emptyList()
+        }
+        return (safe.portraitFirst() + adult.portraitFirst()).toArtworkOptions(match.name)
     }
+
+    private fun fetchV2Grids(
+        gameId: Int,
+        apiKey: String,
+        adultOnly: Boolean
+    ): List<JSONObject> {
+        val url = buildString {
+            append("$V2_BASE_URL/grids/game/$gameId")
+            if (adultOnly) append("?nsfw=true")
+        }
+        val json = executeJson(authorizedRequest(url, apiKey)) ?: return emptyList()
+        val data = json.optJSONArray("data") ?: return emptyList()
+        return (0 until data.length())
+            .mapNotNull { data.optJSONObject(it) }
+            .filter(::isPortraitGrid)
+    }
+
+    /** Conventional 600x900 box art first, preserving the surrounding group order. */
+    private fun List<JSONObject>.portraitFirst(): List<JSONObject> =
+        sortedByDescending { it.optInt("width", 0) == 600 && it.optInt("height", 0) == 900 }
+
+    private fun List<JSONObject>.ids(): Set<Int> =
+        mapNotNullTo(HashSet()) { item -> item.optInt("id", 0).takeIf { it != 0 } }
+
+    private fun List<JSONObject>.toArtworkOptions(gameName: String): List<ArtworkOption> =
+        mapIndexedNotNull { index, item ->
+            val url = item.optString("url").ifBlank { item.optString("thumb") }
+            if (url.isBlank()) return@mapIndexedNotNull null
+            ArtworkOption(
+                id = "sgdb_${item.optInt("id", index)}",
+                title = "$gameName Poster #${index + 1}",
+                thumbnailUrl = item.optString("thumb").ifBlank { url },
+                fullUrl = url,
+                type = ArtworkType.POSTER,
+                authorOrSource = item.optJSONObject("author")?.optString("name", "SteamGridDB")
+                    ?: "SteamGridDB"
+            )
+        }
 
     /**
      * Safe artwork before adult artwork, and the 600x900 portrait size before anything

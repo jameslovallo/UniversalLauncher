@@ -226,7 +226,7 @@ private fun DateWeatherHeader(
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
-                    text = weather.temperatureDisplay(displayUnit),
+                    text = weather.temperatureDisplay(displayUnit, showUnit = false),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,

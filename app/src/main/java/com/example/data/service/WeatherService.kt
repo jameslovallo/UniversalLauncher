@@ -64,10 +64,20 @@ private val FAHRENHEIT_COUNTRIES = setOf(
 fun WeatherInfo.temperature(unit: TemperatureUnit): Double =
     if (unit == TemperatureUnit.FAHRENHEIT) temperatureC * 9.0 / 5.0 + 32.0 else temperatureC
 
-/** Compact display value such as "72°F" or "22°C". */
-fun WeatherInfo.temperatureDisplay(unit: TemperatureUnit): String {
-    val symbol = if (unit == TemperatureUnit.FAHRENHEIT) "°F" else "°C"
-    return "${temperature(unit).roundToInt()}$symbol"
+/**
+ * Compact display value such as "72°F" or "22°C". Pass `showUnit = false` on the home
+ * screen and navigation bar, where the chosen scale is already implied, to render "72°".
+ */
+fun WeatherInfo.temperatureDisplay(
+    unit: TemperatureUnit,
+    showUnit: Boolean = true
+): String {
+    val suffix = when {
+        !showUnit -> "°"
+        unit == TemperatureUnit.FAHRENHEIT -> "°F"
+        else -> "°C"
+    }
+    return "${temperature(unit).roundToInt()}$suffix"
 }
 
 /**
