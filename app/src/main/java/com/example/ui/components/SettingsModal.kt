@@ -15,6 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -53,7 +54,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -72,6 +72,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -221,7 +222,7 @@ fun SettingsModal(
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = "Settings",
-                        fontSize = 24.sp,
+                        fontSize = 28.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground
                     )
@@ -229,523 +230,483 @@ fun SettingsModal(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-            // Favorites Home Layout
-            SectionHeader(
-                title = "Favorites Layout"
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            SettingsSection(
+                title = "Favorites Layout",
+                description = "Choose how favorite apps appear on the home screen."
             ) {
-                FavoritesLayout.values().forEach { layoutOption ->
-                    FavoritesLayoutCard(
-                        layout = layoutOption,
-                        isSelected = favoritesLayout == layoutOption,
-                        onSelect = { onSelectFavoritesLayout(layoutOption) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(18.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(18.dp))
-
-            // Color
-            SectionHeader(
-                title = "Color"
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThemeStyle.values().toList().chunked(2).forEach { row ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        row.forEach { styleOption ->
-                            ThemeStyleCard(
-                                style = styleOption,
-                                isSelected = themeStyle == styleOption,
-                                onSelect = { onSelectThemeStyle(styleOption) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        if (row.size == 1) {
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(18.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(18.dp))
-
-            // Apps background opacity
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Opacity,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                SectionHeader(
-                    title = "Apps Background Opacity"
-                )
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-            val opacityHaptics = LocalHapticFeedback.current
-            var lastOpacityStep by remember {
-                mutableStateOf((appsBackgroundOpacity * 20f).roundToInt())
-            }
-            Slider(
-                value = appsBackgroundOpacity,
-                onValueChange = { value ->
-                    val step = (value * 20f).roundToInt()
-                    if (step != lastOpacityStep) {
-                        lastOpacityStep = step
-                        opacityHaptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    }
-                    onSetAppsBackgroundOpacity(step / 20f)
-                },
-                valueRange = 0f..1f,
-                steps = 19,
-                modifier = Modifier.fillMaxWidth().testTag("apps_opacity_slider")
-            )
-            Text(
-                text = "${(appsBackgroundOpacity * 100f).roundToInt()}%",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Spacer(modifier = Modifier.height(18.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(18.dp))
-
-            // Default launcher / accessibility override
-            SectionHeader(
-                title = "Android Launcher Mode",
-                description = "Set Nexus as your primary Android home launcher"
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-
-            if (!isDefault) {
-                Button(
-                    onClick = onSetDefaultLauncher,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("set_home_button")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(imageVector = Icons.Default.Home, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Set as Default Launcher", fontWeight = FontWeight.Bold)
-                }
-            } else {
-                Text(
-                    text = "Nexus is your default launcher.",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.testTag("default_launcher_status")
-                )
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Optional accessibility fallback, modelled on LauncherHijack.
-            Text(
-                text = if (overrideEnabled) {
-                    "Accessibility launcher override is enabled. Home presses are routed back " +
-                        "to Nexus, and Nexus is hidden from the Task Switcher."
-                } else {
-                    "Some devices refuse to change the default launcher. Enable the " +
-                        "accessibility override to catch Home presses and launcher opens and " +
-                        "return to Nexus. Nexus is hidden from the Task Switcher while this " +
-                        "service is active."
-                },
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = onOpenAccessibilitySettings,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().testTag("accessibility_settings_button")
-            ) {
-                Icon(imageVector = Icons.Default.Accessibility, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    if (overrideEnabled) "Manage Accessibility Override"
-                    else "Enable Accessibility Override"
-                )
-            }
-
-            Spacer(modifier = Modifier.height(18.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(18.dp))
-
-            // Weather
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    SectionHeader(
-                        title = "Weather",
-                        description = "Show current conditions beside the date on the favorites view"
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Switch(
-                    checked = weatherEnabled,
-                    onCheckedChange = onWeatherEnabledChange,
-                    modifier = Modifier.testTag("weather_enabled_switch")
-                )
-            }
-
-            if (weatherEnabled) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = weatherMode == WeatherLocationMode.DEVICE_LOCATION,
-                        onClick = { onWeatherModeChange(WeatherLocationMode.DEVICE_LOCATION) },
-                        label = { Text("My location") },
-                        modifier = Modifier.testTag("weather_mode_location")
-                    )
-                    FilterChip(
-                        selected = weatherMode == WeatherLocationMode.ZIP_CODE,
-                        onClick = { onWeatherModeChange(WeatherLocationMode.ZIP_CODE) },
-                        label = { Text("ZIP code") },
-                        modifier = Modifier.testTag("weather_mode_zip")
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = "Temperature unit",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TemperatureUnit.values().forEach { unit ->
-                        FilterChip(
-                            selected = temperatureUnit == unit,
-                            onClick = { onTemperatureUnitChange(unit) },
-                            label = { Text(unit.chipLabel) },
-                            modifier = Modifier.testTag("weather_unit_${unit.name.lowercase()}")
+                    FavoritesLayout.values().forEach { layoutOption ->
+                        FavoritesLayoutCard(
+                            layout = layoutOption,
+                            isSelected = favoritesLayout == layoutOption,
+                            onSelect = { onSelectFavoritesLayout(layoutOption) },
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
-                val resolvedUnit = resolveTemperatureUnit(temperatureUnit)
-                Text(
-                    text = "Showing ${resolvedUnit.label}",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.testTag("weather_unit_status")
-                )
+            }
 
-                if (weatherMode == WeatherLocationMode.DEVICE_LOCATION && !locationGranted) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = {
-                            locationPermissionLauncher.launch(
-                                Manifest.permission.ACCESS_COARSE_LOCATION
-                            )
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("weather_location_permission")
-                    ) {
-                        Icon(imageVector = Icons.Default.LocationOn, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Allow Location Access")
-                    }
-                }
+            Spacer(modifier = Modifier.height(12.dp))
 
-                if (weatherMode == WeatherLocationMode.ZIP_CODE) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = zipInput,
-                        onValueChange = { zipInput = it },
-                        label = { Text("ZIP or postal code") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("weather_zip_input")
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { onWeatherZipChange(zipInput.trim()) },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("weather_zip_save")
-                    ) {
-                        Icon(imageVector = Icons.Default.LocationOn, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Update Weather")
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = "Weather app",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                if (weatherApps.isEmpty()) {
-                    Text(
-                        text = "No weather app found. Install one to open it from the favorites weather.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("weather_apps_empty")
-                    )
-                } else {
-                    var weatherMenuExpanded by remember { mutableStateOf(false) }
-                    val selectedWeatherApp = weatherApps.firstOrNull {
-                        it.packageName == weatherAppPackage
-                    }
-                    ExposedDropdownMenuBox(
-                        expanded = weatherMenuExpanded,
-                        onExpandedChange = { weatherMenuExpanded = !weatherMenuExpanded },
-                        modifier = Modifier.fillMaxWidth().testTag("weather_apps_list")
-                    ) {
-                        OutlinedTextField(
-                            value = selectedWeatherApp?.label ?: "Choose a weather app",
-                            onValueChange = {},
-                            readOnly = true,
-                            singleLine = true,
-                            trailingIcon = {
-                                ExposedDropdownMenuDefaults.TrailingIcon(
-                                    expanded = weatherMenuExpanded
-                                )
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .menuAnchor()
-                                .testTag("weather_app_dropdown")
-                        )
-                        ExposedDropdownMenu(
-                            expanded = weatherMenuExpanded,
-                            onDismissRequest = { weatherMenuExpanded = false }
+            SettingsSection(title = "Color") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ThemeStyle.values().toList().chunked(2).forEach { row ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            weatherApps.forEach { app ->
-                                val selected = app.packageName == weatherAppPackage
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = app.label,
-                                            fontWeight = if (selected) FontWeight.Bold
-                                            else FontWeight.Medium
-                                        )
-                                    },
-                                    onClick = {
-                                        onSelectWeatherApp(app.packageName)
-                                        weatherMenuExpanded = false
-                                    },
-                                    trailingIcon = {
-                                        if (selected) {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    },
-                                    modifier = Modifier.testTag("weather_app_${app.packageName}")
+                            row.forEach { styleOption ->
+                                ThemeStyleCard(
+                                    style = styleOption,
+                                    isSelected = themeStyle == styleOption,
+                                    onSelect = { onSelectThemeStyle(styleOption) },
+                                    modifier = Modifier.weight(1f)
                                 )
+                            }
+                            if (row.size == 1) {
+                                Spacer(modifier = Modifier.weight(1f))
                             }
                         }
                     }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(8.dp))
-                val status = when {
-                    weatherError != null -> weatherError
-                    weatherInfo != null -> buildString {
-                        append("${weatherInfo.temperatureDisplay(resolvedUnit)} in ${weatherInfo.locationLabel}")
-                    }
-                    else -> "Fetching current conditions…"
+            Spacer(modifier = Modifier.height(12.dp))
+
+            SettingsSection(
+                title = "Apps Background Opacity",
+                icon = Icons.Default.Opacity
+            ) {
+                val opacityHaptics = LocalHapticFeedback.current
+                var lastOpacityStep by remember {
+                    mutableStateOf((appsBackgroundOpacity * 20f).roundToInt())
                 }
+                Slider(
+                    value = appsBackgroundOpacity,
+                    onValueChange = { value ->
+                        val step = (value * 20f).roundToInt()
+                        if (step != lastOpacityStep) {
+                            lastOpacityStep = step
+                            opacityHaptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
+                        onSetAppsBackgroundOpacity(step / 20f)
+                    },
+                    valueRange = 0f..1f,
+                    steps = 19,
+                    modifier = Modifier.fillMaxWidth().testTag("apps_opacity_slider")
+                )
                 Text(
-                    text = status,
+                    text = "${(appsBackgroundOpacity * 100f).roundToInt()}%",
                     fontSize = 12.sp,
-                    color = if (weatherError != null) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.testTag("weather_status")
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Library folder sync between devices
-            SectionHeader(
+            SettingsSection(
+                title = "Android Launcher Mode",
+                description = "Set Nexus as your primary Android home launcher"
+            ) {
+                if (!isDefault) {
+                    Button(
+                        onClick = onSetDefaultLauncher,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("set_home_button")
+                    ) {
+                        Icon(imageVector = Icons.Default.Home, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Set as Default Launcher", fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Text(
+                        text = "Nexus is your default launcher.",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.testTag("default_launcher_status")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Optional accessibility fallback, modelled on LauncherHijack.
+                Text(
+                    text = if (overrideEnabled) {
+                        "Accessibility launcher override is enabled. Home presses are routed back " +
+                            "to Nexus, and Nexus is hidden from the Task Switcher."
+                    } else {
+                        "Some devices refuse to change the default launcher. Enable the " +
+                            "accessibility override to catch Home presses and launcher opens and " +
+                            "return to Nexus. Nexus is hidden from the Task Switcher while this " +
+                            "service is active."
+                    },
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onOpenAccessibilitySettings,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("accessibility_settings_button")
+                ) {
+                    Icon(imageVector = Icons.Default.Accessibility, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        if (overrideEnabled) "Manage Accessibility Override"
+                        else "Enable Accessibility Override"
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            SettingsSection(
+                title = "Weather",
+                description = "Show current conditions beside the date on the favorites view",
+                trailing = {
+                    Switch(
+                        checked = weatherEnabled,
+                        onCheckedChange = onWeatherEnabledChange,
+                        modifier = Modifier.testTag("weather_enabled_switch")
+                    )
+                }
+            ) {
+                if (weatherEnabled) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = weatherMode == WeatherLocationMode.DEVICE_LOCATION,
+                            onClick = { onWeatherModeChange(WeatherLocationMode.DEVICE_LOCATION) },
+                            label = { Text("My location") },
+                            modifier = Modifier.testTag("weather_mode_location")
+                        )
+                        FilterChip(
+                            selected = weatherMode == WeatherLocationMode.ZIP_CODE,
+                            onClick = { onWeatherModeChange(WeatherLocationMode.ZIP_CODE) },
+                            label = { Text("ZIP code") },
+                            modifier = Modifier.testTag("weather_mode_zip")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Temperature unit",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TemperatureUnit.values().forEach { unit ->
+                            FilterChip(
+                                selected = temperatureUnit == unit,
+                                onClick = { onTemperatureUnitChange(unit) },
+                                label = { Text(unit.chipLabel) },
+                                modifier = Modifier.testTag("weather_unit_${unit.name.lowercase()}")
+                            )
+                        }
+                    }
+                    val resolvedUnit = resolveTemperatureUnit(temperatureUnit)
+                    Text(
+                        text = "Showing ${resolvedUnit.label}",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("weather_unit_status")
+                    )
+
+                    if (weatherMode == WeatherLocationMode.DEVICE_LOCATION && !locationGranted) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                locationPermissionLauncher.launch(
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("weather_location_permission")
+                        ) {
+                            Icon(imageVector = Icons.Default.LocationOn, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Allow Location Access")
+                        }
+                    }
+
+                    if (weatherMode == WeatherLocationMode.ZIP_CODE) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = zipInput,
+                            onValueChange = { zipInput = it },
+                            label = { Text("ZIP or postal code") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("weather_zip_input")
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { onWeatherZipChange(zipInput.trim()) },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("weather_zip_save")
+                        ) {
+                            Icon(imageVector = Icons.Default.LocationOn, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Update Weather")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Weather app",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (weatherApps.isEmpty()) {
+                        Text(
+                            text = "No weather app found. Install one to open it from the favorites weather.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("weather_apps_empty")
+                        )
+                    } else {
+                        var weatherMenuExpanded by remember { mutableStateOf(false) }
+                        val selectedWeatherApp = weatherApps.firstOrNull {
+                            it.packageName == weatherAppPackage
+                        }
+                        ExposedDropdownMenuBox(
+                            expanded = weatherMenuExpanded,
+                            onExpandedChange = { weatherMenuExpanded = !weatherMenuExpanded },
+                            modifier = Modifier.fillMaxWidth().testTag("weather_apps_list")
+                        ) {
+                            OutlinedTextField(
+                                value = selectedWeatherApp?.label ?: "Choose a weather app",
+                                onValueChange = {},
+                                readOnly = true,
+                                singleLine = true,
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(
+                                        expanded = weatherMenuExpanded
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor()
+                                    .testTag("weather_app_dropdown")
+                            )
+                            ExposedDropdownMenu(
+                                expanded = weatherMenuExpanded,
+                                onDismissRequest = { weatherMenuExpanded = false }
+                            ) {
+                                weatherApps.forEach { app ->
+                                    val selected = app.packageName == weatherAppPackage
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = app.label,
+                                                fontWeight = if (selected) FontWeight.Bold
+                                                else FontWeight.Medium
+                                            )
+                                        },
+                                        onClick = {
+                                            onSelectWeatherApp(app.packageName)
+                                            weatherMenuExpanded = false
+                                        },
+                                        trailingIcon = {
+                                            if (selected) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        },
+                                        modifier = Modifier.testTag("weather_app_${app.packageName}")
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val status = when {
+                        weatherError != null -> weatherError
+                        weatherInfo != null -> buildString {
+                            append("${weatherInfo.temperatureDisplay(resolvedUnit)} in ${weatherInfo.locationLabel}")
+                        }
+                        else -> "Fetching current conditions…"
+                    }
+                    Text(
+                        text = status,
+                        fontSize = 12.sp,
+                        color = if (weatherError != null) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("weather_status")
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            SettingsSection(
                 title = "Library Sync",
                 description = "Keep your GeForce NOW, Moonlight, and shortcut games in sync " +
                     "with a folder on your device or cloud drive. All assigned game posters " +
                     "and library metadata are exported automatically."
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-
-            if (librarySyncConfigured) {
-                Text(
-                    text = "Syncing with ${librarySyncTarget ?: "your selected folder"}",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.testTag("library_sync_target")
-                )
-                val lastSynced = librarySyncLastSyncedAt
-                    ?.takeIf { it > 0L }
-                    ?.let {
-                        java.text.DateFormat.getDateTimeInstance(
-                            java.text.DateFormat.SHORT,
-                            java.text.DateFormat.SHORT
-                        ).format(java.util.Date(it))
-                    }
-                if (lastSynced != null) {
+            ) {
+                if (librarySyncConfigured) {
                     Text(
-                        text = "Last synced $lastSynced",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("library_sync_last_synced")
+                        text = "Syncing with ${librarySyncTarget ?: "your selected folder"}",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.testTag("library_sync_target")
                     )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val lastSynced = librarySyncLastSyncedAt
+                        ?.takeIf { it > 0L }
+                        ?.let {
+                            java.text.DateFormat.getDateTimeInstance(
+                                java.text.DateFormat.SHORT,
+                                java.text.DateFormat.SHORT
+                            ).format(java.util.Date(it))
+                        }
+                    if (lastSynced != null) {
+                        Text(
+                            text = "Last synced $lastSynced",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("library_sync_last_synced")
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = onSyncLibraryNow,
+                            enabled = !librarySyncBusy,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f).testTag("library_sync_now_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (librarySyncBusy) "Working…" else "Sync Now")
+                        }
+                        TextButton(
+                            onClick = onDisconnectLibrarySync,
+                            enabled = !librarySyncBusy,
+                            modifier = Modifier.testTag("library_sync_disconnect_button")
+                        ) {
+                            Text("Disconnect")
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                     OutlinedButton(
-                        onClick = onSyncLibraryNow,
+                        onClick = { syncFolderLauncher.launch(null) },
                         enabled = !librarySyncBusy,
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f).testTag("library_sync_now_button")
+                        modifier = Modifier.fillMaxWidth().testTag("library_sync_pick_folder_button")
                     ) {
-                        Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                        Icon(imageVector = Icons.Default.Folder, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (librarySyncBusy) "Working…" else "Sync Now")
+                        Text("Change Folder")
                     }
-                    TextButton(
-                        onClick = onDisconnectLibrarySync,
+                } else {
+                    Button(
+                        onClick = { syncFolderLauncher.launch(null) },
                         enabled = !librarySyncBusy,
-                        modifier = Modifier.testTag("library_sync_disconnect_button")
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("library_sync_pick_folder_button")
                     ) {
-                        Text("Disconnect")
+                        Icon(imageVector = Icons.Default.Folder, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Choose Sync Folder", fontWeight = FontWeight.Bold)
                     }
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = { syncFolderLauncher.launch(null) },
-                    enabled = !librarySyncBusy,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("library_sync_pick_folder_button")
-                ) {
-                    Icon(imageVector = Icons.Default.Folder, contentDescription = null)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Change Folder")
-                }
-            } else {
-                Button(
-                    onClick = { syncFolderLauncher.launch(null) },
-                    enabled = !librarySyncBusy,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("library_sync_pick_folder_button")
-                ) {
-                    Icon(imageVector = Icons.Default.Folder, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Choose Sync Folder", fontWeight = FontWeight.Bold)
+
+                if (!librarySyncStatus.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = librarySyncStatus,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("library_sync_status")
+                        )
+                    }
                 }
             }
 
-            if (!librarySyncStatus.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = librarySyncStatus,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("library_sync_status")
-                    )
-                }
-            }
+            Spacer(modifier = Modifier.height(12.dp))
 
-            Spacer(modifier = Modifier.height(18.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(18.dp))
-
-            // SteamGridDB API Key
-            SectionHeader(
+            SettingsSection(
                 title = "SteamGridDB API Key",
                 description = "Optional. Improves artwork matching for imported games."
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = apiKeyInput,
-                onValueChange = { apiKeyInput = it },
-                label = { Text("API Key") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("steamgriddb_key_input")
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = { onSaveApiKey(apiKeyInput.trim()) },
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(imageVector = Icons.Default.Key, contentDescription = null)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Save API Key")
+                OutlinedTextField(
+                    value = apiKeyInput,
+                    onValueChange = { apiKeyInput = it },
+                    label = { Text("API Key") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("steamgriddb_key_input")
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { onSaveApiKey(apiKeyInput.trim()) },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(imageVector = Icons.Default.Key, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Save API Key")
+                }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            OutlinedButton(
-                onClick = onSyncLibrary,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().testTag("settings_sync_button")
-            ) {
-                Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Resync Library & Apps")
+            SettingsSection(title = "Maintenance") {
+                OutlinedButton(
+                    onClick = onSyncLibrary,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("settings_sync_button")
+                ) {
+                    Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Resync Library & Apps")
+                }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Hidden Apps & Games restore list
-            SectionHeader(
+            SettingsSection(
                 title = "Hidden Apps",
                 description = "Tap an item to open it, or restore it to the library."
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-
-            if (hiddenItems.isEmpty()) {
-                Text(
-                    text = "Nothing hidden yet.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.testTag("hidden_items_empty")
-                )
-            } else {
-                Column(
-                    modifier = Modifier.fillMaxWidth().testTag("hidden_items_list"),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    hiddenItems.forEach { item ->
-                        HiddenItemRow(
-                            item = item,
-                            onOpen = { onOpenHiddenItem(item) },
-                            onRestore = { onUnhideItem(item) }
-                        )
+            ) {
+                if (hiddenItems.isEmpty()) {
+                    Text(
+                        text = "Nothing hidden yet.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("hidden_items_empty")
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().testTag("hidden_items_list"),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        hiddenItems.forEach { item ->
+                            HiddenItemRow(
+                                item = item,
+                                onOpen = { onOpenHiddenItem(item) },
+                                onRestore = { onUnhideItem(item) }
+                            )
+                        }
                     }
                 }
             }
@@ -757,24 +718,60 @@ fun SettingsModal(
 
 
 @Composable
-private fun SectionHeader(
+private fun SettingsSection(
     title: String,
-    description: String? = null
+    description: String? = null,
+    icon: ImageVector? = null,
+    trailing: (@Composable () -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
 ) {
-    Column {
-        Text(
-            text = title,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
-        )
-        if (!description.isNullOrBlank()) {
-            Text(
-                text = description,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+    val shape = RoundedCornerShape(20.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                shape = shape
             )
+            .padding(horizontal = 18.dp, vertical = 16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (!description.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = description,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (trailing != null) {
+                Spacer(modifier = Modifier.width(12.dp))
+                trailing()
+            }
         }
+        Spacer(modifier = Modifier.height(14.dp))
+        content()
     }
 }
 
