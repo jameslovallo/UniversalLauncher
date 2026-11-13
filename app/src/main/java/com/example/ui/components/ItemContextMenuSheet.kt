@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -59,6 +60,7 @@ fun ItemContextMenuSheet(
     onCustomize: () -> Unit,
     onMove: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onRemoveFromRecents: () -> Unit,
     onOpenAppInfo: () -> Unit,
     onHide: () -> Unit,
     onDelete: () -> Unit,
@@ -180,6 +182,17 @@ fun ItemContextMenuSheet(
                     title = if (item.isFavorite) "Remove from favorites" else "Add to favorites",
                     onClick = onToggleFavorite,
                     testTag = "context_menu_favorite"
+                )
+            }
+
+            // Games at the top of the grid are the recently played ones; let the user
+            // drop one back into the alphabetical tail without deleting it.
+            if (item.isGame && item.lastPlayedTimestamp > 0L) {
+                ContextMenuItemRow(
+                    icon = Icons.Default.History,
+                    title = "Remove from recents",
+                    onClick = onRemoveFromRecents,
+                    testTag = "context_menu_remove_recent"
                 )
             }
 

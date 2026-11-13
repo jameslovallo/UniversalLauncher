@@ -323,6 +323,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _contextMenuItem.value = item
     }
 
+    /** Clear a game's last-played timestamp so it drops out of the recents ordering. */
+    fun removeFromRecents(item: GameItem) {
+        viewModelScope.launch {
+            repository.clearPlayHistory(item.id)
+            closeContextMenu()
+        }
+    }
+
     fun openContextMenuForFocusedItem(): Boolean {
         val focusedId = _focusedItemId.value
         val item = if (focusedId != null) {

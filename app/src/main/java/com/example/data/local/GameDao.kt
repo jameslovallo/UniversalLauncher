@@ -66,6 +66,9 @@ interface GameDao {
     @Query("UPDATE games SET lastPlayedTimestamp = :timestamp, playCount = playCount + 1 WHERE id = :id")
     suspend fun recordPlay(id: String, timestamp: Long)
 
+    @Query("UPDATE games SET lastPlayedTimestamp = 0 WHERE id = :id")
+    suspend fun clearLastPlayed(id: String)
+
     @Query("UPDATE games SET posterUrl = :posterUrl, heroBannerUrl = :heroUrl, customArtworkSource = :source WHERE id = :id")
     suspend fun updateArtwork(id: String, posterUrl: String, heroUrl: String?, source: String)
 

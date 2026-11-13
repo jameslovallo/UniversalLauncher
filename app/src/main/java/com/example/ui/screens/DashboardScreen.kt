@@ -8,8 +8,9 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -45,6 +46,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.VerticalPager
@@ -66,6 +68,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -579,6 +582,7 @@ fun DashboardScreen(
                     }
                 },
                 onToggleFavorite = { viewModel.toggleFavorite(contextMenuItem!!) },
+                onRemoveFromRecents = { viewModel.removeFromRecents(contextMenuItem!!) },
                 onOpenAppInfo = { viewModel.openAppInfo(contextMenuItem!!) },
                 onHide = { viewModel.hideItem(contextMenuItem!!) },
                 onDelete = { viewModel.deleteItem(contextMenuItem!!) },
@@ -720,7 +724,7 @@ fun DashboardScreen(
     }
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun GamesPosterGrid(
     games: List<GameItem>,
@@ -744,6 +748,36 @@ private fun GamesPosterGrid(
     // The grid draws behind the app-switcher bar, so keep focused posters that extra
     // distance above the viewport edge in addition to a small scale/outline margin.
     val focusMarginPx = with(density) { (10.dp + navigationBarInset).toPx() }
+
+    // Reserve the focus margin as part of the scroll container's own bring-into-view
+    // behaviour. This makes focus scrolling settle at the margin in one spring animation
+    // instead of snapping there with a second scrollBy pass after focus search finishes.
+    // Only the trailing (bottom) edge gets the margin: keeping the leading edge flush
+    // stops an extra row peeking in when focus moves upwards.
+    val focusBringIntoViewSpec = remember(focusMarginPx) {
+        object : BringIntoViewSpec {
+            override fun calculateScrollDistance(
+                offset: Float,
+                size: Float,
+                containerSize: Float
+            ): Float {
+                val leadingEdge = offset
+                val trailingEdge = offset + size
+                val safeTrailingEdge = containerSize - focusMarginPx
+                return when {
+                    // Already fully inside the safe area.
+                    leadingEdge >= 0f && trailingEdge <= safeTrailingEdge -> 0f
+                    // Taller than the viewport: don't chase it.
+                    leadingEdge < 0f && trailingEdge > containerSize -> 0f
+                    // The top is clipped, so reveal it (default behaviour, no top margin).
+                    leadingEdge < 0f -> leadingEdge
+                    // The bottom would sit under the app-switcher bar: scroll just enough.
+                    trailingEdge > safeTrailingEdge -> trailingEdge - safeTrailingEdge
+                    else -> 0f
+                }
+            }
+        }
+    }
 
     // When the Games grid opens, focus the first game so an active element is visibly
     // highlighted and controller navigation starts from the top-left item. The pager
@@ -781,24 +815,9 @@ private fun GamesPosterGrid(
             // The content padding keeps the focused poster just to the right of the
             // camera cutout while earlier posters can scroll underneath it.
             runCatching { rowState.animateScrollToItem(idx) }
-        } else {
-            // Focus search only scrolls the item until it is technically visible. The
-            // poster's focus scale (and outline) then extends past the viewport edge,
-            // so leave a small margin at the top and bottom of the grid.
-            while (gridState.isScrollInProgress) delay(16)
-            delay(32)
-            val layout = gridState.layoutInfo
-            val info = layout.visibleItemsInfo.firstOrNull { it.index == idx }
-                ?: return@LaunchedEffect
-            val bottomOverflow =
-                info.offset.y + info.size.height - (layout.viewportEndOffset - focusMarginPx)
-            val topOverflow =
-                (layout.viewportStartOffset + focusMarginPx) - info.offset.y
-            when {
-                bottomOverflow > 0f -> gridState.scrollBy(bottomOverflow)
-                topOverflow > 0f -> gridState.scrollBy(-topOverflow)
-            }
         }
+        // In the grid, the custom BringIntoViewSpec above already keeps the focused
+        // poster clear of the app-switcher bar as part of the focus scroll animation.
     }
 
     if (compactLandscape) {
@@ -904,35 +923,37 @@ private fun GamesPosterGrid(
             ((availableWidth + spacing) / (96.dp + spacing)).toInt()
         )
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(columnCount),
-            state = gridState,
-            contentPadding = PaddingValues(
-                start = horizontalPadding,
-                end = horizontalPadding,
-                top = 12.dp,
-                // Keep the last row clear of the app-switcher bar. The extra margin
-                // also leaves room for the focus scale/outline when the row is focused.
-                bottom = 20.dp + navigationBarInset
-            ),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(spacing),
-            modifier = Modifier
-                .fillMaxSize()
-                .testTag("games_poster_grid")
-        ) {
-            itemsIndexed(games, key = { _, game -> game.id }) { index, game ->
-                val isLeftmost = index % columnCount == 0
-                SteamGamePosterCard(
-                    game = game,
-                    isFocused = game.id == focusedItemId && showFocusEffects,
-                    onClick = { onGameClick(game) },
-                    onLongClick = { onGameLongClick(game) },
-                    onFocus = { onGameFocus(game) },
-                    modifier = Modifier
-                        .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
-                        .then(if (isLeftmost) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
-                )
+        CompositionLocalProvider(LocalBringIntoViewSpec provides focusBringIntoViewSpec) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(columnCount),
+                state = gridState,
+                contentPadding = PaddingValues(
+                    start = horizontalPadding,
+                    end = horizontalPadding,
+                    top = 12.dp,
+                    // Keep the last row clear of the app-switcher bar. The extra margin
+                    // also leaves room for the focus scale/outline when the row is focused.
+                    bottom = 20.dp + navigationBarInset
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(spacing),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("games_poster_grid")
+            ) {
+                itemsIndexed(games, key = { _, game -> game.id }) { index, game ->
+                    val isLeftmost = index % columnCount == 0
+                    SteamGamePosterCard(
+                        game = game,
+                        isFocused = game.id == focusedItemId && showFocusEffects,
+                        onClick = { onGameClick(game) },
+                        onLongClick = { onGameLongClick(game) },
+                        onFocus = { onGameFocus(game) },
+                        modifier = Modifier
+                            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                            .then(if (isLeftmost) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
+                    )
+                }
             }
         }
     }

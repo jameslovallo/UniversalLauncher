@@ -263,6 +263,11 @@ class GameRepository(
         gameDao.recordPlay(gameId, System.currentTimeMillis())
     }
 
+    /** Drops a game out of the recently-played ordering without deleting the tile. */
+    suspend fun clearPlayHistory(gameId: String) {
+        gameDao.clearLastPlayed(gameId)
+    }
+
     suspend fun setIsGame(id: String, isGame: Boolean) {
         gameDao.setIsGame(id, isGame)
     }
