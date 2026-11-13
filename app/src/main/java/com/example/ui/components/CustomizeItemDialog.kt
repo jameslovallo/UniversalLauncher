@@ -6,7 +6,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -34,17 +34,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -92,13 +88,12 @@ fun CustomizeItemDialog(
     includeNsfw: Boolean = false,
     onApplyTitle: (id: String, newTitle: String) -> Unit,
     onApplyPoster: (id: String, newTitle: String, isNsfwSlot: Boolean, artworkUrl: String?) -> Unit,
-    onRemoveNsfwPoster: (id: String, newTitle: String) -> Unit,
+    onSetOverlayLogo: (id: String, newTitle: String, enabled: Boolean) -> Unit,
+    onUpdateNsfwLogoUrl: (id: String, logoUrl: String?) -> Unit,
     onDismiss: () -> Unit
 ) {
     var title by remember(item.id) { mutableStateOf(item.title) }
-    var isNsfwSlot by remember(item.id) { mutableStateOf(false) }
     var selectedTab by remember { mutableIntStateOf(0) }
-    var searchQuery by remember(item.id) { mutableStateOf(item.title) }
     var customUrlInput by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<ArtworkOption>>(emptyList()) }
     var isSearching by remember { mutableStateOf(true) }
@@ -107,12 +102,14 @@ fun CustomizeItemDialog(
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
+    val isNsfwSlot = item.isGame && includeNsfw
     val activeSlotUrl = when {
         !item.isGame -> item.iconUrl
         isNsfwSlot -> item.nsfwPosterUrl
         else -> item.posterUrl
     }
-    val hasNsfwPoster = item.isGame && !item.nsfwPosterUrl.isNullOrBlank()
+    val hasAssignedPoster = !activeSlotUrl.isNullOrBlank()
+    val showLogoOverlay = isNsfwSlot && item.overlayNsfwLogo && !item.nsfwLogoUrl.isNullOrBlank()
 
     val commitTitleAndDismiss = {
         onApplyTitle(item.id, title)
@@ -126,10 +123,9 @@ fun CustomizeItemDialog(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            val slotAtPick = isNsfwSlot
             val slotSuffix = when {
                 !item.isGame -> "icon"
-                slotAtPick -> "nsfw"
+                isNsfwSlot -> "nsfw"
                 else -> "default"
             }
             scope.launch {
@@ -139,23 +135,29 @@ fun CustomizeItemDialog(
                     copyPickedImage(context, item.id, slotSuffix, uri)
                 }
                 val resolvedUrl = stored ?: uri.toString()
-                onApplyPoster(item.id, title, slotAtPick, resolvedUrl)
+                onApplyPoster(item.id, title, isNsfwSlot, resolvedUrl)
             }
         }
     }
 
-    LaunchedEffect(searchQuery, includeNsfw) {
-        val query = searchQuery.trim()
+    LaunchedEffect(title, includeNsfw) {
+        val query = title.trim()
         if (query.isBlank()) {
             searchResults = emptyList()
             isSearching = false
             return@LaunchedEffect
         }
         isSearching = true
-        // Debounce typing so a search is only issued once the title settles.
+        // Debounce typing so a search is only issued once the name settles.
         delay(350)
         searchResults = SteamGridDbService.searchArtwork(query, steamGridDbApiKey, includeNsfw)
         isSearching = false
+        if (isNsfwSlot && item.overlayNsfwLogo) {
+            val resolvedLogo = SteamGridDbService.findLogoForGame(query, steamGridDbApiKey)
+            if (!resolvedLogo.isNullOrBlank()) {
+                onUpdateNsfwLogoUrl(item.id, resolvedLogo)
+            }
+        }
     }
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -218,33 +220,34 @@ fun CustomizeItemDialog(
                 modifier = Modifier.fillMaxWidth().testTag("customize_name_input")
             )
 
-            if (item.isGame) {
-                Spacer(modifier = Modifier.height(10.dp))
+            if (isNsfwSlot) {
+                Spacer(modifier = Modifier.height(6.dp))
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onSetOverlayLogo(item.id, title, !item.overlayNsfwLogo) }
+                        .padding(horizontal = 4.dp)
+                        .testTag("customize_overlay_logo_row"),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    FilterChip(
-                        selected = !isNsfwSlot,
-                        onClick = { isNsfwSlot = false },
-                        label = { Text("Default Poster") },
-                        modifier = Modifier.testTag("customize_slot_default")
+                    Checkbox(
+                        checked = item.overlayNsfwLogo,
+                        onCheckedChange = { checked -> onSetOverlayLogo(item.id, title, checked) },
+                        modifier = Modifier.testTag("customize_overlay_logo_checkbox")
                     )
-                    FilterChip(
-                        selected = isNsfwSlot,
-                        onClick = { isNsfwSlot = true },
-                        label = {
-                            Text(
-                                if (hasNsfwPoster) "NSFW Poster (Set)" else "NSFW Poster"
-                            )
-                        },
-                        modifier = Modifier.testTag("customize_slot_nsfw")
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Overlay logo",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Source Tabs: SteamGridDB, Local Photo, Custom URL
             val tabs = listOf("SteamGridDB", "Local Photo", "Custom URL")
@@ -285,47 +288,14 @@ fun CustomizeItemDialog(
                 when (selectedTab) {
                     0 -> { // SteamGridDB
                         Column(modifier = Modifier.fillMaxSize()) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                OutlinedTextField(
-                                    value = searchQuery,
-                                    onValueChange = { searchQuery = it },
-                                    placeholder = { Text("Search SteamGridDB...") },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                IconButton(onClick = {
-                                    scope.launch {
-                                        isSearching = true
-                                        searchResults = SteamGridDbService.searchArtwork(
-                                            searchQuery,
-                                            steamGridDbApiKey,
-                                            includeNsfw
-                                        )
-                                        isSearching = false
-                                    }
-                                }) {
-                                    Icon(
-                                        Icons.Default.Refresh,
-                                        contentDescription = "Search",
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            if (isSearching && !hasNsfwPoster) {
+                            if (isSearching && !hasAssignedPoster) {
                                 Box(
                                     modifier = Modifier.fillMaxSize(),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     CircularProgressIndicator()
                                 }
-                            } else if (!isSearching && searchResults.isEmpty() && !hasNsfwPoster) {
+                            } else if (!isSearching && searchResults.isEmpty() && !hasAssignedPoster) {
                                 Column(
                                     modifier = Modifier.fillMaxSize(),
                                     verticalArrangement = Arrangement.Center,
@@ -353,16 +323,31 @@ fun CustomizeItemDialog(
                                     )
                                 }
                             } else {
+                                val remainingResults = remember(searchResults, activeSlotUrl) {
+                                    if (activeSlotUrl.isNullOrBlank()) {
+                                        searchResults
+                                    } else {
+                                        searchResults.filterNot { it.fullUrl == activeSlotUrl }
+                                    }
+                                }
+
                                 LazyVerticalGrid(
                                     columns = GridCells.Adaptive(minSize = 104.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     modifier = Modifier.fillMaxSize().testTag("customize_poster_grid")
                                 ) {
-                                    if (hasNsfwPoster) {
-                                        item(key = "remove_nsfw_poster") {
-                                            RemoveNsfwPosterButton(
-                                                onClick = { onRemoveNsfwPoster(item.id, title) }
+                                    if (hasAssignedPoster) {
+                                        item(key = "assigned_poster") {
+                                            PosterOptionCard(
+                                                imageUrl = activeSlotUrl!!,
+                                                contentDescription = "Assigned poster (tap to unassign)",
+                                                isSelected = true,
+                                                logoOverlayUrl = if (showLogoOverlay) item.nsfwLogoUrl else null,
+                                                onClick = {
+                                                    onApplyPoster(item.id, title, isNsfwSlot, null)
+                                                },
+                                                modifier = Modifier.testTag("assigned_poster_card")
                                             )
                                         }
                                     }
@@ -381,7 +366,7 @@ fun CustomizeItemDialog(
                                                 CircularProgressIndicator()
                                             }
                                         }
-                                    } else if (searchResults.isEmpty()) {
+                                    } else if (remainingResults.isEmpty() && !hasAssignedPoster) {
                                         item(
                                             key = "empty_results",
                                             span = { GridItemSpan(maxLineSpan) }
@@ -397,76 +382,21 @@ fun CustomizeItemDialog(
                                             )
                                         }
                                     } else {
-                                        items(searchResults, key = { it.id }) { option ->
-                                            val isSelected = activeSlotUrl == option.fullUrl
-                                            Box(
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(10.dp))
-                                                    .border(
-                                                        width = if (isSelected) 2.5.dp else 1.dp,
-                                                        color = if (isSelected) {
-                                                            MaterialTheme.colorScheme.primary
-                                                        } else {
-                                                            MaterialTheme.colorScheme.outlineVariant
-                                                        },
-                                                        shape = RoundedCornerShape(10.dp)
+                                        items(remainingResults, key = { it.id }) { option ->
+                                            PosterOptionCard(
+                                                imageUrl = option.thumbnailUrl,
+                                                contentDescription = option.title,
+                                                isSelected = false,
+                                                logoOverlayUrl = if (showLogoOverlay) item.nsfwLogoUrl else null,
+                                                onClick = {
+                                                    onApplyPoster(
+                                                        item.id,
+                                                        title,
+                                                        isNsfwSlot,
+                                                        option.fullUrl
                                                     )
-                                                    .clickable {
-                                                        onApplyPoster(
-                                                            item.id,
-                                                            title,
-                                                            isNsfwSlot,
-                                                            option.fullUrl
-                                                        )
-                                                    }
-                                            ) {
-                                                AsyncImage(
-                                                    model = option.thumbnailUrl,
-                                                    contentDescription = option.title,
-                                                    contentScale = ContentScale.Crop,
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .aspectRatio(2f / 3f)
-                                                        .clip(RoundedCornerShape(10.dp))
-                                                )
-
-                                                if (option.isNsfw) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .align(Alignment.TopStart)
-                                                            .padding(6.dp)
-                                                            .clip(RoundedCornerShape(4.dp))
-                                                            .background(MaterialTheme.colorScheme.errorContainer)
-                                                            .padding(horizontal = 5.dp, vertical = 2.dp)
-                                                    ) {
-                                                        Text(
-                                                            text = "NSFW",
-                                                            fontSize = 9.sp,
-                                                            fontWeight = FontWeight.Bold,
-                                                            color = MaterialTheme.colorScheme.onErrorContainer
-                                                        )
-                                                    }
                                                 }
-
-                                                if (isSelected) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .align(Alignment.TopEnd)
-                                                            .padding(6.dp)
-                                                            .size(22.dp)
-                                                            .clip(CircleShape)
-                                                            .background(MaterialTheme.colorScheme.primary),
-                                                        contentAlignment = Alignment.Center
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.Check,
-                                                            contentDescription = "Selected",
-                                                            tint = MaterialTheme.colorScheme.onPrimary,
-                                                            modifier = Modifier.size(14.dp)
-                                                        )
-                                                    }
-                                                }
-                                            }
+                                            )
                                         }
                                     }
                                 }
@@ -547,43 +477,60 @@ fun CustomizeItemDialog(
 }
 
 @Composable
-private fun RemoveNsfwPosterButton(
-    onClick: () -> Unit
+private fun PosterOptionCard(
+    imageUrl: String,
+    contentDescription: String,
+    isSelected: Boolean,
+    logoOverlayUrl: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    val shape = RoundedCornerShape(10.dp)
-    Card(
-        onClick = onClick,
-        shape = shape,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
-            contentColor = MaterialTheme.colorScheme.onErrorContainer
-        ),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f)),
-        modifier = Modifier
+    Box(
+        modifier = modifier
             .fillMaxWidth()
             .aspectRatio(2f / 3f)
-            .testTag("remove_nsfw_poster_button")
+            .clip(RoundedCornerShape(10.dp))
+            .border(
+                width = if (isSelected) 2.5.dp else 1.dp,
+                color = if (isSelected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.outlineVariant
+                },
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable(onClick = onClick)
     ) {
-        Column(
+        AsyncImage(
+            model = imageUrl,
+            contentDescription = contentDescription,
+            contentScale = ContentScale.Crop,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(10.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = null,
-                modifier = Modifier.size(28.dp)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Remove NSFW Poster",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                lineHeight = 15.sp
-            )
+                .clip(RoundedCornerShape(10.dp))
+        )
+
+        if (!logoOverlayUrl.isNullOrBlank()) {
+            PosterLogoOverlay(logoUrl = logoOverlayUrl)
+        }
+
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Selected",
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
         }
     }
 }

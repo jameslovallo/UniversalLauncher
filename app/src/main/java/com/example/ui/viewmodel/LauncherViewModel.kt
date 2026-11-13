@@ -14,6 +14,7 @@ import com.example.data.service.InstalledAppsManager
 import com.example.data.service.LibrarySyncOutcome
 import com.example.data.service.LibrarySyncService
 import com.example.data.service.MOONLIGHT_PACKAGES
+import com.example.data.service.SteamGridDbService
 import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherApp
 import com.example.data.service.WeatherInfo
@@ -522,16 +523,37 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun removeItemNsfwPoster(id: String, newTitle: String) {
+    fun setItemNsfwLogoOverlay(id: String, newTitle: String, enabled: Boolean) {
         val current = _editingItem.value?.takeIf { it.id == id } ?: return
         val resolvedTitle = newTitle.trim().ifBlank { current.title }
         _editingItem.value = current.copy(
             title = resolvedTitle,
-            nsfwPosterUrl = null,
+            overlayNsfwLogo = enabled,
             isCustomized = true
         )
         viewModelScope.launch {
-            repository.updateTitleAndNsfwPoster(id, resolvedTitle, null)
+            val logoUrl = if (enabled) {
+                SteamGridDbService.findLogoForGame(resolvedTitle, _steamGridDbApiKey.value)
+                    ?: current.nsfwLogoUrl
+            } else {
+                current.nsfwLogoUrl
+            }
+            val latest = _editingItem.value
+            if (latest != null && latest.id == id) {
+                _editingItem.value = latest.copy(nsfwLogoUrl = logoUrl)
+            }
+            repository.updateTitleAndNsfwOverlay(id, resolvedTitle, enabled, logoUrl)
+        }
+    }
+
+    fun updateItemNsfwLogoUrl(id: String, logoUrl: String?) {
+        val current = _editingItem.value?.takeIf { it.id == id }
+        if (current != null && current.nsfwLogoUrl == logoUrl) return
+        if (current != null) {
+            _editingItem.value = current.copy(nsfwLogoUrl = logoUrl)
+        }
+        viewModelScope.launch {
+            repository.updateNsfwLogoUrl(id, logoUrl)
         }
     }
 

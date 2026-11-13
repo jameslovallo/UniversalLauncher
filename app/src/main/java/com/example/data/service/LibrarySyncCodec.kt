@@ -143,6 +143,8 @@ internal object LibrarySyncCodec {
         // Local artwork paths only exist on this device.
         shareableUrl(item.posterUrl)?.let { put("posterUrl", it) }
         shareableUrl(item.nsfwPosterUrl)?.let { put("nsfwPosterUrl", it) }
+        shareableUrl(item.nsfwLogoUrl)?.let { put("nsfwLogoUrl", it) }
+        if (item.overlayNsfwLogo) put("overlayNsfwLogo", true)
         shareableUrl(item.heroBannerUrl)?.let { put("heroBannerUrl", it) }
         shareableUrl(item.iconUrl)?.let { put("iconUrl", it) }
         put("genre", item.genre)
@@ -173,6 +175,8 @@ internal object LibrarySyncCodec {
                 gfnCmsId = json.optNullableString("gfnCmsId"),
                 posterUrl = json.optNullableString("posterUrl"),
                 nsfwPosterUrl = json.optNullableString("nsfwPosterUrl"),
+                nsfwLogoUrl = json.optNullableString("nsfwLogoUrl"),
+                overlayNsfwLogo = json.optBoolean("overlayNsfwLogo", false),
                 heroBannerUrl = json.optNullableString("heroBannerUrl"),
                 iconUrl = json.optNullableString("iconUrl"),
                 genre = json.optString("genre", "Game"),
@@ -211,6 +215,8 @@ internal object LibrarySyncCodec {
         item.gfnCmsId.orEmpty(),
         shareableUrl(item.posterUrl).orEmpty(),
         shareableUrl(item.nsfwPosterUrl).orEmpty(),
+        shareableUrl(item.nsfwLogoUrl).orEmpty(),
+        item.overlayNsfwLogo.toString(),
         shareableUrl(item.heroBannerUrl).orEmpty(),
         shareableUrl(item.iconUrl).orEmpty(),
         item.genre,

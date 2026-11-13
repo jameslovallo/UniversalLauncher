@@ -644,8 +644,11 @@ fun DashboardScreen(
                 onApplyPoster = { id, newTitle, isNsfwSlot, artworkUrl ->
                     viewModel.applyItemPoster(id, newTitle, isNsfwSlot, artworkUrl)
                 },
-                onRemoveNsfwPoster = { id, newTitle ->
-                    viewModel.removeItemNsfwPoster(id, newTitle)
+                onSetOverlayLogo = { id, newTitle, enabled ->
+                    viewModel.setItemNsfwLogoOverlay(id, newTitle, enabled)
+                },
+                onUpdateNsfwLogoUrl = { id, logoUrl ->
+                    viewModel.updateItemNsfwLogoUrl(id, logoUrl)
                 },
                 onDismiss = { viewModel.closeEditCustomizer() }
             )

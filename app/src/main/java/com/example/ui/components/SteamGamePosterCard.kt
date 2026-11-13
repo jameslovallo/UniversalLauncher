@@ -9,10 +9,13 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -109,7 +112,8 @@ fun SteamGamePosterCard(
             )
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                val activePoster = if (showNsfwPoster && !game.nsfwPosterUrl.isNullOrBlank()) {
+                val showingNsfwPoster = showNsfwPoster && !game.nsfwPosterUrl.isNullOrBlank()
+                val activePoster = if (showingNsfwPoster) {
                     game.nsfwPosterUrl
                 } else {
                     game.posterUrl
@@ -130,6 +134,9 @@ fun SteamGamePosterCard(
                         onError = { imageFailed = true },
                         modifier = Modifier.fillMaxSize()
                     )
+                    if (showingNsfwPoster && game.overlayNsfwLogo && !game.nsfwLogoUrl.isNullOrBlank()) {
+                        PosterLogoOverlay(logoUrl = game.nsfwLogoUrl)
+                    }
                 } else {
                     // Fallback artistic card
                     Box(
@@ -161,5 +168,36 @@ fun SteamGamePosterCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun PosterLogoOverlay(
+    logoUrl: String,
+    modifier: Modifier = Modifier
+) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val horizontalPadding = maxWidth * 0.10f
+        val bottomPadding = maxHeight * 0.10f
+        val maxLogoHeight = maxHeight * 0.35f
+
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(logoUrl)
+                .crossfade(true)
+                .build(),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            alignment = Alignment.BottomCenter,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(
+                    start = horizontalPadding,
+                    end = horizontalPadding,
+                    bottom = bottomPadding
+                )
+                .fillMaxWidth()
+                .heightIn(max = maxLogoHeight)
+        )
     }
 }

@@ -681,7 +681,7 @@ fun SettingsModal(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Show assigned NSFW posters and include NSFW SteamGridDB results. Safe posters are always shown first.",
+                            text = "Show assigned NSFW posters and show only NSFW SteamGridDB results when customizing.",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

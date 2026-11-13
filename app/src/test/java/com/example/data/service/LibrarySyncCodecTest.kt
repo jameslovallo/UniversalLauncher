@@ -215,5 +215,27 @@ class LibrarySyncCodecTest {
         assertTrue(parsed.authoritative)
         assertEquals("https://cdn.example/poster.jpg", parsed.items.single().posterUrl)
         assertNull(parsed.items.single().nsfwPosterUrl)
+        assertNull(parsed.items.single().nsfwLogoUrl)
+        assertEquals(false, parsed.items.single().overlayNsfwLogo)
+    }
+
+    @Test
+    fun `nsfw logo overlay fields round trip and affect signature`() {
+        val base = gfnGame().copy(nsfwPosterUrl = "https://cdn.example/nsfw.jpg")
+        val withLogo = base.copy(
+            nsfwLogoUrl = "https://cdn.example/logo.png",
+            overlayNsfwLogo = true
+        )
+
+        val parsed = LibrarySyncCodec.parse(
+            LibrarySyncCodec.buildDocument(listOf(withLogo), 99L).toString()
+        )
+
+        assertEquals("https://cdn.example/logo.png", parsed.items.single().nsfwLogoUrl)
+        assertEquals(true, parsed.items.single().overlayNsfwLogo)
+        assertNotEquals(
+            LibrarySyncCodec.signature(listOf(base)),
+            LibrarySyncCodec.signature(listOf(withLogo))
+        )
     }
 }

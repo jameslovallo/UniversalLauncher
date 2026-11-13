@@ -61,13 +61,13 @@ object SteamGridDbService {
      * Search for portrait box art. Never returns curated or example artwork: an empty list
      * simply means SteamGridDB has no match for the query.
      *
-     * When [includeNsfw] is true the search asks for safe and adult grids together and
-     * returns the SFW results first, so the picker never leads with adult artwork.
+     * When [includeNsfw] is true the search returns only NSFW grids; when false it returns
+     * only SFW grids.
      */
     suspend fun searchArtwork(
         query: String,
         apiKey: String? = null,
-        includeNsfw: Boolean = true
+        includeNsfw: Boolean = false
     ): List<ArtworkOption> =
         withContext(Dispatchers.IO) {
             val trimmed = query.trim()
@@ -98,35 +98,93 @@ object SteamGridDbService {
         url.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Resolve the game's official transparent logo from SteamGridDB (preferring `official`
+     * style and static PNGs, falling back to any available SFW logo for the game).
+     */
+    suspend fun findLogoForGame(
+        query: String,
+        apiKey: String? = null
+    ): String? = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) return@withContext null
+
+        if (!apiKey.isNullOrBlank()) {
+            val keyed = findLogoWithApiKey(trimmed, apiKey)
+            if (!keyed.isNullOrBlank()) return@withContext keyed
+        }
+
+        val match = findGameWithPublicApi(trimmed, requireExact = false) ?: return@withContext null
+        val logos = requestPublicAssets(
+            gameId = match.id,
+            limit = 25,
+            includeRestricted = false,
+            assetType = "logo",
+            order = "score_desc"
+        ).filterNot { it.optBoolean("nsfw") }
+            .ifEmpty {
+                requestPublicAssets(
+                    gameId = match.id,
+                    limit = 25,
+                    includeRestricted = true,
+                    assetType = "logo",
+                    order = "score_desc"
+                ).filterNot { it.optBoolean("nsfw") }
+            }
+        pickBestLogoUrl(logos)
+    }
+
+    private fun findLogoWithApiKey(query: String, apiKey: String): String? {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val searchRequest = authorizedRequest("$V2_BASE_URL/search/autocomplete/$encoded", apiKey)
+        val matches = executeJson(searchRequest)?.let(::parseMatches).orEmpty()
+        val match = selectMatch(query, matches, requireExact = false) ?: return null
+
+        val url = "$V2_BASE_URL/logos/game/${match.id}"
+        val json = executeJson(authorizedRequest(url, apiKey)) ?: return null
+        val data = json.optJSONArray("data") ?: return null
+        val logos = (0 until data.length())
+            .mapNotNull { data.optJSONObject(it) }
+            .filterNot { it.optBoolean("nsfw") }
+        return pickBestLogoUrl(logos)
+    }
+
+    private fun pickBestLogoUrl(logos: List<JSONObject>): String? {
+        val sorted = logos.sortedWith(
+            compareByDescending<JSONObject> {
+                it.optString("style").equals("official", ignoreCase = true)
+            }.thenByDescending {
+                !it.optBoolean("is_animated", false) &&
+                    it.optString("mime").equals("image/png", ignoreCase = true)
+            }.thenByDescending {
+                it.optInt("upvotes", it.optInt("score", 0))
+            }
+        )
+        val best = sorted.firstOrNull() ?: return null
+        val url = best.optString("url").ifBlank { best.optString("thumb") }
+        return url.takeIf { it.isNotBlank() }
+    }
+
     private fun searchArtworkWithPublicApi(
         query: String,
         includeNsfw: Boolean
     ): List<ArtworkOption> {
         val match = findGameWithPublicApi(query, requireExact = false) ?: return emptyList()
-        val safeAssets = requestPublicAssets(match.id, limit = 40, includeRestricted = false)
-            .filter(::isPortraitGrid)
-            .filterNot { it.optBoolean("nsfw") }
-
-        val combined = if (includeNsfw) {
-            val restricted = requestPublicAssets(match.id, limit = 40, includeRestricted = true)
+        val results = if (includeNsfw) {
+            requestPublicAssets(match.id, limit = 60, includeRestricted = true)
                 .filter(::isPortraitGrid)
-            val safe = safeAssets.ifEmpty {
-                restricted.filterNot { it.optBoolean("nsfw") }
-            }
-            val safeIds = safe.ids()
-            val adult = restricted
                 .filter { it.optBoolean("nsfw") }
-                .filterNot { it.optInt("id", 0) in safeIds }
-            safe.portraitFirst().take(30) + adult.portraitFirst().take(30)
         } else {
-            val safe = safeAssets.ifEmpty {
+            val safe = requestPublicAssets(match.id, limit = 40, includeRestricted = false)
+                .filter(::isPortraitGrid)
+                .filterNot { it.optBoolean("nsfw") }
+            safe.ifEmpty {
                 requestPublicAssets(match.id, limit = 40, includeRestricted = true)
                     .filter(::isPortraitGrid)
                     .filterNot { it.optBoolean("nsfw") }
             }
-            safe.portraitFirst().take(30)
         }
-        return combined.toArtworkOptions(match.name)
+        return results.portraitFirst().take(30).toArtworkOptions(match.name)
     }
 
     private fun searchArtworkWithApiKey(
@@ -140,19 +198,19 @@ object SteamGridDbService {
         val match = selectMatch(query, matches, requireExact = false) ?: return emptyList()
 
         // The v2 `nsfw` flag is an exclusive filter: `true` returns only adult grids and
-        // omitting it returns only safe grids. So fetch the safe group first, then the
-        // adult group, and keep that order (safe posters lead, adult posters trail).
-        val safe = fetchV2Grids(match.id, apiKey, adultOnly = false)
-            .filterNot { it.optBoolean("nsfw") }
-        val adult = if (includeNsfw) {
-            val safeIds = safe.ids()
-            fetchV2Grids(match.id, apiKey, adultOnly = true)
-                .filterNot { it.optInt("id", 0) in safeIds }
+        // omitting it returns only safe grids.
+        val results = if (includeNsfw) {
+            val adult = fetchV2Grids(match.id, apiKey, adultOnly = true)
+            if (adult.any { it.has("nsfw") }) {
+                adult.filter { it.optBoolean("nsfw") }
+            } else {
+                adult
+            }
         } else {
-            emptyList()
+            fetchV2Grids(match.id, apiKey, adultOnly = false)
+                .filterNot { it.optBoolean("nsfw") }
         }
-        return (safe.portraitFirst().take(30) + adult.portraitFirst().take(30))
-            .toArtworkOptions(match.name)
+        return results.portraitFirst().take(30).toArtworkOptions(match.name)
     }
 
     private fun fetchV2Grids(
@@ -174,9 +232,6 @@ object SteamGridDbService {
     /** Conventional 600x900 box art first, preserving the surrounding group order. */
     private fun List<JSONObject>.portraitFirst(): List<JSONObject> =
         sortedByDescending { it.optInt("width", 0) == 600 && it.optInt("height", 0) == 900 }
-
-    private fun List<JSONObject>.ids(): Set<Int> =
-        mapNotNullTo(HashSet()) { item -> item.optInt("id", 0).takeIf { it != 0 } }
 
     private fun List<JSONObject>.toArtworkOptions(gameName: String): List<ArtworkOption> =
         mapIndexedNotNull { index, item ->
@@ -233,14 +288,16 @@ object SteamGridDbService {
     private fun requestPublicAssets(
         gameId: Int,
         limit: Int,
-        includeRestricted: Boolean
+        includeRestricted: Boolean,
+        assetType: String = "grid",
+        order: String = "age_desc"
     ): List<JSONObject> {
         val payload = JSONObject().apply {
             put("styles", JSONArray().put("all"))
             put("languages", JSONArray().put("all"))
             put("dimensions", JSONArray().put("all"))
             put("formats", JSONArray().put("all"))
-            put("order", "age_desc")
+            put("order", order)
             put("game_id", JSONArray().put(gameId))
             put("static", true)
             put("animated", true)
@@ -248,7 +305,7 @@ object SteamGridDbService {
             put("epilepsy", includeRestricted)
             put("humor", includeRestricted)
             put("untagged", true)
-            put("asset_type", "grid")
+            put("asset_type", assetType)
             put("page", 0)
             put("limit", limit)
             put("user_steam64", JSONObject.NULL)

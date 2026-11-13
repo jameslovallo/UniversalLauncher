@@ -288,6 +288,19 @@ class GameRepository(
         gameDao.updateTitleAndNsfwPoster(id, title, nsfwPosterUrl)
     }
 
+    suspend fun updateTitleAndNsfwOverlay(
+        id: String,
+        title: String,
+        overlayNsfwLogo: Boolean,
+        nsfwLogoUrl: String?
+    ) {
+        gameDao.updateTitleAndNsfwOverlay(id, title, overlayNsfwLogo, nsfwLogoUrl)
+    }
+
+    suspend fun updateNsfwLogoUrl(id: String, nsfwLogoUrl: String?) {
+        gameDao.updateNsfwLogoUrl(id, nsfwLogoUrl)
+    }
+
     suspend fun deleteGame(gameId: String) {
         // Keep the row as a tombstone instead of removing it, otherwise the installed-app
         // and catalog syncs re-add the tile on the next launcher start.
@@ -329,6 +342,8 @@ class GameRepository(
                         ?: existing?.nsfwPosterUrl?.takeIf {
                             it.startsWith("file:") && !it.endsWith("-nsfw-synced.png")
                         },
+                    nsfwLogoUrl = remote.nsfwLogoUrl,
+                    overlayNsfwLogo = remote.overlayNsfwLogo,
                     heroBannerUrl = remote.heroBannerUrl
                         ?: existing?.heroBannerUrl?.takeIf { it.startsWith("file:") },
                     iconUrl = remote.iconUrl

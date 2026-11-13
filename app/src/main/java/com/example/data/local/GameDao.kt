@@ -72,7 +72,7 @@ interface GameDao {
     @Query("UPDATE games SET posterUrl = :posterUrl, heroBannerUrl = :heroUrl, customArtworkSource = :source WHERE id = :id")
     suspend fun updateArtwork(id: String, posterUrl: String, heroUrl: String?, source: String)
 
-    @Query("SELECT * FROM games WHERE type IN ('INSTALLED_APP', 'SHORTCUT') AND isGame = 1 AND isHidden = 0 AND isDeleted = 0 AND (posterUrl IS NULL OR posterUrl = '') AND (customArtworkSource IS NULL OR customArtworkSource = '')")
+    @Query("SELECT * FROM games WHERE type IN ('INSTALLED_APP', 'SHORTCUT') AND isGame = 1 AND isHidden = 0 AND isDeleted = 0 AND isCustomized = 0 AND (posterUrl IS NULL OR posterUrl = '') AND (customArtworkSource IS NULL OR customArtworkSource = '')")
     suspend fun getInstalledGamesMissingPoster(): List<GameItem>
 
     @Query("UPDATE games SET isHidden = :isHidden WHERE id = :id")
@@ -93,6 +93,12 @@ interface GameDao {
 
     @Query("UPDATE games SET title = :title, nsfwPosterUrl = :nsfwPosterUrl, isCustomized = 1 WHERE id = :id")
     suspend fun updateTitleAndNsfwPoster(id: String, title: String, nsfwPosterUrl: String?)
+
+    @Query("UPDATE games SET title = :title, overlayNsfwLogo = :overlayNsfwLogo, nsfwLogoUrl = :nsfwLogoUrl, isCustomized = 1 WHERE id = :id")
+    suspend fun updateTitleAndNsfwOverlay(id: String, title: String, overlayNsfwLogo: Boolean, nsfwLogoUrl: String?)
+
+    @Query("UPDATE games SET nsfwLogoUrl = :nsfwLogoUrl WHERE id = :id")
+    suspend fun updateNsfwLogoUrl(id: String, nsfwLogoUrl: String?)
 
     @Query("DELETE FROM games WHERE id = :id")
     suspend fun deleteGameById(id: String)
