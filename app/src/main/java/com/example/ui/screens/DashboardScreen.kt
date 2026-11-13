@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -51,7 +52,9 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
@@ -60,13 +63,20 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -100,6 +110,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -127,7 +138,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     viewModel: LauncherViewModel,
@@ -173,6 +184,18 @@ fun DashboardScreen(
     val librarySyncConfigured by viewModel.librarySyncConfigured.collectAsStateWithLifecycle()
     val librarySyncTarget by viewModel.librarySyncTarget.collectAsStateWithLifecycle()
     val librarySyncLastSyncedAt by viewModel.librarySyncLastSyncedAt.collectAsStateWithLifecycle()
+    val gamesRefreshing by viewModel.gamesRefreshing.collectAsStateWithLifecycle()
+    val gamesRefreshFeedback by viewModel.gamesRefreshFeedback.collectAsStateWithLifecycle()
+
+    val gamesSnackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(gamesRefreshFeedback) {
+        val message = gamesRefreshFeedback ?: return@LaunchedEffect
+        viewModel.clearGamesRefreshFeedback()
+        gamesSnackbarHostState.showSnackbar(
+            message = message,
+            duration = SnackbarDuration.Short
+        )
+    }
 
     // Re-scan installed apps whenever the launcher comes back to the foreground, so a
     // freshly installed app appears without restarting.
@@ -431,10 +454,11 @@ fun DashboardScreen(
                     .testTag("library_pager")
             ) { page ->
                 if (page == 1) {
-                    // Games View: Steam poster aspect ratio (2:3)
+                    // Games View: Steam poster aspect ratio (2:3) with pull-to-refresh.
                     // Confine directional focus navigation within the Games view so D-pad /
                     // left stick left cannot escape to page 0 (Apps view).
-                    Box(
+                    val pullToRefreshState = rememberPullToRefreshState()
+                    BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxSize()
                             .focusGroup()
@@ -448,48 +472,86 @@ fun DashboardScreen(
                                 }
                             }
                     ) {
-                        if (gamesDisplay.isEmpty()) {
-                            Box(
-                                modifier = if (isCompactLandscape) {
-                                    Modifier.displayCutoutPadding()
-                                } else {
-                                    Modifier
+                        val pageMaxHeight = maxHeight
+                        PullToRefreshBox(
+                            isRefreshing = gamesRefreshing,
+                            onRefresh = { viewModel.refreshGamesLibrary() },
+                            state = pullToRefreshState,
+                            indicator = {
+                                PullToRefreshDefaults.Indicator(
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .testTag("games_pull_to_refresh_indicator"),
+                                    isRefreshing = gamesRefreshing,
+                                    state = pullToRefreshState,
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("games_pull_to_refresh")
+                        ) {
+                            if (gamesDisplay.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = pageMaxHeight)
+                                        .verticalScroll(rememberScrollState())
+                                        .then(
+                                            if (isCompactLandscape) {
+                                                Modifier.displayCutoutPadding()
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
+                                ) {
+                                    EmptyLibraryState(
+                                        isGamesTab = true,
+                                        searchQuery = searchQuery,
+                                        onAddClicked = { viewModel.openAddModal() },
+                                        modifier = Modifier.heightIn(min = pageMaxHeight)
+                                    )
                                 }
-                            ) {
-                                EmptyLibraryState(
-                                    isGamesTab = true,
-                                    searchQuery = searchQuery,
-                                    onAddClicked = { viewModel.openAddModal() }
+                            } else {
+                                GamesPosterGrid(
+                                    games = gamesDisplay,
+                                    focusedItemId = focusedItemId,
+                                    showFocusEffects = controllerState.isConnected,
+                                    showNsfwPoster = steamGridDbIncludeNsfw,
+                                    isGamesTabOpen = currentTab == MainLibraryTab.GAMES &&
+                                        pagerState.currentPage == 1 &&
+                                        !pagerState.isScrollInProgress,
+                                    isGamesPage = currentTab == MainLibraryTab.GAMES,
+                                    gridState = gridState,
+                                    rowState = gamesRowState,
+                                    compactLandscape = isCompactLandscape,
+                                    compactViewportHeight = pageMaxHeight,
+                                    onSwipeToApps = {
+                                        scope.launch { pagerState.animateScrollToPage(0) }
+                                    },
+                                    onGameClick = { game ->
+                                        viewModel.setFocusedItem(game.id)
+                                        viewModel.launchItem(game)
+                                    },
+                                    onGameLongClick = { game ->
+                                        viewModel.openContextMenu(game)
+                                    },
+                                    onGameFocus = { game ->
+                                        viewModel.setFocusedItem(game.id)
+                                    }
                                 )
                             }
-                        } else {
-                            GamesPosterGrid(
-                                games = gamesDisplay,
-                                focusedItemId = focusedItemId,
-                                showFocusEffects = controllerState.isConnected,
-                                showNsfwPoster = steamGridDbIncludeNsfw,
-                                isGamesTabOpen = currentTab == MainLibraryTab.GAMES &&
-                                    pagerState.currentPage == 1 &&
-                                    !pagerState.isScrollInProgress,
-                                isGamesPage = currentTab == MainLibraryTab.GAMES,
-                                gridState = gridState,
-                                rowState = gamesRowState,
-                                compactLandscape = isCompactLandscape,
-                                onSwipeToApps = {
-                                    scope.launch { pagerState.animateScrollToPage(0) }
-                                },
-                                onGameClick = { game ->
-                                    viewModel.setFocusedItem(game.id)
-                                    viewModel.launchItem(game)
-                                },
-                                onGameLongClick = { game ->
-                                    viewModel.openContextMenu(game)
-                                },
-                                onGameFocus = { game ->
-                                    viewModel.setFocusedItem(game.id)
-                                }
-                            )
                         }
+
+                        SnackbarHost(
+                            hostState = gamesSnackbarHostState,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .navigationBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                                .testTag("games_refresh_snackbar")
+                        )
                     }
                 } else {
                     // Apps View: a full-height favorites home. Swiping up reveals the
@@ -774,6 +836,7 @@ private fun GamesPosterGrid(
     gridState: LazyGridState,
     rowState: LazyListState,
     compactLandscape: Boolean,
+    compactViewportHeight: Dp = 0.dp,
     onSwipeToApps: () -> Unit = {},
     onGameClick: (GameItem) -> Unit,
     onGameLongClick: (GameItem) -> Unit,
@@ -880,7 +943,15 @@ private fun GamesPosterGrid(
 
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .then(
+                    if (compactViewportHeight > 0.dp) {
+                        Modifier.height(compactViewportHeight)
+                    } else {
+                        Modifier.fillMaxSize()
+                    }
+                )
+                .verticalScroll(rememberScrollState())
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
@@ -1335,11 +1406,12 @@ private fun EmptyAppDrawerState(hasFavorites: Boolean) {
 private fun EmptyLibraryState(
     isGamesTab: Boolean,
     searchQuery: String,
-    onAddClicked: () -> Unit
+    onAddClicked: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxSize()
+        modifier = modifier
+            .fillMaxWidth()
             .padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally

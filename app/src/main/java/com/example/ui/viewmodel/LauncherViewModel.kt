@@ -24,6 +24,7 @@ import com.example.input.ControllerAction
 import com.example.input.ControllerManager
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -181,6 +182,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _librarySyncLastSyncedAt = MutableStateFlow(librarySyncService.lastSyncedAt())
     val librarySyncLastSyncedAt: StateFlow<Long?> = _librarySyncLastSyncedAt.asStateFlow()
+
+    private val _gamesRefreshing = MutableStateFlow(false)
+    val gamesRefreshing: StateFlow<Boolean> = _gamesRefreshing.asStateFlow()
+
+    private val _gamesRefreshFeedback = MutableStateFlow<String?>(null)
+    val gamesRefreshFeedback: StateFlow<String?> = _gamesRefreshFeedback.asStateFlow()
 
     // All library items from Room
     val allItems: StateFlow<List<GameItem>> = repository.allGames
@@ -855,6 +862,67 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             repository.syncInstalledApps()
             repository.matchMissingGamePosters()
         }
+    }
+
+    /**
+     * Pull-to-refresh action on the Games tab: re-scans installed apps, fills missing
+     * game posters, and pulls/pushes the configured library sync folder.
+     */
+    fun refreshGamesLibrary() {
+        if (_gamesRefreshing.value) return
+        viewModelScope.launch {
+            _gamesRefreshing.value = true
+            val startedAt = SystemClock.elapsedRealtime()
+            try {
+                repository.syncInstalledApps()
+                repository.backfillGfnArtwork()
+                repository.matchMissingGamePosters()
+                if (librarySyncService.isConfigured) {
+                    lastResumeLibrarySyncMs = SystemClock.elapsedRealtime()
+                    runCatching { librarySyncService.syncNow() }
+                        .onSuccess { outcome ->
+                            val status = when (outcome) {
+                                is LibrarySyncOutcome.Applied ->
+                                    "Restored ${outcome.itemCount} games and posters from sync folder"
+                                is LibrarySyncOutcome.WroteLocal ->
+                                    "Saved ${outcome.itemCount} games to sync folder"
+                                LibrarySyncOutcome.UpToDate ->
+                                    "Library is already up to date"
+                                LibrarySyncOutcome.NotConfigured -> null
+                            }
+                            if (status != null) {
+                                _librarySyncStatus.value = status
+                            }
+                            when (outcome) {
+                                is LibrarySyncOutcome.Applied ->
+                                    _gamesRefreshFeedback.value = "Synced ${outcome.itemCount} games from folder"
+                                is LibrarySyncOutcome.WroteLocal ->
+                                    _gamesRefreshFeedback.value = "Saved library updates"
+                                LibrarySyncOutcome.UpToDate ->
+                                    _gamesRefreshFeedback.value = "Library is up to date"
+                                LibrarySyncOutcome.NotConfigured -> Unit
+                            }
+                        }
+                        .onFailure { error ->
+                            val msg = error.message ?: "Library folder sync failed"
+                            _librarySyncStatus.value = msg
+                            _gamesRefreshFeedback.value = msg
+                        }
+                    refreshLibrarySyncState()
+                } else {
+                    val elapsed = SystemClock.elapsedRealtime() - startedAt
+                    if (elapsed < 350L) {
+                        delay(350L - elapsed)
+                    }
+                }
+            } finally {
+                _gamesRefreshing.value = false
+            }
+        }
+    }
+
+    fun clearGamesRefreshFeedback() {
+        _gamesRefreshFeedback.value = null
     }
 
     fun saveSteamGridDbApiKey(key: String) {
