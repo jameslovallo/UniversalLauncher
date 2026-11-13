@@ -382,14 +382,20 @@ class InstalledAppsManager(private val context: Context) {
 
     /** True when the optional home-override accessibility service is enabled. */
     fun isHomeOverrideEnabled(): Boolean {
+        if (HomeOverrideService.isConnected) return true
         val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE)
             as? AccessibilityManager ?: return false
         return manager.getEnabledAccessibilityServiceList(
             AccessibilityServiceInfo.FEEDBACK_ALL_MASK
         ).any { info ->
-            val service = info.resolveInfo?.serviceInfo ?: return@any false
-            service.packageName == context.packageName &&
-                service.name == HomeOverrideService::class.java.name
+            val service = info.resolveInfo?.serviceInfo
+            if (service != null) {
+                service.packageName == context.packageName &&
+                    service.name == HomeOverrideService::class.java.name
+            } else {
+                info.id?.startsWith("${context.packageName}/") == true &&
+                    info.id.contains(HomeOverrideService::class.java.simpleName)
+            }
         }
     }
 
