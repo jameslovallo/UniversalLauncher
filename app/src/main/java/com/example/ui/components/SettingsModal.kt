@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
@@ -46,6 +47,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -92,7 +95,6 @@ import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherApp
 import com.example.data.service.WeatherInfo
 import com.example.data.service.WeatherLocationMode
-import com.example.data.service.resolveTemperatureUnit
 import com.example.data.service.temperatureDisplay
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
@@ -231,10 +233,7 @@ fun SettingsModal(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-            SettingsSection(
-                title = "Favorites Layout",
-                description = "Choose how favorite apps appear on the home screen."
-            ) {
+            SettingsSection(title = "Favorites Layout") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -283,20 +282,20 @@ fun SettingsModal(
             ) {
                 val opacityHaptics = LocalHapticFeedback.current
                 var lastOpacityStep by remember {
-                    mutableStateOf((appsBackgroundOpacity * 20f).roundToInt())
+                    mutableStateOf((appsBackgroundOpacity * 10f).roundToInt())
                 }
                 Slider(
                     value = appsBackgroundOpacity,
                     onValueChange = { value ->
-                        val step = (value * 20f).roundToInt()
+                        val step = (value * 10f).roundToInt().coerceIn(0, 10)
                         if (step != lastOpacityStep) {
                             lastOpacityStep = step
                             opacityHaptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         }
-                        onSetAppsBackgroundOpacity(step / 20f)
+                        onSetAppsBackgroundOpacity(step / 10f)
                     },
                     valueRange = 0f..1f,
-                    steps = 19,
+                    steps = 9,
                     modifier = Modifier.fillMaxWidth().testTag("apps_opacity_slider")
                 )
                 Text(
@@ -345,21 +344,26 @@ fun SettingsModal(
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TemperatureUnit.values().forEach { unit ->
+                            val isSelected = temperatureUnit == unit
                             FilterChip(
-                                selected = temperatureUnit == unit,
+                                selected = isSelected,
                                 onClick = { onTemperatureUnitChange(unit) },
-                                label = { Text(unit.chipLabel) },
+                                label = { Text("${unit.label} (${unit.chipLabel})") },
+                                leadingIcon = if (isSelected) {
+                                    {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                } else {
+                                    null
+                                },
                                 modifier = Modifier.testTag("weather_unit_${unit.name.lowercase()}")
                             )
                         }
                     }
-                    val resolvedUnit = resolveTemperatureUnit(temperatureUnit)
-                    Text(
-                        text = "Showing ${resolvedUnit.label}",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("weather_unit_status")
-                    )
 
                     if (weatherMode == WeatherLocationMode.DEVICE_LOCATION && !locationGranted) {
                         Spacer(modifier = Modifier.height(8.dp))
@@ -477,7 +481,7 @@ fun SettingsModal(
                     val status = when {
                         weatherError != null -> weatherError
                         weatherInfo != null -> buildString {
-                            append("${weatherInfo.temperatureDisplay(resolvedUnit)} in ${weatherInfo.locationLabel}")
+                            append("${weatherInfo.temperatureDisplay(temperatureUnit)} in ${weatherInfo.locationLabel}")
                         }
                         else -> "Fetching current conditions…"
                     }
@@ -652,21 +656,35 @@ fun SettingsModal(
             ) {
                 OutlinedTextField(
                     value = apiKeyInput,
-                    onValueChange = { apiKeyInput = it },
+                    onValueChange = { value ->
+                        apiKeyInput = value
+                        onSaveApiKey(value.trim())
+                    },
                     label = { Text("API Key") },
+                    leadingIcon = {
+                        Icon(imageVector = Icons.Default.Key, contentDescription = null)
+                    },
+                    trailingIcon = if (apiKeyInput.isNotEmpty()) {
+                        {
+                            IconButton(
+                                onClick = {
+                                    apiKeyInput = ""
+                                    onSaveApiKey("")
+                                },
+                                modifier = Modifier.testTag("steamgriddb_key_clear")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Clear,
+                                    contentDescription = "Clear API Key"
+                                )
+                            }
+                        }
+                    } else {
+                        null
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("steamgriddb_key_input")
                 )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = { onSaveApiKey(apiKeyInput.trim()) },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(imageVector = Icons.Default.Key, contentDescription = null)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Save API Key")
-                }
 
                 Spacer(modifier = Modifier.height(14.dp))
                 Row(
@@ -675,17 +693,18 @@ fun SettingsModal(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Include NSFW artwork",
+                            text = "Show NSFW posters",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Show assigned NSFW posters and show only NSFW SteamGridDB results when customizing.",
+                            text = "NSFW posters will be available while enabled. Disabling this option hides NSFW game art, but it will still be saved to the game library if you choose to enable it again later.",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    Spacer(modifier = Modifier.width(12.dp))
                     Switch(
                         checked = steamGridDbIncludeNsfw,
                         onCheckedChange = onSteamGridDbIncludeNsfwChange,
@@ -696,10 +715,7 @@ fun SettingsModal(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            SettingsSection(
-                title = "Hidden Apps",
-                description = "Tap an item to open it, or restore it to the library."
-            ) {
+            SettingsSection(title = "Hidden Apps") {
                 if (hiddenItems.isEmpty()) {
                     Text(
                         text = "Nothing hidden yet.",
@@ -924,6 +940,15 @@ private fun FavoritesLayoutCard(
     onSelect: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val icon = when (layout) {
+        FavoritesLayout.TEXT -> Icons.AutoMirrored.Filled.FormatListBulleted
+        FavoritesLayout.ICONS -> Icons.Default.GridView
+    }
+    val contentColor = if (isSelected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
     Card(
         onClick = onSelect,
         colors = CardDefaults.cardColors(
@@ -940,18 +965,25 @@ private fun FavoritesLayoutCard(
             )
             .testTag("favorites_layout_${layout.name.lowercase()}")
     ) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp, horizontal = 12.dp),
-            contentAlignment = Alignment.Center
+                .padding(vertical = 14.dp, horizontal = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = layout.label,
                 fontSize = 14.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
-                else MaterialTheme.colorScheme.onSurface
+                color = contentColor
             )
         }
     }

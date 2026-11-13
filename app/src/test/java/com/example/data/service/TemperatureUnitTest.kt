@@ -13,43 +13,43 @@ class TemperatureUnitTest {
     )
 
     @Test
-    fun automaticUnitUsesFahrenheitForFahrenheitCountries() {
+    fun localeDefaultUsesFahrenheitForFahrenheitCountries() {
         assertEquals(
             TemperatureUnit.FAHRENHEIT,
-            resolveTemperatureUnit(TemperatureUnit.AUTO, Locale.US)
+            TemperatureUnit.defaultForLocale(Locale.US)
         )
         assertEquals(
             TemperatureUnit.FAHRENHEIT,
-            resolveTemperatureUnit(TemperatureUnit.AUTO, Locale.forLanguageTag("en-LR"))
+            TemperatureUnit.defaultForLocale(Locale.forLanguageTag("en-LR"))
         )
     }
 
     @Test
-    fun automaticUnitUsesCelsiusEverywhereElse() {
+    fun localeDefaultUsesCelsiusEverywhereElse() {
         assertEquals(
             TemperatureUnit.CELSIUS,
-            resolveTemperatureUnit(TemperatureUnit.AUTO, Locale.UK)
+            TemperatureUnit.defaultForLocale(Locale.UK)
         )
         assertEquals(
             TemperatureUnit.CELSIUS,
-            resolveTemperatureUnit(TemperatureUnit.AUTO, Locale.GERMANY)
+            TemperatureUnit.defaultForLocale(Locale.GERMANY)
         )
         // A locale without a country cannot be Fahrenheit.
         assertEquals(
             TemperatureUnit.CELSIUS,
-            resolveTemperatureUnit(TemperatureUnit.AUTO, Locale.ROOT)
+            TemperatureUnit.defaultForLocale(Locale.ROOT)
         )
     }
 
     @Test
-    fun explicitUnitOverridesTheLocale() {
+    fun storedUnitOverridesTheLocale() {
         assertEquals(
             TemperatureUnit.CELSIUS,
-            resolveTemperatureUnit(TemperatureUnit.CELSIUS, Locale.US)
+            TemperatureUnit.fromStorage("CELSIUS", Locale.US)
         )
         assertEquals(
             TemperatureUnit.FAHRENHEIT,
-            resolveTemperatureUnit(TemperatureUnit.FAHRENHEIT, Locale.UK)
+            TemperatureUnit.fromStorage("FAHRENHEIT", Locale.UK)
         )
     }
 
@@ -72,9 +72,11 @@ class TemperatureUnitTest {
     }
 
     @Test
-    fun unknownStoredValueFallsBackToAutomatic() {
-        assertEquals(TemperatureUnit.AUTO, TemperatureUnit.fromStorage(null))
-        assertEquals(TemperatureUnit.AUTO, TemperatureUnit.fromStorage("kelvin"))
-        assertEquals(TemperatureUnit.CELSIUS, TemperatureUnit.fromStorage("CELSIUS"))
+    fun unknownOrLegacyAutoStoredValueFallsBackToLocaleDefault() {
+        assertEquals(TemperatureUnit.FAHRENHEIT, TemperatureUnit.fromStorage(null, Locale.US))
+        assertEquals(TemperatureUnit.CELSIUS, TemperatureUnit.fromStorage(null, Locale.UK))
+        assertEquals(TemperatureUnit.FAHRENHEIT, TemperatureUnit.fromStorage("AUTO", Locale.US))
+        assertEquals(TemperatureUnit.CELSIUS, TemperatureUnit.fromStorage("kelvin", Locale.UK))
+        assertEquals(TemperatureUnit.CELSIUS, TemperatureUnit.fromStorage("CELSIUS", Locale.US))
     }
 }

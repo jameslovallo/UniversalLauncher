@@ -21,17 +21,31 @@ enum class WeatherLocationMode {
 }
 
 /**
- * Temperature unit used by the weather widget. AUTO follows the device locale, while the
- * explicit values let the user override it from Settings.
+ * Temperature unit used by the weather widget. Defaults to the device's region settings
+ * when no preference has been saved yet.
  */
 enum class TemperatureUnit(val label: String, val chipLabel: String) {
-    AUTO("Automatic (device locale)", "Auto"),
     CELSIUS("Celsius", "°C"),
     FAHRENHEIT("Fahrenheit", "°F");
 
     companion object {
-        fun fromStorage(value: String?): TemperatureUnit =
-            runCatching { valueOf(value.orEmpty()) }.getOrDefault(AUTO)
+        fun fromStorage(
+            value: String?,
+            locale: Locale = Locale.getDefault()
+        ): TemperatureUnit = when (value) {
+            CELSIUS.name -> CELSIUS
+            FAHRENHEIT.name -> FAHRENHEIT
+            else -> defaultForLocale(locale)
+        }
+
+        /**
+         * Fahrenheit is the official scale in only a handful of countries, so everything else
+         * defaults to Celsius.
+         */
+        fun defaultForLocale(locale: Locale = Locale.getDefault()): TemperatureUnit {
+            val country = locale.country.uppercase(Locale.ROOT)
+            return if (country in FAHRENHEIT_COUNTRIES) FAHRENHEIT else CELSIUS
+        }
     }
 }
 
@@ -40,21 +54,6 @@ data class WeatherInfo(
     val weatherCode: Int,
     val locationLabel: String
 )
-
-/**
- * Resolves AUTO against the device locale. Fahrenheit is the official scale in only a
- * handful of countries, so everything else falls back to Celsius.
- */
-fun resolveTemperatureUnit(
-    setting: TemperatureUnit,
-    locale: Locale = Locale.getDefault()
-): TemperatureUnit = when (setting) {
-    TemperatureUnit.CELSIUS, TemperatureUnit.FAHRENHEIT -> setting
-    TemperatureUnit.AUTO -> {
-        val country = locale.country.uppercase(Locale.ROOT)
-        if (country in FAHRENHEIT_COUNTRIES) TemperatureUnit.FAHRENHEIT else TemperatureUnit.CELSIUS
-    }
-}
 
 private val FAHRENHEIT_COUNTRIES = setOf(
     "US", "LR", "MM", "BS", "BZ", "KY", "PW", "FM", "MH", "TC", "PR", "GU", "VI", "AS"

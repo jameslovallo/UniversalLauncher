@@ -75,7 +75,6 @@ import androidx.compose.ui.zIndex
 import com.example.data.model.GameItem
 import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherInfo
-import com.example.data.service.resolveTemperatureUnit
 import com.example.data.service.temperatureDisplay
 import com.example.ui.theme.FavoritesLayout
 import kotlinx.coroutines.delay
@@ -101,7 +100,7 @@ fun FavoritesHome(
     showFocusEffects: Boolean,
     weatherEnabled: Boolean = false,
     weather: WeatherInfo? = null,
-    temperatureUnit: TemperatureUnit = TemperatureUnit.AUTO,
+    temperatureUnit: TemperatureUnit = TemperatureUnit.defaultForLocale(),
     firstItemFocusRequester: FocusRequester? = null,
     onLaunchFavorite: (GameItem) -> Unit,
     onLongPressFavorite: (GameItem) -> Unit,
@@ -142,7 +141,6 @@ fun FavoritesHome(
     val dateFormatter = remember {
         SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
     }
-    val displayUnit = remember(temperatureUnit) { resolveTemperatureUnit(temperatureUnit) }
     val nowDate = Date(now)
 
     Column(
@@ -247,7 +245,7 @@ fun FavoritesHome(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = weather.temperatureDisplay(displayUnit, showUnit = false),
+                            text = weather.temperatureDisplay(temperatureUnit, showUnit = false),
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface

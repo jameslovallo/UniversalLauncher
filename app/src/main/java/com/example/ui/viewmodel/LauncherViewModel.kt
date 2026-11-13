@@ -142,7 +142,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val weatherZip: StateFlow<String> = _weatherZip.asStateFlow()
 
     private val _temperatureUnit = MutableStateFlow(
-        TemperatureUnit.fromStorage(prefs.getString("temperature_unit", TemperatureUnit.AUTO.name))
+        TemperatureUnit.fromStorage(prefs.getString("temperature_unit", null))
     )
     val temperatureUnit: StateFlow<TemperatureUnit> = _temperatureUnit.asStateFlow()
 
@@ -830,8 +830,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun saveSteamGridDbApiKey(key: String) {
-        prefs.edit().putString("sgdb_api_key", key).apply()
-        _steamGridDbApiKey.value = key
+        val trimmed = key.trim()
+        if (trimmed.isEmpty()) {
+            prefs.edit().remove("sgdb_api_key").apply()
+        } else {
+            prefs.edit().putString("sgdb_api_key", trimmed).apply()
+        }
+        _steamGridDbApiKey.value = trimmed
     }
 
     fun setSteamGridDbIncludeNsfw(include: Boolean) {
@@ -880,7 +885,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private companion object {
-        const val DEFAULT_APPS_OPACITY = 0.55f
+        const val DEFAULT_APPS_OPACITY = 0.6f
 
         /** One-time cleanup of the hardcoded library entries from early builds. */
         const val KEY_LEGACY_CLEANUP_DONE = "legacy_prepopulated_cleanup_done"

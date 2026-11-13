@@ -34,7 +34,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherInfo
-import com.example.data.service.resolveTemperatureUnit
 import com.example.data.service.temperatureDisplay
 import com.example.ui.viewmodel.MainLibraryTab
 import kotlinx.coroutines.delay
@@ -49,7 +48,7 @@ fun TopNavBar(
     showDateWeather: Boolean = false,
     weatherEnabled: Boolean = false,
     weather: WeatherInfo? = null,
-    temperatureUnit: TemperatureUnit = TemperatureUnit.AUTO,
+    temperatureUnit: TemperatureUnit = TemperatureUnit.defaultForLocale(),
     onOpenCalendar: () -> Unit = {},
     onOpenWeather: () -> Unit = {},
     onTabSelected: (MainLibraryTab) -> Unit,
@@ -186,7 +185,6 @@ private fun DateWeatherHeader(
     }
 
     val dateFormatter = remember { SimpleDateFormat("EEEE, MMMM d", Locale.getDefault()) }
-    val displayUnit = remember(temperatureUnit) { resolveTemperatureUnit(temperatureUnit) }
 
     Row(
         modifier = modifier,
@@ -226,7 +224,7 @@ private fun DateWeatherHeader(
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
-                    text = weather.temperatureDisplay(displayUnit, showUnit = false),
+                    text = weather.temperatureDisplay(temperatureUnit, showUnit = false),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
