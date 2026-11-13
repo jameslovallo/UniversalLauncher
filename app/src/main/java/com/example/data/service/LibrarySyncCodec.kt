@@ -40,29 +40,55 @@ internal object LibrarySyncCodec {
         val authoritative: Boolean = false,
         /** True when the file tracks local chosen-file poster hashes (`posterHash` / `nsfwPosterHash`). */
         val tracksLocalPosters: Boolean = false,
-        val posterHashes: Map<String, PosterHashes> = emptyMap()
+        val posterHashes: Map<String, PosterHashes> = emptyMap(),
+        val appCustomizations: List<GameItem> = emptyList(),
+        val appPosterHashes: Map<String, PosterHashes> = emptyMap()
     )
 
     const val FORMAT_NAME = "nexus_library"
     const val FORMAT_VERSION = 2
 
     fun isSyncable(item: GameItem): Boolean = when (item.type) {
-        GameType.GEFORCE_NOW, GameType.MOONLIGHT -> true
+        GameType.GEFORCE_NOW, GameType.MOONLIGHT, GameType.CUSTOM_CLOUD -> true
         GameType.SHORTCUT -> item.isGame
         else -> false
     }
+
+    /**
+     * Installed apps stay tied to each device's installed packages, so they never create
+     * ghost tiles on other devices. However, user customizations and assigned posters on
+     * installed apps/games do travel in `appCustomizations` and apply wherever the same
+     * package is installed.
+     */
+    fun isSyncableAppCustomization(item: GameItem): Boolean =
+        item.type == GameType.INSTALLED_APP &&
+            !item.isDeleted &&
+            (
+                item.isCustomized ||
+                    !item.posterUrl.isNullOrBlank() ||
+                    !item.nsfwPosterUrl.isNullOrBlank() ||
+                    item.overlayNsfwLogo ||
+                    !item.nsfwLogoUrl.isNullOrBlank() ||
+                    item.isFavorite ||
+                    item.isHidden
+                )
 
     /** Shareable rows in a stable order. */
     fun syncable(rows: List<GameItem>): List<GameItem> =
         rows.filter(::isSyncable).sortedBy { it.id }
 
+    fun syncableAppCustomizations(rows: List<GameItem>): List<GameItem> =
+        rows.filter(::isSyncableAppCustomization).sortedBy { it.id }
+
     fun buildDocument(
         items: List<GameItem>,
         updatedAt: Long,
-        localHashForUrl: (String) -> String? = ::localFileSha256
+        localHashForUrl: (String) -> String? = ::localFileSha256,
+        appCustomizations: List<GameItem> = emptyList(),
+        appPosterHashOverrides: Map<String, PosterHashes> = emptyMap()
     ): JSONObject {
         val payload = JSONArray()
-        items.sortedBy { it.id }.forEach { payload.put(itemToJson(it, localHashForUrl)) }
+        items.sortedBy { it.id }.forEach { payload.put(itemToJson(it, emptyMap(), localHashForUrl)) }
         return JSONObject()
             .put("format", FORMAT_NAME)
             .put("version", FORMAT_VERSION)
@@ -71,6 +97,15 @@ internal object LibrarySyncCodec {
             .put("exportedAt", updatedAt)
             .put("localPosters", true)
             .put("items", payload)
+            .apply {
+                if (appCustomizations.isNotEmpty()) {
+                    val appArray = JSONArray()
+                    appCustomizations.sortedBy { it.id }.forEach { app ->
+                        appArray.put(itemToJson(app, appPosterHashOverrides, localHashForUrl))
+                    }
+                    put("appCustomizations", appArray)
+                }
+            }
     }
 
     /**
@@ -82,12 +117,14 @@ internal object LibrarySyncCodec {
         val updatedAt: Long
         val version: Int
         val tracksLocalPosters: Boolean
+        val appArray: JSONArray?
         if (trimmed.startsWith("[")) {
             // Bare array written by older builds; its age and deletions are unknown.
             array = parseArrayOrFail(trimmed)
             updatedAt = 0L
             version = 0
             tracksLocalPosters = false
+            appArray = null
         } else {
             val document = try {
                 JSONObject(trimmed)
@@ -111,6 +148,7 @@ internal object LibrarySyncCodec {
             version = document.optInt("version", 0)
             tracksLocalPosters = document.optBoolean("localPosters", false)
             array = itemArray ?: JSONArray()
+            appArray = document.optJSONArray("appCustomizations")
         }
 
         val posterHashes = mutableMapOf<String, PosterHashes>()
@@ -128,13 +166,32 @@ internal object LibrarySyncCodec {
                 }
             }
         }
+        val appPosterHashes = mutableMapOf<String, PosterHashes>()
+        val appCustomizations = buildList {
+            if (appArray != null) {
+                for (index in 0 until appArray.length()) {
+                    val obj = appArray.optJSONObject(index)
+                    val app = jsonToItem(obj)?.takeIf { it.type == GameType.INSTALLED_APP } ?: continue
+                    add(app)
+                    if (obj != null) {
+                        val pHash = obj.optNullableString("posterHash")
+                        val nHash = obj.optNullableString("nsfwPosterHash")
+                        if (pHash != null || nHash != null) {
+                            appPosterHashes[app.id] = PosterHashes(pHash, nHash)
+                        }
+                    }
+                }
+            }
+        }
         return Parsed(
             updatedAt = updatedAt,
             items = items,
             signature = signatureWithOverrides(items, posterHashes),
             authoritative = version >= FORMAT_VERSION,
             tracksLocalPosters = tracksLocalPosters,
-            posterHashes = posterHashes
+            posterHashes = posterHashes,
+            appCustomizations = appCustomizations,
+            appPosterHashes = appPosterHashes
         )
     }
 
@@ -147,6 +204,23 @@ internal object LibrarySyncCodec {
         items: List<GameItem>,
         localHashForUrl: (String) -> String? = ::localFileSha256
     ): String = signatureWithOverrides(items, emptyMap(), localHashForUrl)
+
+    fun librarySignature(
+        items: List<GameItem>,
+        appCustomizations: List<GameItem>,
+        itemHashOverrides: Map<String, PosterHashes> = emptyMap(),
+        appHashOverrides: Map<String, PosterHashes> = emptyMap(),
+        localHashForUrl: (String) -> String? = ::localFileSha256
+    ): String {
+        val itemsPart = items
+            .map { canonicalItem(it, itemHashOverrides[it.id], localHashForUrl) }
+            .sorted()
+        val appsPart = appCustomizations
+            .map { canonicalItem(it, appHashOverrides[it.id], localHashForUrl) }
+            .sorted()
+        val combined = (itemsPart + listOf(SECTION_SEPARATOR) + appsPart).joinToString(RECORD_SEPARATOR)
+        return sha256Hex(combined.toByteArray(Charsets.UTF_8))
+    }
 
     private fun signatureWithOverrides(
         items: List<GameItem>,
@@ -170,6 +244,7 @@ internal object LibrarySyncCodec {
 
     private fun itemToJson(
         item: GameItem,
+        hashOverrides: Map<String, PosterHashes>,
         localHashForUrl: (String) -> String?
     ): JSONObject = JSONObject().apply {
         put("id", item.id)
@@ -181,17 +256,20 @@ internal object LibrarySyncCodec {
         item.launchUrl?.let { put("launchUrl", it) }
         item.gfnCmsId?.let { put("gfnCmsId", it) }
         // Raw local file paths stay off the JSON; existing local artwork contributes a content hash.
+        val override = hashOverrides[item.id]
         val remotePoster = shareableUrl(item.posterUrl)
         if (remotePoster != null) {
             put("posterUrl", remotePoster)
         } else {
-            item.posterUrl?.let(localHashForUrl)?.let { put("posterHash", it) }
+            (item.posterUrl?.let(localHashForUrl) ?: override?.posterHash)?.let { put("posterHash", it) }
         }
         val remoteNsfwPoster = shareableUrl(item.nsfwPosterUrl)
         if (remoteNsfwPoster != null) {
             put("nsfwPosterUrl", remoteNsfwPoster)
         } else {
-            item.nsfwPosterUrl?.let(localHashForUrl)?.let { put("nsfwPosterHash", it) }
+            (item.nsfwPosterUrl?.let(localHashForUrl) ?: override?.nsfwPosterHash)?.let {
+                put("nsfwPosterHash", it)
+            }
         }
         shareableUrl(item.nsfwLogoUrl)?.let { put("nsfwLogoUrl", it) }
         if (item.overlayNsfwLogo) put("overlayNsfwLogo", true)
@@ -315,4 +393,5 @@ internal object LibrarySyncCodec {
 
     private const val RECORD_SEPARATOR = "\u001e"
     private const val FIELD_SEPARATOR = "\u001f"
+    private const val SECTION_SEPARATOR = "\u001d"
 }

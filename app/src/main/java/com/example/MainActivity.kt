@@ -72,6 +72,7 @@ class MainActivity : ComponentActivity() {
         // When the optional home-override service is active, Nexus behaves like the home
         // app itself, so keep it out of the Task Switcher / Recents list.
         updateRecentsVisibility()
+        viewModel.syncLibraryOnResume()
     }
 
     private fun updateRecentsVisibility() {

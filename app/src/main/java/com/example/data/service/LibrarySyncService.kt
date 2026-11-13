@@ -6,6 +6,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.provider.DocumentsContract
 import com.example.data.model.GameItem
+import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
 import java.io.File
 import java.io.FileNotFoundException
@@ -148,6 +149,12 @@ class LibrarySyncService(
         }
     }
 
+    private data class LocalSyncPayload(
+        val items: List<GameItem>,
+        val appCustomizations: List<GameItem>,
+        val installedAppIds: Set<String>
+    )
+
     /**
      * Watches the full library and writes to the sync folder whenever shareable content changes.
      */
@@ -158,8 +165,16 @@ class LibrarySyncService(
     ) {
         scope.launch {
             repository.allItemsIncludingDeleted
-                .map { rows -> syncable(rows) }
-                .map { items -> items to signature(items) }
+                .map { rows ->
+                    val payload = LocalSyncPayload(
+                        items = syncable(rows),
+                        appCustomizations = syncableAppCustomizations(rows),
+                        installedAppIds = rows
+                            .filter { it.type == GameType.INSTALLED_APP }
+                            .mapTo(HashSet()) { it.id }
+                    )
+                    payload to librarySignature(payload.items, payload.appCustomizations)
+                }
                 .distinctUntilChangedBy { it.second }
                 .onEach { (_, sig) ->
                     if (!isConfigured || sig == prefs.getString(KEY_SIGNATURE, "")) {
@@ -168,15 +183,23 @@ class LibrarySyncService(
                     prefs.edit().putLong(KEY_UPDATED_AT, nextVersion()).apply()
                 }
                 .debounce(WRITE_DEBOUNCE_MS)
-                .collect { (items, sig) ->
+                .collect { (payload, sig) ->
                     if (!isConfigured || sig == prefs.getString(KEY_SIGNATURE, "")) {
                         return@collect
                     }
                     withContext(Dispatchers.IO) {
                         mutex.withLock {
                             val treeUri = resolveTreeUri() ?: return@withLock
-                            runCatching { writeLocked(treeUri, items) }
-                                .onFailure { onError(it.message ?: "Library folder sync failed") }
+                            runCatching {
+                                writeLocked(
+                                    treeUri = treeUri,
+                                    items = payload.items,
+                                    localApps = payload.appCustomizations,
+                                    localInstalledAppIds = payload.installedAppIds
+                                )
+                            }.onFailure {
+                                onError(it.message ?: "Library folder sync failed")
+                            }
                         }
                     }
                 }
@@ -187,53 +210,101 @@ class LibrarySyncService(
 
     private suspend fun syncLocked(treeUri: Uri, adoptExisting: Boolean): LibrarySyncOutcome {
         val snapshot = readDocument(treeUri)
-        val localItems = repository.getSyncableItemsSnapshot()
+        val allRows = repository.getAllItemsSnapshot()
+        val localItems = syncable(allRows)
+        val localApps = syncableAppCustomizations(allRows)
+        val localInstalledAppIds = allRows
+            .filter { it.type == GameType.INSTALLED_APP }
+            .mapTo(HashSet()) { it.id }
 
-        if (snapshot == null || snapshot.items.isEmpty()) {
+        if (snapshot == null || (snapshot.items.isEmpty() && snapshot.appCustomizations.isEmpty())) {
             // Seed folder from this device (writes json and exports all assigned posters).
-            return writeLocked(treeUri, localItems, snapshot?.updatedAt ?: 0L)
+            return writeLocked(
+                treeUri = treeUri,
+                items = localItems,
+                localApps = localApps,
+                localInstalledAppIds = localInstalledAppIds,
+                minVersion = snapshot?.updatedAt ?: 0L,
+                existingSnapshot = snapshot
+            )
         }
 
+        val relevantRemoteApps = snapshot.appCustomizations.filter { it.id in localInstalledAppIds }
+        val relevantRemoteAppHashes = snapshot.appPosterHashes.filterKeys { it in localInstalledAppIds }
+
         if (!snapshot.authoritative) {
-            val imported = importPosters(snapshot.items, snapshot.posterHashes, treeUri)
-            repository.mergeSyncedLibrary(imported.items)
+            val importedItems = importPosters(snapshot.items, snapshot.posterHashes, treeUri)
+            val importedApps = importPosters(relevantRemoteApps, relevantRemoteAppHashes, treeUri)
+            repository.mergeSyncedLibrary(importedItems.items)
+            repository.applySyncedAppCustomizations(importedApps.items, snapshot.tracksLocalPosters)
+            val updatedRows = repository.getAllItemsSnapshot()
+            val updatedInstalledIds = updatedRows
+                .filter { it.type == GameType.INSTALLED_APP }
+                .mapTo(HashSet()) { it.id }
             return writeLocked(
-                treeUri,
-                repository.getSyncableItemsSnapshot(),
-                snapshot.updatedAt
+                treeUri = treeUri,
+                items = syncable(updatedRows),
+                localApps = syncableAppCustomizations(updatedRows),
+                localInstalledAppIds = updatedInstalledIds,
+                minVersion = snapshot.updatedAt,
+                existingSnapshot = snapshot
             )
         }
 
         val localVersion = prefs.getLong(KEY_UPDATED_AT, 0L)
-        val localSignature = signature(localItems)
-        val differs = snapshot.signature != localSignature
+        val remoteSignature = LibrarySyncCodec.librarySignature(
+            items = snapshot.items,
+            appCustomizations = relevantRemoteApps,
+            itemHashOverrides = snapshot.posterHashes,
+            appHashOverrides = relevantRemoteAppHashes,
+            localHashForUrl = ::localHashForUrl
+        )
+        val localSignature = librarySignature(localItems, localApps)
+        val differs = remoteSignature != localSignature
         val fileIsNewer = adoptExisting || snapshot.updatedAt > localVersion
 
         if (differs && fileIsNewer) {
-            val imported = importPosters(snapshot.items, snapshot.posterHashes, treeUri)
-            repository.replaceSyncedLibrary(imported.items, snapshot.tracksLocalPosters)
-            val applied = repository.getSyncableItemsSnapshot()
-            val storedVersion = if (imported.missingExpectedPoster) {
+            val importedItems = importPosters(snapshot.items, snapshot.posterHashes, treeUri)
+            val importedApps = importPosters(relevantRemoteApps, relevantRemoteAppHashes, treeUri)
+            repository.replaceSyncedLibrary(importedItems.items, snapshot.tracksLocalPosters)
+            repository.applySyncedAppCustomizations(importedApps.items, snapshot.tracksLocalPosters)
+            val appliedRows = repository.getAllItemsSnapshot()
+            val appliedSignature = librarySignature(
+                items = syncable(appliedRows),
+                appCustomizations = syncableAppCustomizations(appliedRows)
+            )
+            val missingAnyPoster = importedItems.missingExpectedPoster ||
+                importedApps.missingExpectedPoster
+            val storedVersion = if (missingAnyPoster) {
                 // Keep localVersion behind snapshot.updatedAt so a partially synced Drive
                 // posters/ folder gets imported on the next sync instead of being overwritten.
                 (snapshot.updatedAt - 1L).coerceAtLeast(0L)
             } else {
-                maxOf(snapshot.updatedAt, nextVersion())
+                // Store the remote file's own timestamp (not local wall clock) so clock skew
+                // on this device never causes it to reject or overwrite newer updates from another.
+                snapshot.updatedAt
             }
             prefs.edit()
                 .putLong(KEY_UPDATED_AT, storedVersion)
-                .putString(KEY_SIGNATURE, signature(applied))
+                .putString(KEY_SIGNATURE, appliedSignature)
                 .putLong(KEY_LAST_SYNC, System.currentTimeMillis())
                 .apply()
             return LibrarySyncOutcome.Applied(snapshot.items.size)
         }
 
         if (differs) {
-            return writeLocked(treeUri, localItems, snapshot.updatedAt)
+            return writeLocked(
+                treeUri = treeUri,
+                items = localItems,
+                localApps = localApps,
+                localInstalledAppIds = localInstalledAppIds,
+                minVersion = snapshot.updatedAt,
+                existingSnapshot = snapshot
+            )
         }
 
         // Even when metadata matches, ensure any missing posters in the folder are exported
-        exportPosters(localItems, treeUri)
+        exportPosters(localItems + localApps, treeUri)
 
         prefs.edit()
             .putLong(KEY_UPDATED_AT, maxOf(localVersion, snapshot.updatedAt))
@@ -246,7 +317,10 @@ class LibrarySyncService(
     private suspend fun writeLocked(
         treeUri: Uri,
         items: List<GameItem>,
-        minVersion: Long = 0L
+        localApps: List<GameItem>,
+        localInstalledAppIds: Set<String>,
+        minVersion: Long = 0L,
+        existingSnapshot: Snapshot? = null
     ): LibrarySyncOutcome {
         val docUri = try {
             writableDocumentUri(treeUri)
@@ -254,8 +328,24 @@ class LibrarySyncService(
             throw fileAccessError(error)
         } ?: throw IllegalStateException("Could not open $FILE_NAME in sync folder")
 
+        // Preserve remote appCustomizations for packages not installed on this device so we
+        // never erase another device's installed-game posters when writing local edits.
+        val baseSnapshot = existingSnapshot ?: runCatching { readDocument(treeUri) }.getOrNull()
+        val preservedRemoteApps = baseSnapshot?.appCustomizations
+            ?.filter { it.id !in localInstalledAppIds }
+            .orEmpty()
+        val preservedAppHashes = baseSnapshot?.appPosterHashes
+            .orEmpty()
+            .filterKeys { it !in localInstalledAppIds }
+        val mergedApps = (localApps + preservedRemoteApps).sortedBy { it.id }
+
         val version = maxOf(nextVersion(), minVersion + 1L)
-        val document = buildDocument(items, version).toString()
+        val document = buildDocument(
+            items = items,
+            updatedAt = version,
+            appCustomizations = mergedApps,
+            appPosterHashOverrides = preservedAppHashes
+        ).toString()
 
         try {
             resolver.openOutputStream(docUri, "wt")?.use { stream ->
@@ -268,11 +358,11 @@ class LibrarySyncService(
         }
 
         // Export all assigned game posters to posters/ directory
-        exportPosters(items, treeUri)
+        exportPosters(items + localApps, treeUri)
 
         prefs.edit()
             .putLong(KEY_UPDATED_AT, version)
-            .putString(KEY_SIGNATURE, signature(items))
+            .putString(KEY_SIGNATURE, librarySignature(items, localApps))
             .putLong(KEY_LAST_SYNC, System.currentTimeMillis())
             .apply()
         return LibrarySyncOutcome.WroteLocal(items.size)
@@ -560,7 +650,9 @@ class LibrarySyncService(
         val signature: String,
         val authoritative: Boolean,
         val tracksLocalPosters: Boolean,
-        val posterHashes: Map<String, LibrarySyncCodec.PosterHashes>
+        val posterHashes: Map<String, LibrarySyncCodec.PosterHashes>,
+        val appCustomizations: List<GameItem>,
+        val appPosterHashes: Map<String, LibrarySyncCodec.PosterHashes>
     )
 
     private fun resolveTreeUri(): Uri? =
@@ -724,8 +816,18 @@ class LibrarySyncService(
 
     // ---- JSON & Codec -------------------------------------------------------------
 
-    private fun buildDocument(items: List<GameItem>, updatedAt: Long): JSONObject =
-        LibrarySyncCodec.buildDocument(items, updatedAt, ::localHashForUrl)
+    private fun buildDocument(
+        items: List<GameItem>,
+        updatedAt: Long,
+        appCustomizations: List<GameItem> = emptyList(),
+        appPosterHashOverrides: Map<String, LibrarySyncCodec.PosterHashes> = emptyMap()
+    ): JSONObject = LibrarySyncCodec.buildDocument(
+        items = items,
+        updatedAt = updatedAt,
+        localHashForUrl = ::localHashForUrl,
+        appCustomizations = appCustomizations,
+        appPosterHashOverrides = appPosterHashOverrides
+    )
 
     private fun parseDocument(text: String): Snapshot =
         LibrarySyncCodec.parse(text).let {
@@ -735,14 +837,25 @@ class LibrarySyncService(
                 signature = it.signature,
                 authoritative = it.authoritative,
                 tracksLocalPosters = it.tracksLocalPosters,
-                posterHashes = it.posterHashes
+                posterHashes = it.posterHashes,
+                appCustomizations = it.appCustomizations,
+                appPosterHashes = it.appPosterHashes
             )
         }
 
     private fun syncable(rows: List<GameItem>): List<GameItem> = LibrarySyncCodec.syncable(rows)
 
-    private fun signature(items: List<GameItem>): String =
-        LibrarySyncCodec.signature(items, ::localHashForUrl)
+    private fun syncableAppCustomizations(rows: List<GameItem>): List<GameItem> =
+        LibrarySyncCodec.syncableAppCustomizations(rows)
+
+    private fun librarySignature(
+        items: List<GameItem>,
+        appCustomizations: List<GameItem>
+    ): String = LibrarySyncCodec.librarySignature(
+        items = items,
+        appCustomizations = appCustomizations,
+        localHashForUrl = ::localHashForUrl
+    )
 
     private fun localHashForUrl(url: String): String? = when {
         url.startsWith("file:") -> LibrarySyncCodec.localFileSha256(url)

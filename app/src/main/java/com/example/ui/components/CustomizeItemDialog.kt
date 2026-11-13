@@ -45,6 +45,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
@@ -118,10 +119,8 @@ fun CustomizeItemDialog(
 
     BackHandler(onBack = commitTitleAndDismiss)
 
-    // Local photo picker
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
+    // Local file and photo pickers (both copy into app-private storage so URIs persist).
+    val applyPickedUri: (Uri?) -> Unit = { uri ->
         if (uri != null) {
             val slotSuffix = when {
                 !item.isGame -> "icon"
@@ -129,8 +128,6 @@ fun CustomizeItemDialog(
                 else -> "default"
             }
             scope.launch {
-                // The photo picker only grants transient read access to the picked URI, so
-                // copy the bytes into app storage; the stored path then survives restarts.
                 val stored = withContext(Dispatchers.IO) {
                     copyPickedImage(context, item.id, slotSuffix, uri)
                 }
@@ -139,6 +136,16 @@ fun CustomizeItemDialog(
             }
         }
     }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = applyPickedUri
+    )
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = applyPickedUri
+    )
 
     LaunchedEffect(title, includeNsfw) {
         val query = title.trim()
@@ -403,7 +410,7 @@ fun CustomizeItemDialog(
                             }
                         }
                     }
-                    1 -> { // Local Photo
+                    1 -> { // Local Photo / File
                         Column(
                             modifier = Modifier.fillMaxSize(),
                             verticalArrangement = Arrangement.Center,
@@ -422,7 +429,7 @@ fun CustomizeItemDialog(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Select any picture from device storage to apply immediately",
+                                text = "Choose an image file from device folders, Drive, or your gallery",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
@@ -430,14 +437,30 @@ fun CustomizeItemDialog(
                             Spacer(modifier = Modifier.height(14.dp))
                             Button(
                                 onClick = {
+                                    filePickerLauncher.launch(arrayOf("image/*"))
+                                },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("customize_pick_file_button")
+                            ) {
+                                Icon(Icons.Default.Folder, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Choose Image File")
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = {
                                     photoPickerLauncher.launch(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                     )
-                                }
+                                },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("customize_pick_gallery_button")
                             ) {
                                 Icon(Icons.Default.Image, contentDescription = null)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Browse Gallery")
+                                Text("Browse Photos")
                             }
                         }
                     }

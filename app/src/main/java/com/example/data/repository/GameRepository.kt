@@ -315,6 +315,9 @@ class GameRepository(
     suspend fun getSyncableItemsSnapshot(): List<GameItem> =
         gameDao.getAllItemsNow().filter(::isSyncableItem)
 
+    suspend fun getAllItemsSnapshot(): List<GameItem> =
+        gameDao.getAllItemsNow()
+
     /**
      * Replaces the local shareable library with [remoteItems] from the sync file.
      *
@@ -362,6 +365,50 @@ class GameRepository(
                         existing?.lastPlayedTimestamp ?: 0L
                     ),
                     playCount = maxOf(remote.playCount, existing?.playCount ?: 0)
+                )
+            )
+        }
+    }
+
+    /**
+     * Applies synced artwork and customization settings onto `INSTALLED_APP` rows that are
+     * actually installed on this device without creating tiles for apps only installed on
+     * another device.
+     */
+    suspend fun applySyncedAppCustomizations(
+        remoteApps: List<GameItem>,
+        tracksLocalPosters: Boolean = false
+    ) {
+        if (remoteApps.isEmpty()) return
+        val localById = gameDao.getGamesByTypeNow(GameType.INSTALLED_APP).associateBy { it.id }
+        remoteApps.forEach { remote ->
+            val existing = localById[remote.id] ?: return@forEach
+            if (existing.isDeleted) return@forEach
+            val resolvedPosterUrl = remote.posterUrl
+                ?: if (tracksLocalPosters) null
+                else existing.posterUrl?.takeIf {
+                    it.startsWith("file:") && !it.contains("-synced")
+                }
+            val resolvedNsfwPosterUrl = remote.nsfwPosterUrl
+                ?: if (tracksLocalPosters) null
+                else existing.nsfwPosterUrl?.takeIf {
+                    it.startsWith("file:") && !it.contains("-nsfw-synced")
+                }
+            gameDao.insertGame(
+                existing.copy(
+                    title = if (remote.isCustomized && remote.title.isNotBlank()) remote.title else existing.title,
+                    isGame = remote.isGame,
+                    isFavorite = remote.isFavorite,
+                    favoriteOrder = remote.favoriteOrder,
+                    isHidden = remote.isHidden,
+                    isCustomized = remote.isCustomized,
+                    posterUrl = resolvedPosterUrl,
+                    nsfwPosterUrl = resolvedNsfwPosterUrl,
+                    nsfwLogoUrl = remote.nsfwLogoUrl,
+                    overlayNsfwLogo = remote.overlayNsfwLogo,
+                    heroBannerUrl = remote.heroBannerUrl
+                        ?: existing.heroBannerUrl?.takeIf { it.startsWith("file:") },
+                    customArtworkSource = remote.customArtworkSource
                 )
             )
         }

@@ -775,6 +775,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     /** Reads the sync folder when the device is unlocked. */
     fun onDeviceUnlocked() {
         if (!librarySyncService.isConfigured || _librarySyncBusy.value) return
+        lastResumeLibrarySyncMs = SystemClock.elapsedRealtime()
+        syncLibraryInBackground()
+    }
+
+    /** Pulls remote library and poster updates when returning to the launcher (throttled). */
+    fun syncLibraryOnResume() {
+        if (!librarySyncService.isConfigured || _librarySyncBusy.value) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastResumeLibrarySyncMs < RESUME_SYNC_INTERVAL_MS) return
+        lastResumeLibrarySyncMs = now
+        syncLibraryInBackground()
+    }
+
+    private fun syncLibraryInBackground() {
         viewModelScope.launch {
             runCatching { librarySyncService.syncNow() }
                 .onSuccess { outcome ->
@@ -829,6 +843,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
      * repeat the package scan.
      */
     private var lastInstalledAppRefresh = 0L
+    private var lastResumeLibrarySyncMs = 0L
 
     fun refreshInstalledApps() {
         val now = SystemClock.elapsedRealtime()
@@ -897,6 +912,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private companion object {
         const val DEFAULT_APPS_OPACITY = 0.6f
+        const val RESUME_SYNC_INTERVAL_MS = 15_000L
 
         /** One-time cleanup of the hardcoded library entries from early builds. */
         const val KEY_LEGACY_CLEANUP_DONE = "legacy_prepopulated_cleanup_done"

@@ -288,4 +288,68 @@ class LibrarySyncCodecTest {
         val legacyV2 = """{"format":"nexus_library","version":2,"updatedAt":10,"items":[]}"""
         assertFalse(LibrarySyncCodec.parse(legacyV2).tracksLocalPosters)
     }
+
+    @Test
+    fun `custom cloud games are syncable`() {
+        val customCloud = GameItem(
+            id = "custom_1",
+            title = "Xbox Cloud",
+            type = GameType.CUSTOM_CLOUD,
+            isGame = true,
+            launchUrl = "https://www.xbox.com/play"
+        )
+        assertTrue(LibrarySyncCodec.isSyncable(customCloud))
+    }
+
+    @Test
+    fun `installed game with chosen nsfw poster file syncs in appCustomizations without polluting items`() {
+        val posterFile = File(tempFolder.root, "game_nsfw.img").apply {
+            writeBytes(byteArrayOf(11, 22, 33, 44, 55))
+        }
+        val installedGame = GameItem(
+            id = "app_com.example.game",
+            title = "Installed Game",
+            type = GameType.INSTALLED_APP,
+            isGame = true,
+            packageName = "com.example.game",
+            nsfwPosterUrl = Uri.fromFile(posterFile).toString(),
+            isCustomized = true
+        )
+        val plainSystemApp = GameItem(
+            id = "app_com.android.settings",
+            title = "Settings",
+            type = GameType.INSTALLED_APP,
+            isGame = false,
+            packageName = "com.android.settings"
+        )
+
+        val rows = listOf(installedGame, plainSystemApp)
+        val syncableApps = LibrarySyncCodec.syncableAppCustomizations(rows)
+        assertEquals(listOf("app_com.example.game"), syncableApps.map { it.id })
+
+        val doc = LibrarySyncCodec.buildDocument(
+            items = LibrarySyncCodec.syncable(rows),
+            updatedAt = 50L,
+            appCustomizations = syncableApps
+        ).toString()
+
+        val parsed = LibrarySyncCodec.parse(doc)
+        // Installed apps never enter `items` (so uninstalled apps never appear on another device).
+        assertTrue(parsed.items.isEmpty())
+        assertEquals(listOf("app_com.example.game"), parsed.appCustomizations.map { it.id })
+        assertNotNull(parsed.appPosterHashes["app_com.example.game"]?.nsfwPosterHash)
+
+        // Preserved unowned remote app customizations keep their hash override across rewrites.
+        val rewritten = LibrarySyncCodec.buildDocument(
+            items = emptyList(),
+            updatedAt = 51L,
+            appCustomizations = parsed.appCustomizations,
+            appPosterHashOverrides = parsed.appPosterHashes
+        ).toString()
+        val reparsed = LibrarySyncCodec.parse(rewritten)
+        assertEquals(
+            parsed.appPosterHashes["app_com.example.game"]?.nsfwPosterHash,
+            reparsed.appPosterHashes["app_com.example.game"]?.nsfwPosterHash
+        )
+    }
 }
