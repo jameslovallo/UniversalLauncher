@@ -7,11 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
-import android.view.ViewConfiguration
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -28,15 +24,6 @@ import com.example.ui.viewmodel.LauncherViewModel
 
 class MainActivity : ComponentActivity() {
     private val viewModel: LauncherViewModel by viewModels()
-
-    private val aHoldHandler = Handler(Looper.getMainLooper())
-    private var isHoldingA = false
-    private var aHoldTriggered = false
-    private val aHoldRunnable = Runnable {
-        aHoldTriggered = true
-        window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-        viewModel.openContextMenuForFocusedItem()
-    }
 
     /** Reads the library sync file again after the device is unlocked. */
     private val userPresentReceiver = object : BroadcastReceiver() {
@@ -75,15 +62,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onPause() {
-        super.onPause()
-        aHoldHandler.removeCallbacks(aHoldRunnable)
-        isHoldingA = false
-        aHoldTriggered = false
-    }
-
     override fun onDestroy() {
-        aHoldHandler.removeCallbacks(aHoldRunnable)
         runCatching { unregisterReceiver(userPresentReceiver) }
         super.onDestroy()
     }
@@ -106,7 +85,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Controller bumpers switch between the Apps and Games screens.
+        // Controller buttons Nexus handles directly: bumpers switch tabs, X opens the
+        // focused item's context menu, Back opens the Add modal, and Start opens Settings.
         val action = viewModel.controllerManager.handleKeyEvent(event)
         if (action != null) {
             if (viewModel.onControllerAction(action)) {
@@ -114,82 +94,25 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Controller Button A handling:
-        // - Holding A opens the currently focused app or game's context menu.
-        // - Short pressing A acts as click (mapped to DPAD_CENTER).
-        // - When a menu or modal is open, pressing A clicks the selected option immediately.
+        // Controller Button A handling: A acts as a click (mapped to DPAD_CENTER) both
+        // for a focused library item and for the selected option in an open menu/dialog.
+        // The context menu is opened with the X button (see ControllerManager), so a
+        // press of A never opens a context menu or waits for a long-press.
         if (event.keyCode == KeyEvent.KEYCODE_BUTTON_A) {
-            if (viewModel.isAnyMenuOrModalOpen()) {
-                val dpadCenterEvent = KeyEvent(
-                    event.downTime,
-                    event.eventTime,
-                    event.action,
-                    KeyEvent.KEYCODE_DPAD_CENTER,
-                    event.repeatCount,
-                    event.metaState,
-                    event.deviceId,
-                    event.scanCode,
-                    event.flags,
-                    event.source,
-                )
-                if (super.dispatchKeyEvent(dpadCenterEvent)) {
-                    return true
-                }
+            val dpadCenterEvent = KeyEvent(
+                event.downTime,
+                event.eventTime,
+                event.action,
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                event.repeatCount,
+                event.metaState,
+                event.deviceId,
+                event.scanCode,
+                event.flags,
+                event.source,
+            )
+            if (super.dispatchKeyEvent(dpadCenterEvent)) {
                 return true
-            }
-
-            // When no menu or modal is open:
-            when (event.action) {
-                KeyEvent.ACTION_DOWN -> {
-                    if (event.repeatCount == 0) {
-                        isHoldingA = true
-                        aHoldTriggered = false
-                        aHoldHandler.removeCallbacks(aHoldRunnable)
-                        aHoldHandler.postDelayed(
-                            aHoldRunnable,
-                            ViewConfiguration.getLongPressTimeout().toLong(),
-                        )
-                    }
-                    return true
-                }
-                KeyEvent.ACTION_UP -> {
-                    aHoldHandler.removeCallbacks(aHoldRunnable)
-                    if (isHoldingA) {
-                        isHoldingA = false
-                        if (aHoldTriggered) {
-                            aHoldTriggered = false
-                            return true
-                        }
-                        // Short tap: dispatch click to focused item
-                        val downEvent = KeyEvent(
-                            event.downTime,
-                            event.eventTime,
-                            KeyEvent.ACTION_DOWN,
-                            KeyEvent.KEYCODE_DPAD_CENTER,
-                            0,
-                            event.metaState,
-                            event.deviceId,
-                            event.scanCode,
-                            event.flags,
-                            event.source,
-                        )
-                        val upEvent = KeyEvent(
-                            event.downTime,
-                            event.eventTime,
-                            KeyEvent.ACTION_UP,
-                            KeyEvent.KEYCODE_DPAD_CENTER,
-                            0,
-                            event.metaState,
-                            event.deviceId,
-                            event.scanCode,
-                            event.flags,
-                            event.source,
-                        )
-                        super.dispatchKeyEvent(downEvent)
-                        super.dispatchKeyEvent(upEvent)
-                        return true
-                    }
-                }
             }
             return true
         }

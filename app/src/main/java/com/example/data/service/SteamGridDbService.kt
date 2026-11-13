@@ -120,7 +120,9 @@ object SteamGridDbService {
         val matches = executeJson(searchRequest)?.let(::parseMatches).orEmpty()
         val match = selectMatch(query, matches, requireExact = false) ?: return emptyList()
 
-        val gridsRequest = authorizedRequest("$V2_BASE_URL/grids/game/${match.id}", apiKey)
+        // NSFW results are included by default once the user supplies an API key, so the
+        // artwork picker does not silently hide content they asked to see.
+        val gridsRequest = authorizedRequest("$V2_BASE_URL/grids/game/${match.id}?nsfw=true", apiKey)
         val grids = executeJson(gridsRequest)?.optJSONArray("data") ?: return emptyList()
         return (0 until grids.length())
             .mapNotNull { grids.optJSONObject(it) }

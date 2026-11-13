@@ -11,12 +11,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * The only controller navigation Nexus supports: the left and right bumpers switch
- * between the Apps and Games screens. Everything else is touch/mouse driven.
+ * Controller buttons Nexus handles itself:
+ * - The left and right bumpers switch between the Apps and Games screens.
+ * - X opens the context menu for the focused app or game.
+ * - Back (Select/View) opens the Add modal, Start (Menu) opens Settings.
+ * Directional navigation and A (click) are left to Compose's focus system.
  */
 enum class ControllerAction {
     PREV_TAB_LB,
-    NEXT_TAB_RB
+    NEXT_TAB_RB,
+    OPEN_CONTEXT_MENU_X,
+    OPEN_ADD_MODAL_BACK,
+    OPEN_SETTINGS_START
 }
 
 data class ControllerState(
@@ -65,15 +71,18 @@ class ControllerManager(context: Context) : InputManager.InputDeviceListener {
     override fun onInputDeviceRemoved(deviceId: Int) = refreshControllers()
     override fun onInputDeviceChanged(deviceId: Int) = refreshControllers()
 
-    /** Maps the controller bumpers to tab actions; other buttons are left to the system. */
+    /** Maps the controller buttons Nexus handles; other buttons are left to the system. */
     fun handleKeyEvent(event: KeyEvent): ControllerAction? {
         if (event.action != KeyEvent.ACTION_DOWN) return null
-        // Holding a bumper should not keep re-selecting the tab.
+        // Holding a button should not keep re-triggering the same action.
         if (event.repeatCount > 0) return null
 
         return when (event.keyCode) {
             KeyEvent.KEYCODE_BUTTON_L1 -> ControllerAction.PREV_TAB_LB
             KeyEvent.KEYCODE_BUTTON_R1 -> ControllerAction.NEXT_TAB_RB
+            KeyEvent.KEYCODE_BUTTON_X -> ControllerAction.OPEN_CONTEXT_MENU_X
+            KeyEvent.KEYCODE_BUTTON_SELECT -> ControllerAction.OPEN_ADD_MODAL_BACK
+            KeyEvent.KEYCODE_BUTTON_START -> ControllerAction.OPEN_SETTINGS_START
             else -> null
         }
     }

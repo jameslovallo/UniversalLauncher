@@ -774,13 +774,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // Controller navigation: only the bumpers change screens.
+    // Controller navigation and shortcuts. Panels and dialogs are never opened behind
+    // an already-open sheet or dialog.
     fun onControllerAction(action: ControllerAction): Boolean {
-        // Don't change tabs behind an open sheet or dialog.
-        if (_showAddModal.value || _showSettingsModal.value || _editingItem.value != null ||
-            _contextMenuItem.value != null || _favoriteActionItem.value != null ||
-            _showFavoritesEditor.value
-        ) {
+        if (isAnyMenuOrModalOpen()) {
             return false
         }
 
@@ -791,6 +788,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
             ControllerAction.NEXT_TAB_RB -> {
                 setTab(MainLibraryTab.GAMES)
+                true
+            }
+            ControllerAction.OPEN_CONTEXT_MENU_X -> openContextMenuForFocusedItem()
+            ControllerAction.OPEN_ADD_MODAL_BACK -> {
+                openAddModal()
+                true
+            }
+            ControllerAction.OPEN_SETTINGS_START -> {
+                openSettingsModal()
                 true
             }
         }

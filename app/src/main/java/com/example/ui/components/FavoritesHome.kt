@@ -222,7 +222,7 @@ fun FavoritesHome(
                     text = dateFormatter.format(nowDate),
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurface,
                     textAlign = textAlign,
                     modifier = Modifier.testTag("favorites_date")
                 )
@@ -242,7 +242,7 @@ fun FavoritesHome(
                         Icon(
                             imageVector = weatherIcon(weather.weatherCode),
                             contentDescription = weatherDescription(weather.weatherCode),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
@@ -250,7 +250,7 @@ fun FavoritesHome(
                             text = weather.temperatureDisplay(displayUnit),
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }

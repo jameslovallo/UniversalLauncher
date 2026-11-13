@@ -48,7 +48,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -69,8 +72,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -90,6 +95,7 @@ import com.example.data.service.resolveTemperatureUnit
 import com.example.data.service.temperatureDisplay
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -290,14 +296,26 @@ fun SettingsModal(
                 )
             }
             Spacer(modifier = Modifier.height(4.dp))
+            val opacityHaptics = LocalHapticFeedback.current
+            var lastOpacityStep by remember {
+                mutableStateOf((appsBackgroundOpacity * 20f).roundToInt())
+            }
             Slider(
                 value = appsBackgroundOpacity,
-                onValueChange = onSetAppsBackgroundOpacity,
+                onValueChange = { value ->
+                    val step = (value * 20f).roundToInt()
+                    if (step != lastOpacityStep) {
+                        lastOpacityStep = step
+                        opacityHaptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    }
+                    onSetAppsBackgroundOpacity(step / 20f)
+                },
                 valueRange = 0f..1f,
+                steps = 19,
                 modifier = Modifier.fillMaxWidth().testTag("apps_opacity_slider")
             )
             Text(
-                text = "${(appsBackgroundOpacity * 100).toInt()}%",
+                text = "${(appsBackgroundOpacity * 100f).roundToInt()}%",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -484,41 +502,59 @@ fun SettingsModal(
                         modifier = Modifier.testTag("weather_apps_empty")
                     )
                 } else {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().testTag("weather_apps_list"),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    var weatherMenuExpanded by remember { mutableStateOf(false) }
+                    val selectedWeatherApp = weatherApps.firstOrNull {
+                        it.packageName == weatherAppPackage
+                    }
+                    ExposedDropdownMenuBox(
+                        expanded = weatherMenuExpanded,
+                        onExpandedChange = { weatherMenuExpanded = !weatherMenuExpanded },
+                        modifier = Modifier.fillMaxWidth().testTag("weather_apps_list")
                     ) {
-                        weatherApps.forEach { app ->
-                            val selected = app.packageName == weatherAppPackage
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(
-                                        if (selected) MaterialTheme.colorScheme.primaryContainer
-                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                    )
-                                    .clickable { onSelectWeatherApp(app.packageName) }
-                                    .padding(horizontal = 12.dp, vertical = 10.dp)
-                                    .testTag("weather_app_${app.packageName}"),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = app.label,
-                                    fontSize = 13.sp,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-                                    else MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.weight(1f)
+                        OutlinedTextField(
+                            value = selectedWeatherApp?.label ?: "Choose a weather app",
+                            onValueChange = {},
+                            readOnly = true,
+                            singleLine = true,
+                            trailingIcon = {
+                                ExposedDropdownMenuDefaults.TrailingIcon(
+                                    expanded = weatherMenuExpanded
                                 )
-                                if (selected) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor()
+                                .testTag("weather_app_dropdown")
+                        )
+                        ExposedDropdownMenu(
+                            expanded = weatherMenuExpanded,
+                            onDismissRequest = { weatherMenuExpanded = false }
+                        ) {
+                            weatherApps.forEach { app ->
+                                val selected = app.packageName == weatherAppPackage
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = app.label,
+                                            fontWeight = if (selected) FontWeight.Bold
+                                            else FontWeight.Medium
+                                        )
+                                    },
+                                    onClick = {
+                                        onSelectWeatherApp(app.packageName)
+                                        weatherMenuExpanded = false
+                                    },
+                                    trailingIcon = {
+                                        if (selected) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("weather_app_${app.packageName}")
+                                )
                             }
                         }
                     }
