@@ -103,6 +103,7 @@ import kotlin.math.roundToInt
 fun SettingsModal(
     favoritesLayout: FavoritesLayout,
     steamGridDbApiKey: String?,
+    steamGridDbIncludeNsfw: Boolean,
     hiddenItems: List<GameItem>,
     appsBackgroundOpacity: Float,
     themeStyle: ThemeStyle,
@@ -123,6 +124,7 @@ fun SettingsModal(
     isHomeOverrideEnabled: () -> Boolean,
     onSelectFavoritesLayout: (FavoritesLayout) -> Unit,
     onSaveApiKey: (String) -> Unit,
+    onSteamGridDbIncludeNsfwChange: (Boolean) -> Unit,
     onSetDefaultLauncher: () -> Unit,
     onSetAppsBackgroundOpacity: (Float) -> Unit,
     onSelectThemeStyle: (ThemeStyle) -> Unit,
@@ -664,6 +666,35 @@ fun SettingsModal(
                     Icon(imageVector = Icons.Default.Key, contentDescription = null)
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Save API Key")
+                }
+
+                // Adult artwork is only available through the keyed API, so the toggle is
+                // hidden until a key has been entered. Safe posters always come first.
+                if (apiKeyInput.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Include NSFW artwork",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Safe posters are always shown first.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = steamGridDbIncludeNsfw,
+                            onCheckedChange = onSteamGridDbIncludeNsfwChange,
+                            modifier = Modifier.testTag("steamgriddb_nsfw_toggle")
+                        )
+                    }
                 }
             }
 

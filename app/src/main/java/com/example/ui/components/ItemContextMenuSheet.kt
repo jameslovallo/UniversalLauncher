@@ -1,7 +1,11 @@
 package com.example.ui.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,9 +41,12 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -68,6 +75,19 @@ fun ItemContextMenuSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    // The header pill stays transparent until it is pressed or focused with a controller.
+    val headerInteractionSource = remember { MutableInteractionSource() }
+    val headerPressed by headerInteractionSource.collectIsPressedAsState()
+    val headerFocused by headerInteractionSource.collectIsFocusedAsState()
+    val headerBackground by animateColorAsState(
+        targetValue = when {
+            headerPressed -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+            headerFocused -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            else -> Color.Transparent
+        },
+        label = "context_menu_header_background"
+    )
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -82,74 +102,88 @@ fun ItemContextMenuSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 8.dp)
         ) {
-            // Header Preview. Tapping the header opens the customization editor.
-            Row(
+            // Header Preview. The whole row is a pill exactly as tall as the artwork preview
+            // and tapping it opens the customization editor. The bottom spacing lives
+            // outside the pill so the divider keeps its original position.
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable { onCustomize() }
                     .padding(bottom = 16.dp)
-                    .testTag("context_menu_header"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                val previewImage = item.posterUrl ?: item.heroBannerUrl ?: item.iconUrl
-                Box(
+                Row(
                     modifier = Modifier
-                        .size(54.dp)
+                        .fillMaxWidth()
+                        .height(54.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (!previewImage.isNullOrBlank()) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(previewImage)
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(54.dp)
-                                .clip(CircleShape)
+                        .background(headerBackground)
+                        .clickable(
+                            interactionSource = headerInteractionSource,
+                            indication = null,
+                            onClick = onCustomize
                         )
-                    } else {
-                        Icon(
-                            imageVector = if (item.isGame) Icons.Default.SportsEsports else Icons.Default.Apps,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(28.dp)
+                        .padding(end = 16.dp)
+                        .testTag("context_menu_header"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    val previewImage = item.posterUrl ?: item.heroBannerUrl ?: item.iconUrl
+                    Box(
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (!previewImage.isNullOrBlank()) {
+                            AsyncImage(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(previewImage)
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(54.dp)
+                                    .clip(CircleShape)
+                            )
+                        } else {
+                            Icon(
+                                imageVector = if (item.isGame) Icons.Default.SportsEsports else Icons.Default.Apps,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = item.title,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = item.displayCategory,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium
                         )
                     }
-                }
 
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.title,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = item.displayCategory,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                if (item.type == GameType.INSTALLED_APP && item.packageName != null) {
-                    IconButton(
-                        onClick = onOpenAppInfo,
-                        modifier = Modifier.testTag("context_menu_app_info")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = "Open app info in system settings",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    if (item.type == GameType.INSTALLED_APP && item.packageName != null) {
+                        IconButton(
+                            onClick = onOpenAppInfo,
+                            modifier = Modifier.testTag("context_menu_app_info")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Open app info in system settings",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

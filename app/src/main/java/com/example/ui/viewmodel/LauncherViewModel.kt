@@ -105,6 +105,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _steamGridDbApiKey = MutableStateFlow(prefs.getString("sgdb_api_key", ""))
     val steamGridDbApiKey: StateFlow<String?> = _steamGridDbApiKey.asStateFlow()
 
+    // Adult artwork is fetched alongside safe artwork (safe results first); this toggle
+    // only controls whether the adult results are shown at the end of the list.
+    private val _steamGridDbIncludeNsfw = MutableStateFlow(
+        prefs.getBoolean("sgdb_include_nsfw", true)
+    )
+    val steamGridDbIncludeNsfw: StateFlow<Boolean> = _steamGridDbIncludeNsfw.asStateFlow()
+
     private val weatherService = WeatherService(application)
     private val librarySyncService = LibrarySyncService(application, repository, prefs)
 
@@ -760,6 +767,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun saveSteamGridDbApiKey(key: String) {
         prefs.edit().putString("sgdb_api_key", key).apply()
         _steamGridDbApiKey.value = key
+    }
+
+    fun setSteamGridDbIncludeNsfw(include: Boolean) {
+        prefs.edit().putBoolean("sgdb_include_nsfw", include).apply()
+        _steamGridDbIncludeNsfw.value = include
     }
 
     fun openDefaultLauncherSettings() {

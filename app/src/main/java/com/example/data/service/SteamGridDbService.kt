@@ -59,18 +59,25 @@ object SteamGridDbService {
     /**
      * Search for portrait box art. Never returns curated or example artwork: an empty list
      * simply means SteamGridDB has no match for the query.
+     *
+     * When [includeNsfw] is true the search asks for safe and adult grids together and
+     * returns the SFW results first, so the picker never leads with adult artwork.
      */
-    suspend fun searchArtwork(query: String, apiKey: String? = null): List<ArtworkOption> =
+    suspend fun searchArtwork(
+        query: String,
+        apiKey: String? = null,
+        includeNsfw: Boolean = true
+    ): List<ArtworkOption> =
         withContext(Dispatchers.IO) {
             val trimmed = query.trim()
             if (trimmed.isBlank()) return@withContext emptyList()
 
             if (!apiKey.isNullOrBlank()) {
-                val keyed = searchArtworkWithApiKey(trimmed, apiKey)
+                val keyed = searchArtworkWithApiKey(trimmed, apiKey, includeNsfw)
                 if (keyed.isNotEmpty()) return@withContext keyed
             }
 
-            searchArtworkWithPublicApi(trimmed)
+            searchArtworkWithPublicApi(trimmed, includeNsfw)
         }
 
     /**
@@ -90,13 +97,15 @@ object SteamGridDbService {
         url.takeIf { it.isNotBlank() }
     }
 
-    private fun searchArtworkWithPublicApi(query: String): List<ArtworkOption> {
+    private fun searchArtworkWithPublicApi(
+        query: String,
+        includeNsfw: Boolean
+    ): List<ArtworkOption> {
         val match = findGameWithPublicApi(query, requireExact = false) ?: return emptyList()
-        return fetchPublicAssets(match.id, limit = 40)
+        return fetchPublicAssets(match.id, limit = 40, includeNsfw = includeNsfw)
             .filter(::isPortraitGrid)
-            .sortedByDescending {
-                it.optInt("width", 0) == 600 && it.optInt("height", 0) == 900
-            }
+            .filter { includeNsfw || !it.optBoolean("nsfw") }
+            .sortedWith(artworkPreference)
             .take(30)
             .mapIndexedNotNull { index, asset ->
                 val url = asset.optString("url").ifBlank { asset.optString("thumb") }
@@ -114,22 +123,25 @@ object SteamGridDbService {
             }
     }
 
-    private fun searchArtworkWithApiKey(query: String, apiKey: String): List<ArtworkOption> {
+    private fun searchArtworkWithApiKey(
+        query: String,
+        apiKey: String,
+        includeNsfw: Boolean
+    ): List<ArtworkOption> {
         val encoded = URLEncoder.encode(query, "UTF-8")
         val searchRequest = authorizedRequest("$V2_BASE_URL/search/autocomplete/$encoded", apiKey)
         val matches = executeJson(searchRequest)?.let(::parseMatches).orEmpty()
         val match = selectMatch(query, matches, requireExact = false) ?: return emptyList()
 
-        // NSFW results are included by default once the user supplies an API key, so the
-        // artwork picker does not silently hide content they asked to see.
-        val gridsRequest = authorizedRequest("$V2_BASE_URL/grids/game/${match.id}?nsfw=true", apiKey)
+        // The v2 `nsfw` parameter acts as a filter: true returns only adult grids. Omit it
+        // so safe and adult results come back together, then order the safe ones first.
+        val gridsRequest = authorizedRequest("$V2_BASE_URL/grids/game/${match.id}", apiKey)
         val grids = executeJson(gridsRequest)?.optJSONArray("data") ?: return emptyList()
         return (0 until grids.length())
             .mapNotNull { grids.optJSONObject(it) }
             .filter(::isPortraitGrid)
-            .sortedByDescending {
-                it.optInt("width", 0) == 600 && it.optInt("height", 0) == 900
-            }
+            .filter { includeNsfw || !it.optBoolean("nsfw") }
+            .sortedWith(artworkPreference)
             .mapIndexedNotNull { index, item ->
                 val url = item.optString("url").ifBlank { item.optString("thumb") }
                 if (url.isBlank()) return@mapIndexedNotNull null
@@ -145,6 +157,16 @@ object SteamGridDbService {
                 )
             }
     }
+
+    /**
+     * Safe artwork before adult artwork, and the 600x900 portrait size before anything
+     * else within each group, so the picker opens on the conventional box art.
+     */
+    private val artworkPreference: Comparator<JSONObject> =
+        compareBy<JSONObject> { it.optBoolean("nsfw") }
+            .thenByDescending {
+                it.optInt("width", 0) == 600 && it.optInt("height", 0) == 900
+            }
 
     private fun authorizedRequest(url: String, apiKey: String): Request =
         Request.Builder()
@@ -166,7 +188,16 @@ object SteamGridDbService {
         return selectMatch(query, parseMatches(json), requireExact)
     }
 
-    private fun fetchPublicAssets(gameId: Int, limit: Int): List<JSONObject> {
+    private fun fetchPublicAssets(
+        gameId: Int,
+        limit: Int,
+        includeNsfw: Boolean = false
+    ): List<JSONObject> {
+        if (includeNsfw) {
+            // The public filter includes restricted assets when nsfw=true; the caller
+            // orders the adult grids after the safe ones.
+            return requestPublicAssets(gameId, limit, includeRestricted = true)
+        }
         val assets = requestPublicAssets(gameId, limit, includeRestricted = false)
         if (assets.isNotEmpty()) return assets
         // A strict NSFW/humor filter can hide an otherwise valid poster; retry inclusive.

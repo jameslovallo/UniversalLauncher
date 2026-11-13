@@ -80,6 +80,7 @@ import java.io.File
 fun CustomizeItemDialog(
     item: GameItem,
     steamGridDbApiKey: String?,
+    includeNsfw: Boolean = true,
     onSave: (id: String, newTitle: String, newPosterUrl: String?, newIconUrl: String?) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -110,7 +111,7 @@ fun CustomizeItemDialog(
         }
     }
 
-    LaunchedEffect(searchQuery) {
+    LaunchedEffect(searchQuery, includeNsfw) {
         val query = searchQuery.trim()
         if (query.isBlank()) {
             searchResults = emptyList()
@@ -120,7 +121,7 @@ fun CustomizeItemDialog(
         isSearching = true
         // Debounce typing so a search is only issued once the title settles.
         delay(350)
-        searchResults = SteamGridDbService.searchArtwork(query, steamGridDbApiKey)
+        searchResults = SteamGridDbService.searchArtwork(query, steamGridDbApiKey, includeNsfw)
         isSearching = false
     }
 
@@ -237,7 +238,7 @@ fun CustomizeItemDialog(
                                         IconButton(onClick = {
                                             scope.launch {
                                                 isSearching = true
-                                                searchResults = SteamGridDbService.searchArtwork(searchQuery, steamGridDbApiKey)
+                                                searchResults = SteamGridDbService.searchArtwork(searchQuery, steamGridDbApiKey, includeNsfw)
                                                 isSearching = false
                                             }
                                         }) {

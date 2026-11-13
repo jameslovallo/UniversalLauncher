@@ -152,6 +152,7 @@ fun DashboardScreen(
 
     val favoritesLayout by viewModel.favoritesLayout.collectAsStateWithLifecycle()
     val steamGridDbApiKey by viewModel.steamGridDbApiKey.collectAsStateWithLifecycle()
+    val steamGridDbIncludeNsfw by viewModel.steamGridDbIncludeNsfw.collectAsStateWithLifecycle()
 
     val controllerState by viewModel.controllerManager.controllerState.collectAsStateWithLifecycle()
 
@@ -367,14 +368,10 @@ fun DashboardScreen(
             TopNavBar(
                 currentTab = currentTab,
                 alignEnd = isCompactLandscape,
-                // On compact landscape the favorites clock/date block is hidden, so show
-                // the date and conditions in the bar while the favorites page is settled.
-                showDateWeather = isCompactLandscape &&
-                    currentTab == MainLibraryTab.APPS &&
-                    pagerState.currentPage == 0 &&
-                    !pagerState.isScrollInProgress &&
-                    appsPagerState.currentPage == 0 &&
-                    !appsPagerState.isScrollInProgress,
+                // On compact landscape the favorites clock/date block is hidden, so the
+                // date and conditions live in the bar itself. They stay there for both
+                // Apps and Games so switching tabs never makes them pop in or out.
+                showDateWeather = isCompactLandscape,
                 weatherEnabled = weatherEnabled,
                 weather = weatherInfo,
                 temperatureUnit = temperatureUnit,
@@ -638,6 +635,7 @@ fun DashboardScreen(
             CustomizeItemDialog(
                 item = editingItem!!,
                 steamGridDbApiKey = steamGridDbApiKey,
+                includeNsfw = steamGridDbIncludeNsfw,
                 onSave = { id, newTitle, newPoster, newIcon ->
                     viewModel.saveItemCustomization(id, newTitle, newPoster, newIcon)
                 },
@@ -667,6 +665,7 @@ fun DashboardScreen(
             SettingsModal(
                 favoritesLayout = favoritesLayout,
                 steamGridDbApiKey = steamGridDbApiKey,
+                steamGridDbIncludeNsfw = steamGridDbIncludeNsfw,
                 hiddenItems = hiddenItems,
                 appsBackgroundOpacity = appsBackgroundOpacity,
                 themeStyle = themeStyle,
@@ -687,6 +686,7 @@ fun DashboardScreen(
                 isHomeOverrideEnabled = { viewModel.isHomeOverrideEnabled() },
                 onSelectFavoritesLayout = { viewModel.setFavoritesLayout(it) },
                 onSaveApiKey = { viewModel.saveSteamGridDbApiKey(it) },
+                onSteamGridDbIncludeNsfwChange = { viewModel.setSteamGridDbIncludeNsfw(it) },
                 onSetDefaultLauncher = { viewModel.openDefaultLauncherSettings() },
                 onSetAppsBackgroundOpacity = { viewModel.setAppsBackgroundOpacity(it) },
                 onSelectThemeStyle = { viewModel.setThemeStyle(it) },
