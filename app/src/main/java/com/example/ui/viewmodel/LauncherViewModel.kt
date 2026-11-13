@@ -451,6 +451,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun openAppInfo(item: GameItem) {
         item.packageName?.let { installedAppsManager.openAppInfo(it) }
         closeContextMenu()
+        closeFavoriteActions()
     }
 
     fun deleteItem(item: GameItem) {
@@ -489,6 +490,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // Customize Name and Icon
     fun openEditCustomizer(item: GameItem) {
         _contextMenuItem.value = null
+        _favoriteActionItem.value = null
         _editingItem.value = item
     }
 

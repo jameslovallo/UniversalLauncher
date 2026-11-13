@@ -77,19 +77,6 @@ fun ItemContextMenuSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    // The header pill stays transparent until it is pressed or focused with a controller.
-    val headerInteractionSource = remember { MutableInteractionSource() }
-    val headerPressed by headerInteractionSource.collectIsPressedAsState()
-    val headerFocused by headerInteractionSource.collectIsFocusedAsState()
-    val headerBackground by animateColorAsState(
-        targetValue = when {
-            headerPressed -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-            headerFocused -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            else -> Color.Transparent
-        },
-        label = "context_menu_header_background"
-    )
-
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -104,96 +91,13 @@ fun ItemContextMenuSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 8.dp)
         ) {
-            // Header Preview. The whole row is a pill exactly as tall as the artwork preview
-            // and tapping it opens the customization editor. The bottom spacing lives
-            // outside the pill so the divider keeps its original position.
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 16.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(54.dp)
-                        .clip(CircleShape)
-                        .background(headerBackground)
-                        .clickable(
-                            interactionSource = headerInteractionSource,
-                            indication = null,
-                            onClick = onCustomize
-                        )
-                        .padding(end = 16.dp)
-                        .testTag("context_menu_header"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    val activePoster = if (showNsfwPoster && !item.nsfwPosterUrl.isNullOrBlank()) {
-                        item.nsfwPosterUrl
-                    } else {
-                        item.posterUrl
-                    }
-                    val previewImage = activePoster ?: item.heroBannerUrl ?: item.iconUrl
-                    Box(
-                        modifier = Modifier
-                            .size(54.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (!previewImage.isNullOrBlank()) {
-                            AsyncImage(
-                                model = ImageRequest.Builder(LocalContext.current)
-                                    .data(previewImage)
-                                    .crossfade(true)
-                                    .build(),
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .size(54.dp)
-                                    .clip(CircleShape)
-                            )
-                        } else {
-                            Icon(
-                                imageVector = if (item.isGame) Icons.Default.SportsEsports else Icons.Default.Apps,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
-                    }
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = item.title,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = item.displayCategory,
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-
-                    if (item.type == GameType.INSTALLED_APP && item.packageName != null) {
-                        IconButton(
-                            onClick = onOpenAppInfo,
-                            modifier = Modifier.testTag("context_menu_app_info")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = "Open app info in system settings",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
+            ContextMenuHeaderBar(
+                item = item,
+                subtitle = item.displayCategory,
+                showNsfwPoster = showNsfwPoster,
+                onCustomize = onCustomize,
+                onOpenAppInfo = onOpenAppInfo
+            )
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
@@ -283,6 +187,122 @@ fun ItemContextMenuSheet(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+/**
+ * Shared top customization bar for context menus: a clickable 54.dp pill preview that opens
+ * customization, paired with an App Info icon button for installed apps.
+ */
+@Composable
+internal fun ContextMenuHeaderBar(
+    item: GameItem,
+    subtitle: String,
+    showNsfwPoster: Boolean = false,
+    onCustomize: () -> Unit,
+    onOpenAppInfo: () -> Unit,
+    headerTestTag: String = "context_menu_header",
+    appInfoTestTag: String = "context_menu_app_info"
+) {
+    // The header pill stays transparent until it is pressed or focused with a controller.
+    val headerInteractionSource = remember { MutableInteractionSource() }
+    val headerPressed by headerInteractionSource.collectIsPressedAsState()
+    val headerFocused by headerInteractionSource.collectIsFocusedAsState()
+    val headerBackground by animateColorAsState(
+        targetValue = when {
+            headerPressed -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+            headerFocused -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            else -> Color.Transparent
+        },
+        label = "context_menu_header_background"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 16.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp)
+                .clip(CircleShape)
+                .background(headerBackground)
+                .clickable(
+                    interactionSource = headerInteractionSource,
+                    indication = null,
+                    onClick = onCustomize
+                )
+                .padding(end = 16.dp)
+                .testTag(headerTestTag),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            val activePoster = if (showNsfwPoster && !item.nsfwPosterUrl.isNullOrBlank()) {
+                item.nsfwPosterUrl
+            } else {
+                item.posterUrl
+            }
+            val previewImage = activePoster ?: item.heroBannerUrl ?: item.iconUrl
+            Box(
+                modifier = Modifier
+                    .size(54.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!previewImage.isNullOrBlank()) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(previewImage)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clip(CircleShape)
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (item.isGame) Icons.Default.SportsEsports else Icons.Default.Apps,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.title,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = subtitle,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            if (item.type == GameType.INSTALLED_APP && item.packageName != null) {
+                IconButton(
+                    onClick = onOpenAppInfo,
+                    modifier = Modifier.testTag(appInfoTestTag)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = "Open app info in system settings",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
     }
 }

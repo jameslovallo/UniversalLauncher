@@ -81,6 +81,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+private enum class CustomizeArtworkTab(val label: String) {
+    STEAMGRIDDB("SteamGridDB"),
+    LOCAL_PHOTO("Local Photo"),
+    CUSTOM_URL("Custom URL")
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CustomizeItemDialog(
@@ -93,11 +99,25 @@ fun CustomizeItemDialog(
     onUpdateNsfwLogoUrl: (id: String, logoUrl: String?) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val tabs = remember(item.isGame) {
+        if (item.isGame) {
+            listOf(
+                CustomizeArtworkTab.STEAMGRIDDB,
+                CustomizeArtworkTab.LOCAL_PHOTO,
+                CustomizeArtworkTab.CUSTOM_URL
+            )
+        } else {
+            listOf(
+                CustomizeArtworkTab.LOCAL_PHOTO,
+                CustomizeArtworkTab.CUSTOM_URL
+            )
+        }
+    }
     var title by remember(item.id) { mutableStateOf(item.title) }
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by remember(item.id, item.isGame) { mutableStateOf(tabs.first()) }
     var customUrlInput by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<ArtworkOption>>(emptyList()) }
-    var isSearching by remember { mutableStateOf(true) }
+    var isSearching by remember { mutableStateOf(item.isGame) }
 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -147,7 +167,12 @@ fun CustomizeItemDialog(
         onResult = applyPickedUri
     )
 
-    LaunchedEffect(title, includeNsfw) {
+    LaunchedEffect(title, includeNsfw, item.isGame) {
+        if (!item.isGame) {
+            searchResults = emptyList()
+            isSearching = false
+            return@LaunchedEffect
+        }
         val query = title.trim()
         if (query.isBlank()) {
             searchResults = emptyList()
@@ -256,25 +281,26 @@ fun CustomizeItemDialog(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Source Tabs: SteamGridDB, Local Photo, Custom URL
-            val tabs = listOf("SteamGridDB", "Local Photo", "Custom URL")
+            // Source Tabs: SteamGridDB (games/posters only), Local Photo, Custom URL
+            val selectedIndex = tabs.indexOf(selectedTab).coerceAtLeast(0)
             ScrollableTabRow(
-                selectedTabIndex = selectedTab,
+                selectedTabIndex = selectedIndex,
                 containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                 contentColor = MaterialTheme.colorScheme.primary,
                 edgePadding = 0.dp,
                 divider = {},
                 modifier = Modifier.clip(RoundedCornerShape(12.dp))
             ) {
-                tabs.forEachIndexed { index, label ->
+                tabs.forEach { tab ->
+                    val isSelected = selectedTab == tab
                     Tab(
-                        selected = selectedTab == index,
-                        onClick = { selectedTab = index },
+                        selected = isSelected,
+                        onClick = { selectedTab = tab },
                         text = {
                             Text(
-                                text = label,
+                                text = tab.label,
                                 fontSize = 12.sp,
-                                fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Medium
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                             )
                         }
                     )
@@ -293,7 +319,7 @@ fun CustomizeItemDialog(
                     .padding(12.dp)
             ) {
                 when (selectedTab) {
-                    0 -> { // SteamGridDB
+                    CustomizeArtworkTab.STEAMGRIDDB -> { // SteamGridDB (games only)
                         Column(modifier = Modifier.fillMaxSize()) {
                             if (isSearching && !hasAssignedPoster) {
                                 Box(
@@ -410,7 +436,7 @@ fun CustomizeItemDialog(
                             }
                         }
                     }
-                    1 -> { // Local Photo / File
+                    CustomizeArtworkTab.LOCAL_PHOTO -> { // Local Photo / File
                         Column(
                             modifier = Modifier.fillMaxSize(),
                             verticalArrangement = Arrangement.Center,
@@ -464,7 +490,7 @@ fun CustomizeItemDialog(
                             }
                         }
                     }
-                    2 -> { // Custom URL
+                    CustomizeArtworkTab.CUSTOM_URL -> { // Custom URL
                         Column(modifier = Modifier.fillMaxSize()) {
                             OutlinedTextField(
                                 value = customUrlInput,

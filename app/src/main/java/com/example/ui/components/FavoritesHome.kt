@@ -390,11 +390,13 @@ fun FavoritesHome(
     }
 }
 
-/** Long-press menu for a favorite: open it, edit the favorites order, or remove it. */
+/** Long-press menu for a favorite: customize, view app info, edit order, or remove it. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FavoriteActionsSheet(
     item: GameItem,
+    onCustomize: () -> Unit,
+    onOpenAppInfo: () -> Unit,
     onEditFavorites: () -> Unit,
     onRemoveFavorite: () -> Unit,
     onDismiss: () -> Unit
@@ -414,37 +416,14 @@ fun FavoriteActionsSheet(
                 .navigationBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 8.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Box(
-                    modifier = Modifier.size(54.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AppIcon(app = item, size = 50.dp)
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.title,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "Favorite app",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
+            ContextMenuHeaderBar(
+                item = item,
+                subtitle = "Favorite app",
+                onCustomize = onCustomize,
+                onOpenAppInfo = onOpenAppInfo,
+                headerTestTag = "favorite_context_menu_header",
+                appInfoTestTag = "favorite_context_menu_app_info"
+            )
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 

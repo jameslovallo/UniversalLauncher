@@ -611,10 +611,12 @@ fun DashboardScreen(
             )
         }
 
-        // Long-press menu for favorites (Edit favorites, Remove)
+        // Long-press menu for favorites (Customize, App Info, Edit favorites, Remove)
         favoriteActionItem?.let { favorite ->
             FavoriteActionsSheet(
                 item = favorite,
+                onCustomize = { viewModel.openEditCustomizer(favorite) },
+                onOpenAppInfo = { viewModel.openAppInfo(favorite) },
                 onEditFavorites = { viewModel.openFavoritesEditor() },
                 onRemoveFavorite = {
                     viewModel.removeFavorite(favorite)
