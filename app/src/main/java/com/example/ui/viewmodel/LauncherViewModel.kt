@@ -774,14 +774,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun isHomeOverrideEnabled(): Boolean = installedAppsManager.isHomeOverrideEnabled()
 
-    fun syncLibrary() {
-        viewModelScope.launch {
-            repository.syncGfnCatalog()
-            repository.syncInstalledApps()
-            repository.matchMissingGamePosters()
-        }
-    }
-
     // Controller navigation and shortcuts. Panels and dialogs are never opened behind
     // an already-open sheet or dialog.
     fun onControllerAction(action: ControllerAction): Boolean {

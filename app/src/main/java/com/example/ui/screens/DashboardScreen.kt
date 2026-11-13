@@ -237,13 +237,20 @@ fun DashboardScreen(
     LaunchedEffect(currentTab) {
         val target = if (currentTab == MainLibraryTab.GAMES) 1 else 0
         if (pagerState.currentPage != target) pagerState.animateScrollToPage(target)
+        // Close the app-list drawer as soon as Games becomes active. Switching back to
+        // Apps then shows the favorites page immediately, already laid out for the
+        // current (landscape) configuration, instead of animating the list shut.
+        if (currentTab == MainLibraryTab.GAMES && appsPagerState.currentPage != 0) {
+            appsPagerState.scrollToPage(0)
+        }
     }
 
     // Selecting the Apps tab always returns to the favorites home, even if the vertical
-    // pager was left on the complete app list.
+    // pager was left on the complete app list. Jump rather than animate so the favorites
+    // page is present on the first frame of the transition.
     LaunchedEffect(appsHomeReset) {
         if (appsHomeReset > 0 && appsPagerState.currentPage != 0) {
-            appsPagerState.animateScrollToPage(0)
+            appsPagerState.scrollToPage(0)
         }
     }
 
@@ -360,6 +367,19 @@ fun DashboardScreen(
             TopNavBar(
                 currentTab = currentTab,
                 alignEnd = isCompactLandscape,
+                // On compact landscape the favorites clock/date block is hidden, so show
+                // the date and conditions in the bar while the favorites page is settled.
+                showDateWeather = isCompactLandscape &&
+                    currentTab == MainLibraryTab.APPS &&
+                    pagerState.currentPage == 0 &&
+                    !pagerState.isScrollInProgress &&
+                    appsPagerState.currentPage == 0 &&
+                    !appsPagerState.isScrollInProgress,
+                weatherEnabled = weatherEnabled,
+                weather = weatherInfo,
+                temperatureUnit = temperatureUnit,
+                onOpenCalendar = { viewModel.openCalendarApp() },
+                onOpenWeather = { viewModel.openWeatherApp() },
                 onTabSelected = { viewModel.setTab(it) },
                 onOpenAddModal = { viewModel.openAddModal() },
                 onOpenSettings = { viewModel.openSettingsModal() },
@@ -670,7 +690,6 @@ fun DashboardScreen(
                 onSetDefaultLauncher = { viewModel.openDefaultLauncherSettings() },
                 onSetAppsBackgroundOpacity = { viewModel.setAppsBackgroundOpacity(it) },
                 onSelectThemeStyle = { viewModel.setThemeStyle(it) },
-                onSyncLibrary = { viewModel.syncLibrary() },
                 onUnhideItem = { viewModel.unhideItem(it) },
                 onOpenHiddenItem = { viewModel.launchItem(it) },
                 onWeatherEnabledChange = { viewModel.setWeatherEnabled(it) },

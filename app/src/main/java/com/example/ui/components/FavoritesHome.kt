@@ -727,7 +727,7 @@ private fun FavoriteActionRow(
 }
 
 /** Material icon matching an Open-Meteo WMO weather code. */
-private fun weatherIcon(code: Int) = when (code) {
+internal fun weatherIcon(code: Int) = when (code) {
     0, 1 -> Icons.Default.WbSunny
     2, 3 -> Icons.Default.Cloud
     45, 48 -> Icons.Default.Cloud
@@ -739,7 +739,7 @@ private fun weatherIcon(code: Int) = when (code) {
 }
 
 /** Short spoken description of an Open-Meteo WMO weather code. */
-private fun weatherDescription(code: Int): String = when (code) {
+internal fun weatherDescription(code: Int): String = when (code) {
     0 -> "Clear sky"
     1, 2 -> "Partly cloudy"
     3 -> "Overcast"

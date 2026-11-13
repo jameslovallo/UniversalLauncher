@@ -126,7 +126,6 @@ fun SettingsModal(
     onSetDefaultLauncher: () -> Unit,
     onSetAppsBackgroundOpacity: (Float) -> Unit,
     onSelectThemeStyle: (ThemeStyle) -> Unit,
-    onSyncLibrary: () -> Unit,
     onUnhideItem: (GameItem) -> Unit,
     onOpenHiddenItem: (GameItem) -> Unit,
     onWeatherEnabledChange: (Boolean) -> Unit,
@@ -303,63 +302,6 @@ fun SettingsModal(
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            SettingsSection(
-                title = "Android Launcher Mode",
-                description = "Set Nexus as your primary Android home launcher"
-            ) {
-                if (!isDefault) {
-                    Button(
-                        onClick = onSetDefaultLauncher,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("set_home_button")
-                    ) {
-                        Icon(imageVector = Icons.Default.Home, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Set as Default Launcher", fontWeight = FontWeight.Bold)
-                    }
-                } else {
-                    Text(
-                        text = "Nexus is your default launcher.",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.testTag("default_launcher_status")
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Optional accessibility fallback, modelled on LauncherHijack.
-                Text(
-                    text = if (overrideEnabled) {
-                        "Accessibility launcher override is enabled. Home presses are routed back " +
-                            "to Nexus, and Nexus is hidden from the Task Switcher."
-                    } else {
-                        "Some devices refuse to change the default launcher. Enable the " +
-                            "accessibility override to catch Home presses and launcher opens and " +
-                            "return to Nexus. Nexus is hidden from the Task Switcher while this " +
-                            "service is active."
-                    },
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = onOpenAccessibilitySettings,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("accessibility_settings_button")
-                ) {
-                    Icon(imageVector = Icons.Default.Accessibility, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        if (overrideEnabled) "Manage Accessibility Override"
-                        else "Enable Accessibility Override"
-                    )
-                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -550,6 +492,63 @@ fun SettingsModal(
             Spacer(modifier = Modifier.height(12.dp))
 
             SettingsSection(
+                title = "Android Launcher Mode",
+                description = "Set Nexus as your primary Android home launcher"
+            ) {
+                if (!isDefault) {
+                    Button(
+                        onClick = onSetDefaultLauncher,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("set_home_button")
+                    ) {
+                        Icon(imageVector = Icons.Default.Home, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Set as Default Launcher", fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Text(
+                        text = "Nexus is your default launcher.",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.testTag("default_launcher_status")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Optional accessibility fallback, modelled on LauncherHijack.
+                Text(
+                    text = if (overrideEnabled) {
+                        "Accessibility launcher override is enabled. Home presses are routed back " +
+                            "to Nexus, and Nexus is hidden from the Task Switcher."
+                    } else {
+                        "Some devices refuse to change the default launcher. Enable the " +
+                            "accessibility override to catch Home presses and launcher opens and " +
+                            "return to Nexus. Nexus is hidden from the Task Switcher while this " +
+                            "service is active."
+                    },
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onOpenAccessibilitySettings,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("accessibility_settings_button")
+                ) {
+                    Icon(imageVector = Icons.Default.Accessibility, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        if (overrideEnabled) "Manage Accessibility Override"
+                        else "Enable Accessibility Override"
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            SettingsSection(
                 title = "Library Sync",
                 description = "Keep your GeForce NOW, Moonlight, and shortcut games in sync " +
                     "with a folder on your device or cloud drive. All assigned game posters " +
@@ -665,20 +664,6 @@ fun SettingsModal(
                     Icon(imageVector = Icons.Default.Key, contentDescription = null)
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Save API Key")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            SettingsSection(title = "Maintenance") {
-                OutlinedButton(
-                    onClick = onSyncLibrary,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("settings_sync_button")
-                ) {
-                    Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Resync Library & Apps")
                 }
             }
 
