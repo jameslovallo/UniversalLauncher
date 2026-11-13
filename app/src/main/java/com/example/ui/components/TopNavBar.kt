@@ -200,6 +200,7 @@ private fun DateWeatherHeader(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
+                .focusProperties { canFocus = false }
                 .clip(RoundedCornerShape(8.dp))
                 .clickable { onOpenCalendar() }
                 .padding(horizontal = 4.dp, vertical = 4.dp)
@@ -210,6 +211,7 @@ private fun DateWeatherHeader(
             Spacer(modifier = Modifier.width(10.dp))
             Row(
                 modifier = Modifier
+                    .focusProperties { canFocus = false }
                     .clip(RoundedCornerShape(8.dp))
                     .clickable { onOpenWeather() }
                     .padding(horizontal = 4.dp, vertical = 4.dp)
@@ -254,9 +256,9 @@ private fun TabLabel(
         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
         color = textColor,
         modifier = Modifier
+            .focusProperties { canFocus = false }
             .clip(RoundedCornerShape(8.dp))
             .clickable { onClick() }
-            .focusProperties { canFocus = false }
             .padding(horizontal = 4.dp, vertical = 6.dp)
             .testTag(testTag)
     )
