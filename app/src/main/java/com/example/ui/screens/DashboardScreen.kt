@@ -81,6 +81,7 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -291,30 +292,19 @@ fun DashboardScreen(
         }
     }
 
-    LaunchedEffect(pagerState.currentPage) {
-        val tab = if (pagerState.currentPage == 0) MainLibraryTab.APPS else MainLibraryTab.GAMES
-        if (currentTab != tab) viewModel.setTab(tab)
-    }
-
-    LaunchedEffect(currentTab) {
-        val target = if (currentTab == MainLibraryTab.GAMES) 1 else 0
-        if (pagerState.currentPage != target) pagerState.animateScrollToPage(target)
-        // Close the app-list drawer as soon as Games becomes active. Switching back to
-        // Apps then shows the favorites page immediately, already laid out for the
-        // current (landscape) configuration, instead of animating the list shut.
-        if (currentTab == MainLibraryTab.GAMES && appsPagerState.currentPage != 0) {
-            appsPagerState.scrollToPage(0)
+    BindLibraryPagerAndScrollEffects(
+        currentTab = currentTab,
+        appsHomeReset = appsHomeReset,
+        pagerState = pagerState,
+        appsPagerState = appsPagerState,
+        gridState = gridState,
+        gamesRowState = gamesRowState,
+        appsListState = appsListState,
+        appsGridState = appsGridState,
+        onTabFromPager = { tab ->
+            if (currentTab != tab) viewModel.setTab(tab)
         }
-    }
-
-    // Selecting the Apps tab always returns to the favorites home, even if the vertical
-    // pager was left on the complete app list. Jump rather than animate so the favorites
-    // page is present on the first frame of the transition.
-    LaunchedEffect(appsHomeReset) {
-        if (appsHomeReset > 0 && appsPagerState.currentPage != 0) {
-            appsPagerState.scrollToPage(0)
-        }
-    }
+    )
 
     // With no controller, the Games tab starts with nothing focused. A connected
     // controller focuses the first game so an active element is visibly highlighted.
@@ -909,6 +899,104 @@ fun DashboardScreen(
                     }
                 )
             }
+        }
+    }
+}
+
+@Composable
+internal fun BindLibraryPagerAndScrollEffects(
+    currentTab: MainLibraryTab,
+    appsHomeReset: Int,
+    pagerState: androidx.compose.foundation.pager.PagerState,
+    appsPagerState: androidx.compose.foundation.pager.PagerState,
+    gridState: LazyGridState,
+    gamesRowState: LazyListState,
+    appsListState: LazyListState,
+    appsGridState: LazyGridState,
+    onTabFromPager: (MainLibraryTab) -> Unit
+) {
+    // Track whether the Games page or the Apps drawer is any part visible in its pager.
+    val isGamesInView by remember {
+        derivedStateOf {
+            pagerState.currentPage == 1 ||
+                (pagerState.currentPage == 0 && pagerState.currentPageOffsetFraction > 0f)
+        }
+    }
+    val isAppsInView by remember {
+        derivedStateOf {
+            pagerState.currentPage == 0 ||
+                (pagerState.currentPage == 1 && pagerState.currentPageOffsetFraction < 0f)
+        }
+    }
+    val isAppDrawerInView by remember {
+        derivedStateOf {
+            isAppsInView && (
+                appsPagerState.currentPage == 1 ||
+                    (appsPagerState.currentPage == 0 && appsPagerState.currentPageOffsetFraction > 0f)
+                )
+        }
+    }
+
+    // Anytime the Games grid leaves or enters view, ensure both its grid and compact row
+    // are positioned at the top so it is already at index 0 as soon as it appears.
+    LaunchedEffect(isGamesInView) {
+        if (gridState.firstVisibleItemIndex != 0 || gridState.firstVisibleItemScrollOffset != 0) {
+            gridState.scrollToItem(0)
+        }
+        if (gamesRowState.firstVisibleItemIndex != 0 || gamesRowState.firstVisibleItemScrollOffset != 0) {
+            gamesRowState.scrollToItem(0)
+        }
+    }
+
+    // Anytime the App drawer leaves or enters view, ensure both list and icon-grid states
+    // are positioned at the top so the drawer is already scrolled to the top when opened.
+    LaunchedEffect(isAppDrawerInView) {
+        if (appsListState.firstVisibleItemIndex != 0 || appsListState.firstVisibleItemScrollOffset != 0) {
+            appsListState.scrollToItem(0)
+        }
+        if (appsGridState.firstVisibleItemIndex != 0 || appsGridState.firstVisibleItemScrollOffset != 0) {
+            appsGridState.scrollToItem(0)
+        }
+    }
+
+    LaunchedEffect(pagerState.currentPage) {
+        val tab = if (pagerState.currentPage == 0) MainLibraryTab.APPS else MainLibraryTab.GAMES
+        onTabFromPager(tab)
+    }
+
+    // Close the app drawer whenever switching to/from Games (by tap or horizontal swipe).
+    LaunchedEffect(pagerState.settledPage) {
+        if (pagerState.settledPage == 1 && appsPagerState.currentPage != 0) {
+            appsPagerState.scrollToPage(0)
+        }
+    }
+
+    LaunchedEffect(currentTab) {
+        val target = if (currentTab == MainLibraryTab.GAMES) 1 else 0
+        // Close the app drawer immediately before sliding back to Apps, or close it right away
+        // when switching tabs so switching between Apps and Games never leaves the drawer open.
+        if (appsPagerState.currentPage != 0) {
+            appsPagerState.scrollToPage(0)
+        }
+        if (target == 1) {
+            if (gridState.firstVisibleItemIndex != 0 || gridState.firstVisibleItemScrollOffset != 0) {
+                gridState.scrollToItem(0)
+            }
+            if (gamesRowState.firstVisibleItemIndex != 0 || gamesRowState.firstVisibleItemScrollOffset != 0) {
+                gamesRowState.scrollToItem(0)
+            }
+        }
+        if (pagerState.currentPage != target) {
+            pagerState.animateScrollToPage(target)
+        }
+    }
+
+    // Selecting the Apps tab always returns to the favorites home, even if the vertical
+    // pager was left on the complete app list. Jump rather than animate so the favorites
+    // page is present on the first frame of the transition.
+    LaunchedEffect(appsHomeReset) {
+        if (appsHomeReset > 0 && appsPagerState.currentPage != 0) {
+            appsPagerState.scrollToPage(0)
         }
     }
 }
