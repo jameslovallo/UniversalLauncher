@@ -26,6 +26,7 @@ import com.example.data.service.WeatherLocationMode
 import com.example.data.service.WeatherService
 import com.example.input.ControllerAction
 import com.example.input.ControllerManager
+import com.example.ui.components.hasCustomAppIconUrl
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
 import kotlinx.coroutines.delay
@@ -36,6 +37,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 enum class MainLibraryTab {
     APPS,
@@ -133,16 +136,26 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _iconPackIcons = MutableStateFlow<List<IconPackIcon>>(emptyList())
     val iconPackIcons: StateFlow<List<IconPackIcon>> = _iconPackIcons.asStateFlow()
 
+    private val iconThemeMutex = Mutex()
+
     // itemId -> drawableName overrides remembered for the currently selected pack.
     private val _selectedPackOverrides = MutableStateFlow(
         _selectedIconPack.value?.let { iconPackStore.getOverridesForPack(it) }.orEmpty()
     )
     val selectedPackOverrides: StateFlow<Map<String, String>> = _selectedPackOverrides.asStateFlow()
 
-    // Hydrated synchronously from the cached map so Frame 0 already shows themed icons
-    // without briefly flashing original device icons.
+    // itemId -> custom image/URL overrides remembered for the currently active theme
+    // (Default theme when selectedIconPack is null, or a custom icon pack).
+    private val _selectedCustomUrlOverrides = MutableStateFlow(
+        iconPackStore.getCustomUrlOverrides(_selectedIconPack.value)
+    )
+    val selectedCustomUrlOverrides: StateFlow<Map<String, String>> =
+        _selectedCustomUrlOverrides.asStateFlow()
+
+    // Hydrated synchronously from the cached map so Frame 0 already shows themed or custom
+    // icons without briefly flashing original device icons.
     private val _themedAppIcons = MutableStateFlow(
-        _selectedIconPack.value?.let { iconPackStore.loadCachedIconMap(it) }.orEmpty()
+        iconPackStore.loadCachedIconMap(_selectedIconPack.value)
     )
     val themedAppIcons: StateFlow<Map<String, String>> = _themedAppIcons.asStateFlow()
 
@@ -561,15 +574,56 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
         } else {
             val updatedPoster = if (current.isGame) sanitizedUrl else current.posterUrl
-            val updatedIcon = if (!current.isGame) sanitizedUrl else current.iconUrl
-            _editingItem.value = current.copy(
-                title = resolvedTitle,
-                posterUrl = updatedPoster,
-                iconUrl = updatedIcon,
-                isCustomized = true
-            )
-            viewModelScope.launch {
-                repository.updateTitleAndArtwork(id, resolvedTitle, updatedPoster, updatedIcon)
+            if (current.isGame) {
+                _editingItem.value = current.copy(
+                    title = resolvedTitle,
+                    posterUrl = updatedPoster,
+                    isCustomized = true
+                )
+                viewModelScope.launch {
+                    repository.updateTitleAndArtwork(id, resolvedTitle, updatedPoster, current.iconUrl)
+                }
+            } else {
+                val activePack = _selectedIconPack.value
+                iconPackStore.saveBaseIconUrlIfUnset(id, current.iconUrl)
+                if (sanitizedUrl != null) {
+                    iconPackStore.setCustomUrlOverride(activePack, id, sanitizedUrl)
+                } else {
+                    iconPackStore.removeCustomUrlOverride(activePack, id)
+                }
+                _selectedPackOverrides.value =
+                    activePack?.let { iconPackStore.getOverridesForPack(it) }.orEmpty()
+                _selectedCustomUrlOverrides.value = iconPackStore.getCustomUrlOverrides(activePack)
+
+                viewModelScope.launch {
+                    iconThemeMutex.withLock {
+                        val resolvedIcon = sanitizedUrl ?: baseIconUrlFor(current)
+                        _editingItem.value?.takeIf { it.id == id }?.let { latest ->
+                            _editingItem.value = latest.copy(
+                                title = resolvedTitle,
+                                posterUrl = updatedPoster,
+                                iconUrl = resolvedIcon,
+                                isCustomized = true
+                            )
+                        }
+                        repository.updateTitleAndArtwork(id, resolvedTitle, updatedPoster, resolvedIcon)
+                        if (sanitizedUrl != null && _selectedIconPack.value == activePack) {
+                            val updatedMap = _themedAppIcons.value.toMutableMap()
+                            updatedMap[id] = sanitizedUrl
+                            if (current.type == GameType.INSTALLED_APP && !current.packageName.isNullOrBlank()) {
+                                updatedMap[current.packageName] = sanitizedUrl
+                            }
+                            _themedAppIcons.value = updatedMap
+                            iconPackStore.saveCachedIconMap(activePack, updatedMap)
+                        } else if (_selectedIconPack.value == activePack) {
+                            if (activePack != null) {
+                                applyAndLoadIconPackLocked(activePack)
+                            } else {
+                                applyAndLoadDefaultThemeLocked()
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -639,6 +693,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val initialSelected = _selectedIconPack.value
         if (initialSelected != null) {
             loadIconPack(initialSelected)
+        } else {
+            loadDefaultThemeIcons()
         }
         viewModelScope.launch {
             val packs = runCatching { IconPackManager.installedIconPacks(getApplication()) }
@@ -653,89 +709,189 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setIconPack(packageName: String?) {
+        val previousPack = _selectedIconPack.value
         val resolved = packageName?.takeIf { it.isNotBlank() }
         iconPackStore.selectedIconPack = resolved
         _selectedIconPack.value = resolved
+        _selectedPackOverrides.value = resolved?.let { iconPackStore.getOverridesForPack(it) }.orEmpty()
+        _selectedCustomUrlOverrides.value = iconPackStore.getCustomUrlOverrides(resolved)
         if (resolved == null) {
-            iconPackStore.saveCachedIconMap(null, emptyMap())
             _iconPackIcons.value = emptyList()
-            _themedAppIcons.value = emptyMap()
-            _selectedPackOverrides.value = emptyMap()
-            restoreDefaultIconsAcrossInstalledApps()
-        } else {
-            _selectedPackOverrides.value = iconPackStore.getOverridesForPack(resolved)
-            val cached = iconPackStore.loadCachedIconMap(resolved)
-            if (cached.isNotEmpty()) {
-                _themedAppIcons.value = cached
-            }
-            loadIconPack(resolved)
         }
-    }
+        _themedAppIcons.value = iconPackStore.loadCachedIconMap(resolved)
 
-    /**
-     * Switching back to the default icon theme applies across every installed application,
-     * even those previously customized, while keeping per-pack icon choices in
-     * [iconPackStore] for future re-selection.
-     */
-    private fun restoreDefaultIconsAcrossInstalledApps() {
         viewModelScope.launch {
-            val installedApps = runCatching {
-                repository.getAllItemsSnapshot()
-                    .filter { it.type == GameType.INSTALLED_APP && !it.isDeleted }
-            }.getOrDefault(emptyList())
-            for (app in installedApps) {
-                val iconUrl = app.iconUrl
-                val isDefaultCached = iconUrl.isNullOrBlank() || iconUrl.contains("/app_icons/")
-                if (!isDefaultCached) {
-                    val defaultUrl = app.packageName?.let {
-                        installedAppsManager.getDefaultIconUrl(it)
-                    }
-                    if (defaultUrl != null && defaultUrl != iconUrl) {
-                        repository.updateIconUrl(app.id, defaultUrl)
-                        _editingItem.value?.takeIf { it.id == app.id }?.let { current ->
-                            _editingItem.value = current.copy(iconUrl = defaultUrl)
-                        }
-                    }
+            iconThemeMutex.withLock {
+                if (previousPack == null && resolved != null) {
+                    snapshotDefaultThemeCustomIconsLocked()
+                }
+                if (_selectedIconPack.value != resolved) return@withLock
+                if (resolved == null) {
+                    applyAndLoadDefaultThemeLocked()
+                } else {
+                    applyAndLoadIconPackLocked(resolved)
                 }
             }
         }
     }
 
-    /**
-     * Resolves themed icons (including remembered per-app pack overrides and hidden apps)
-     * and loads the pack's picker catalog.
-     */
+    private fun loadDefaultThemeIcons() {
+        viewModelScope.launch {
+            iconThemeMutex.withLock {
+                if (_selectedIconPack.value != null) return@withLock
+                applyAndLoadDefaultThemeLocked()
+            }
+        }
+    }
+
     private fun loadIconPack(packPackage: String) {
         viewModelScope.launch {
-            val context = getApplication<Application>()
-            val installed = runCatching { installedAppsManager.getInstalledApps() }
-                .getOrDefault(emptyList())
-            val dbNonGames = runCatching {
-                repository.getAllItemsSnapshot().filter { !it.isGame && !it.isDeleted }
-            }.getOrDefault(emptyList())
-            val mergedById = LinkedHashMap<String, GameItem>()
-            installed.forEach { mergedById[it.id] = it }
-            dbNonGames.forEach { mergedById[it.id] = it }
-
-            val overrides = iconPackStore.getOverridesForPack(packPackage)
-            val resolvedMap = runCatching {
-                IconPackManager.resolveIconsForPack(
-                    context = context,
-                    packPackage = packPackage,
-                    items = mergedById.values,
-                    customOverrides = overrides
-                )
-            }.getOrDefault(emptyMap())
-            val packCatalog = runCatching {
-                IconPackManager.icons(context, packPackage)
-            }.getOrDefault(emptyList())
-
-            if (_selectedIconPack.value == packPackage) {
-                _selectedPackOverrides.value = overrides
-                _themedAppIcons.value = resolvedMap
-                _iconPackIcons.value = packCatalog
-                iconPackStore.saveCachedIconMap(packPackage, resolvedMap)
+            iconThemeMutex.withLock {
+                if (_selectedIconPack.value != packPackage) return@withLock
+                applyAndLoadIconPackLocked(packPackage)
             }
+        }
+    }
+
+    private suspend fun snapshotDefaultThemeCustomIconsLocked() {
+        if (iconPackStore.hasMigratedDefaultThemeIcons) return
+        val nonGames = runCatching {
+            repository.getAllItemsSnapshot().filter { !it.isGame && !it.isDeleted }
+        }.getOrDefault(emptyList())
+        val existing = iconPackStore.getCustomUrlOverrides(null)
+        for (item in nonGames) {
+            val iconUrl = item.iconUrl
+            if (existing[item.id] == null && hasCustomAppIconUrl(iconUrl)) {
+                iconPackStore.setCustomUrlOverride(null, item.id, iconUrl!!)
+            }
+        }
+        iconPackStore.hasMigratedDefaultThemeIcons = true
+    }
+
+    private suspend fun baseIconUrlFor(item: GameItem): String? = when {
+        item.type == GameType.INSTALLED_APP -> item.packageName?.let {
+            installedAppsManager.getDefaultIconUrl(it)
+        }
+        else -> iconPackStore.getBaseIconUrl(item.id)
+    }
+
+    /**
+     * Applies the Default theme across all non-game items: apps with a remembered custom
+     * icon in the Default theme receive their custom icon, while all other apps receive
+     * their stock device/shortcut icon. Custom icon pack memories remain untouched.
+     */
+    private suspend fun applyAndLoadDefaultThemeLocked() {
+        val dbNonGames = runCatching {
+            repository.getAllItemsSnapshot().filter { !it.isGame && !it.isDeleted }
+        }.getOrDefault(emptyList())
+
+        // Capture any pre-existing custom Room icons into the Default theme's memory once.
+        if (!iconPackStore.hasMigratedDefaultThemeIcons) {
+            val storedBeforeBackfill = iconPackStore.getCustomUrlOverrides(null)
+            for (item in dbNonGames) {
+                val iconUrl = item.iconUrl
+                if (storedBeforeBackfill[item.id] == null && hasCustomAppIconUrl(iconUrl)) {
+                    iconPackStore.setCustomUrlOverride(null, item.id, iconUrl!!)
+                }
+            }
+            iconPackStore.hasMigratedDefaultThemeIcons = true
+        }
+
+        val defaultCustomUrls = iconPackStore.getCustomUrlOverrides(null)
+        val resolvedMap = LinkedHashMap<String, String>()
+        for (item in dbNonGames) {
+            val rememberedUrl = defaultCustomUrls[item.id]
+            val targetUrl = rememberedUrl ?: baseIconUrlFor(item)
+            val shouldUpdateRoom = when {
+                targetUrl != null -> targetUrl != item.iconUrl
+                item.type != GameType.INSTALLED_APP && item.iconUrl != null -> true
+                else -> false
+            }
+            if (shouldUpdateRoom) {
+                repository.updateIconUrl(item.id, targetUrl)
+                _editingItem.value?.takeIf { it.id == item.id }?.let { current ->
+                    _editingItem.value = current.copy(iconUrl = targetUrl)
+                }
+            }
+            if (rememberedUrl != null) {
+                resolvedMap[item.id] = rememberedUrl
+                if (item.type == GameType.INSTALLED_APP && !item.packageName.isNullOrBlank()) {
+                    resolvedMap[item.packageName] = rememberedUrl
+                }
+            }
+        }
+
+        if (_selectedIconPack.value == null) {
+            _selectedPackOverrides.value = emptyMap()
+            _selectedCustomUrlOverrides.value = defaultCustomUrls
+            _themedAppIcons.value = resolvedMap
+            _iconPackIcons.value = emptyList()
+            iconPackStore.saveCachedIconMap(null, resolvedMap)
+        }
+    }
+
+    /**
+     * Resolves themed icons (including remembered per-app pack drawable overrides, pack
+     * custom photo/URL overrides, and hidden apps) and loads the pack's picker catalog.
+     */
+    private suspend fun applyAndLoadIconPackLocked(packPackage: String) {
+        iconPackStore.hasMigratedDefaultThemeIcons = true
+        val context = getApplication<Application>()
+        val installed = runCatching { installedAppsManager.getInstalledApps() }
+            .getOrDefault(emptyList())
+        val dbNonGames = runCatching {
+            repository.getAllItemsSnapshot().filter { !it.isGame && !it.isDeleted }
+        }.getOrDefault(emptyList())
+
+        val packUrlOverrides = iconPackStore.getCustomUrlOverrides(packPackage)
+        for (item in dbNonGames) {
+            iconPackStore.saveBaseIconUrlIfUnset(item.id, item.iconUrl)
+            val targetUrl = packUrlOverrides[item.id] ?: baseIconUrlFor(item)
+            val shouldUpdateRoom = when {
+                targetUrl != null -> targetUrl != item.iconUrl
+                item.type != GameType.INSTALLED_APP && item.iconUrl != null -> true
+                else -> false
+            }
+            if (shouldUpdateRoom) {
+                repository.updateIconUrl(item.id, targetUrl)
+                _editingItem.value?.takeIf { it.id == item.id }?.let { current ->
+                    _editingItem.value = current.copy(iconUrl = targetUrl)
+                }
+            }
+        }
+
+        val mergedById = LinkedHashMap<String, GameItem>()
+        installed.forEach { mergedById[it.id] = it }
+        dbNonGames.forEach { mergedById[it.id] = it }
+
+        val drawableOverrides = iconPackStore.getOverridesForPack(packPackage)
+        val resolvedMap = runCatching {
+            IconPackManager.resolveIconsForPack(
+                context = context,
+                packPackage = packPackage,
+                items = mergedById.values,
+                customOverrides = drawableOverrides
+            )
+        }.getOrDefault(emptyMap()).toMutableMap()
+
+        for ((itemId, url) in packUrlOverrides) {
+            resolvedMap[itemId] = url
+            val item = mergedById[itemId]
+            if (item != null && item.type == GameType.INSTALLED_APP && !item.packageName.isNullOrBlank()) {
+                resolvedMap[item.packageName] = url
+            }
+        }
+
+        val packCatalog = runCatching {
+            IconPackManager.icons(context, packPackage)
+        }.getOrDefault(emptyList())
+
+        if (_selectedIconPack.value == packPackage) {
+            _selectedPackOverrides.value = drawableOverrides
+            _selectedCustomUrlOverrides.value = packUrlOverrides
+            _themedAppIcons.value = resolvedMap
+            _iconPackIcons.value = packCatalog
+            iconPackStore.saveCachedIconMap(packPackage, resolvedMap)
         }
     }
 
@@ -747,73 +903,83 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val pack = _selectedIconPack.value ?: return
         applyItemTitle(id, newTitle)
         viewModelScope.launch {
-            val context = getApplication<Application>()
-            val item = _editingItem.value?.takeIf { it.id == id }
-                ?: repository.getGameById(id)
-                ?: return@launch
-            val url = runCatching {
-                IconPackManager.renderPackChoice(context, pack, drawableName, id)
-            }.getOrNull() ?: return@launch
+            iconThemeMutex.withLock {
+                val context = getApplication<Application>()
+                val item = _editingItem.value?.takeIf { it.id == id }
+                    ?: repository.getGameById(id)
+                    ?: return@withLock
+                iconPackStore.saveBaseIconUrlIfUnset(id, item.iconUrl)
+                val url = runCatching {
+                    IconPackManager.renderPackChoice(context, pack, drawableName, id)
+                }.getOrNull() ?: return@withLock
 
-            iconPackStore.setOverride(pack, id, drawableName)
+                iconPackStore.setOverride(pack, id, drawableName)
 
-            val cleanedIconUrl = if (item.type == GameType.INSTALLED_APP) {
-                val pkg = item.packageName
-                if (pkg != null && (item.iconUrl.isNullOrBlank() || !item.iconUrl.contains("/app_icons/"))) {
-                    installedAppsManager.getDefaultIconUrl(pkg) ?: item.iconUrl
-                } else {
-                    item.iconUrl
+                val cleanedIconUrl = baseIconUrlFor(item)
+                val shouldUpdateRoom = when {
+                    cleanedIconUrl != null -> cleanedIconUrl != item.iconUrl
+                    item.type != GameType.INSTALLED_APP && item.iconUrl != null -> true
+                    else -> false
                 }
-            } else {
-                null
-            }
-            if (cleanedIconUrl != item.iconUrl) {
-                repository.updateIconUrl(id, cleanedIconUrl)
-                _editingItem.value?.takeIf { it.id == id }?.let { current ->
-                    _editingItem.value = current.copy(iconUrl = cleanedIconUrl)
+                if (shouldUpdateRoom) {
+                    repository.updateIconUrl(id, cleanedIconUrl)
+                    _editingItem.value?.takeIf { it.id == id }?.let { current ->
+                        _editingItem.value = current.copy(iconUrl = cleanedIconUrl)
+                    }
                 }
-            }
 
-            if (_selectedIconPack.value == pack) {
-                _selectedPackOverrides.value = iconPackStore.getOverridesForPack(pack)
-                val updatedMap = _themedAppIcons.value.toMutableMap()
-                updatedMap[id] = url
-                if (item.type == GameType.INSTALLED_APP && !item.packageName.isNullOrBlank()) {
-                    updatedMap[item.packageName] = url
+                if (_selectedIconPack.value == pack) {
+                    _selectedPackOverrides.value = iconPackStore.getOverridesForPack(pack)
+                    _selectedCustomUrlOverrides.value = iconPackStore.getCustomUrlOverrides(pack)
+                    val updatedMap = _themedAppIcons.value.toMutableMap()
+                    updatedMap[id] = url
+                    if (item.type == GameType.INSTALLED_APP && !item.packageName.isNullOrBlank()) {
+                        updatedMap[item.packageName] = url
+                    }
+                    _themedAppIcons.value = updatedMap
+                    iconPackStore.saveCachedIconMap(pack, updatedMap)
                 }
-                _themedAppIcons.value = updatedMap
-                iconPackStore.saveCachedIconMap(pack, updatedMap)
             }
         }
     }
 
-    /** Resets a single app's custom icon (pack override, local photo, or URL) back to default. */
+    /**
+     * Resets a single app's custom icon for the active theme (Default theme or custom icon
+     * pack) without disturbing remembered customizations in other themes.
+     */
     fun resetItemIcon(id: String) {
         val activePack = _selectedIconPack.value
         viewModelScope.launch {
-            val item = _editingItem.value?.takeIf { it.id == id }
-                ?: repository.getGameById(id)
-                ?: return@launch
+            iconThemeMutex.withLock {
+                val item = _editingItem.value?.takeIf { it.id == id }
+                    ?: repository.getGameById(id)
+                    ?: return@withLock
 
-            if (activePack != null) {
-                iconPackStore.removeOverride(activePack, id)
-            }
-
-            val defaultIconUrl = if (item.type == GameType.INSTALLED_APP) {
-                item.packageName?.let { installedAppsManager.getDefaultIconUrl(it) }
-            } else {
-                null
-            }
-            if (item.iconUrl != defaultIconUrl) {
-                repository.updateIconUrl(id, defaultIconUrl)
-                _editingItem.value?.takeIf { it.id == id }?.let { current ->
-                    _editingItem.value = current.copy(iconUrl = defaultIconUrl)
+                if (activePack != null) {
+                    iconPackStore.removeOverride(activePack, id)
                 }
-            }
+                iconPackStore.removeCustomUrlOverride(activePack, id)
 
-            if (activePack != null && _selectedIconPack.value == activePack) {
-                _selectedPackOverrides.value = iconPackStore.getOverridesForPack(activePack)
-                loadIconPack(activePack)
+                val defaultIconUrl = baseIconUrlFor(item)
+                val shouldUpdateRoom = when {
+                    defaultIconUrl != null -> defaultIconUrl != item.iconUrl
+                    item.type != GameType.INSTALLED_APP && item.iconUrl != null -> true
+                    else -> false
+                }
+                if (shouldUpdateRoom) {
+                    repository.updateIconUrl(id, defaultIconUrl)
+                    _editingItem.value?.takeIf { it.id == id }?.let { current ->
+                        _editingItem.value = current.copy(iconUrl = defaultIconUrl)
+                    }
+                }
+
+                if (_selectedIconPack.value == activePack) {
+                    if (activePack != null) {
+                        applyAndLoadIconPackLocked(activePack)
+                    } else {
+                        applyAndLoadDefaultThemeLocked()
+                    }
+                }
             }
         }
     }
@@ -1103,7 +1269,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             repository.syncInstalledApps()
             repository.matchMissingGamePosters()
-            _selectedIconPack.value?.let { loadIconPack(it) }
+            val activePack = _selectedIconPack.value
+            if (activePack != null) {
+                loadIconPack(activePack)
+            } else {
+                loadDefaultThemeIcons()
+            }
         }
     }
 

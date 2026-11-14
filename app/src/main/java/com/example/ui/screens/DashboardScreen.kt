@@ -121,6 +121,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.GameItem
+import com.example.data.service.IconPackOverridesStore
 import com.example.ui.components.AddContentModal
 import com.example.ui.components.AppIconTile
 import com.example.ui.components.AppTextRow
@@ -133,6 +134,7 @@ import com.example.ui.components.LocalThemedAppIcons
 import com.example.ui.components.SettingsModal
 import com.example.ui.components.SteamGamePosterCard
 import com.example.ui.components.TopNavBar
+import com.example.ui.components.hasCustomAppIconUrl
 import com.example.ui.viewmodel.AddModalSubView
 import com.example.ui.viewmodel.LauncherViewModel
 import com.example.ui.viewmodel.MainLibraryTab
@@ -173,6 +175,7 @@ fun DashboardScreen(
     val selectedIconPack by viewModel.selectedIconPack.collectAsStateWithLifecycle()
     val iconPackIcons by viewModel.iconPackIcons.collectAsStateWithLifecycle()
     val selectedPackOverrides by viewModel.selectedPackOverrides.collectAsStateWithLifecycle()
+    val selectedCustomUrlOverrides by viewModel.selectedCustomUrlOverrides.collectAsStateWithLifecycle()
     val themedAppIcons by viewModel.themedAppIcons.collectAsStateWithLifecycle()
 
     val controllerState by viewModel.controllerManager.controllerState.collectAsStateWithLifecycle()
@@ -761,7 +764,8 @@ fun DashboardScreen(
                 }
                 val canResetIcon = !item.isGame && (
                     selectedPackDrawable != null ||
-                        (!item.iconUrl.isNullOrBlank() && !item.iconUrl.contains("/app_icons/"))
+                        selectedCustomUrlOverrides.containsKey(item.id) ||
+                        hasCustomAppIconUrl(item.iconUrl)
                     )
                 CustomizeItemDialog(
                     item = item,
@@ -770,6 +774,7 @@ fun DashboardScreen(
                     iconPack = installedIconPacks.firstOrNull {
                         it.packageName == selectedIconPack
                     },
+                    activeThemeKey = IconPackOverridesStore.themeKey(selectedIconPack),
                     iconPackIcons = iconPackIcons,
                     selectedPackDrawable = selectedPackDrawable,
                     canResetIcon = canResetIcon,

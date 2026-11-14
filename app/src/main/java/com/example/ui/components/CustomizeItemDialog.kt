@@ -80,6 +80,7 @@ import com.example.data.service.ArtworkOption
 import com.example.data.service.IconPackIcon
 import com.example.data.service.IconPackInfo
 import com.example.data.service.IconPackManager
+import com.example.data.service.IconPackOverridesStore
 import com.example.data.service.SteamGridDbService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -118,6 +119,7 @@ fun CustomizeItemDialog(
     steamGridDbApiKey: String?,
     includeNsfw: Boolean = false,
     iconPack: IconPackInfo? = null,
+    activeThemeKey: String = IconPackOverridesStore.themeKey(iconPack?.packageName),
     iconPackIcons: List<IconPackIcon> = emptyList(),
     selectedPackDrawable: String? = null,
     canResetIcon: Boolean = false,
@@ -186,8 +188,9 @@ fun CustomizeItemDialog(
     // Local file and photo pickers (both copy into app-private storage so URIs persist).
     val applyPickedUri: (Uri?) -> Unit = { uri ->
         if (uri != null) {
+            val safeThemeKey = activeThemeKey.replace(Regex("[^A-Za-z0-9._-]"), "_")
             val slotSuffix = when {
-                !item.isGame -> "icon"
+                !item.isGame -> "icon_$safeThemeKey"
                 isNsfwSlot -> "nsfw"
                 else -> "default"
             }

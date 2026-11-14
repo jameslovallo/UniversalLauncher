@@ -82,4 +82,25 @@ class AppIconResolutionTest {
         assertEquals(localPhotoUrl, resolveAppIconUrl(appWithLocalPhoto, themedIcons))
         assertEquals(gameItem.iconUrl, resolveAppIconUrl(gameItem, themedIcons))
     }
+
+    @Test
+    fun `pinned shortcut base icon yields to active theme override`() {
+        val baseShortcut = GameItem(
+            id = "pinned_com.whatsapp_chat1",
+            title = "Chat",
+            type = GameType.SHORTCUT,
+            isGame = false,
+            packageName = "com.whatsapp",
+            iconUrl = "file:///data/user/0/com.example/files/shortcuts/com.whatsapp_chat1.png"
+        )
+        val themedIcons = mapOf(
+            "pinned_com.whatsapp_chat1" to "file:///custom_art/pinned_chat1.img",
+            "com.whatsapp" to "file:///pack/whatsapp.png"
+        )
+
+        assertEquals(
+            "file:///custom_art/pinned_chat1.img",
+            resolveAppIconUrl(baseShortcut, themedIcons)
+        )
+    }
 }

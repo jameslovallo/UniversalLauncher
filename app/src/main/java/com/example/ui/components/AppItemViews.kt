@@ -169,12 +169,13 @@ fun AppIconTile(
 
 /**
  * True when [iconUrl] points to an explicit user-picked image or URL rather than the
- * auto-generated `app_icons` cache (or a legacy `custom_icons` file).
+ * auto-generated `app_icons` / `shortcuts` cache (or a legacy `custom_icons` file).
  */
 fun hasCustomAppIconUrl(iconUrl: String?): Boolean =
     !iconUrl.isNullOrBlank() &&
         !iconUrl.contains("/app_icons/") &&
-        !iconUrl.contains("/custom_icons/")
+        !iconUrl.contains("/custom_icons/") &&
+        !iconUrl.contains("/shortcuts/")
 
 /**
  * Resolves the icon URL to display for a non-game item across every icon surface:
