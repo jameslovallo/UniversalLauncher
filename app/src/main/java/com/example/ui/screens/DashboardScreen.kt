@@ -96,6 +96,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -357,6 +358,22 @@ fun DashboardScreen(
     val darkAmount = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
         .coerceIn(0f, 1f)
 
+    // While a controller is connected and the Games tab is showing, the poster grid owns
+    // focus. The top bar must not keep it, and overlays (search, dialogs, sheets) are
+    // exempt so they can take focus normally.
+    val holdGameGridFocus = controllerState.isConnected &&
+        currentTab == MainLibraryTab.GAMES &&
+        !pagerState.isScrollInProgress &&
+        !showSearchBar &&
+        searchQuery.isBlank() &&
+        contextMenuItem == null &&
+        favoriteActionItem == null &&
+        !showFavoritesEditor &&
+        editingItem == null &&
+        !showAddModal &&
+        !showSettingsModal &&
+        weatherAppChooser == null
+
     CompositionLocalProvider(LocalThemedAppIcons provides themedAppIcons) {
         Box(
             modifier = modifier.fillMaxSize()
@@ -470,7 +487,14 @@ fun DashboardScreen(
                                 .focusGroup()
                                 .focusProperties {
                                     exit = { direction ->
-                                        if (direction == FocusDirection.Left || direction == FocusDirection.Previous) {
+                                        // Never let controller navigation escape into the top
+                                        // bar. Up on the first row stays on that row, and
+                                        // Left/Previous cannot jump to the Apps page.
+                                        if (
+                                            direction == FocusDirection.Left ||
+                                            direction == FocusDirection.Up ||
+                                            direction == FocusDirection.Previous
+                                        ) {
                                             FocusRequester.Cancel
                                         } else {
                                             FocusRequester.Default
@@ -529,6 +553,8 @@ fun DashboardScreen(
                                             pagerState.currentPage == 1 &&
                                             !pagerState.isScrollInProgress,
                                         isGamesPage = currentTab == MainLibraryTab.GAMES,
+                                        controllerConnected = controllerState.isConnected,
+                                        holdFocus = holdGameGridFocus,
                                         gridState = gridState,
                                         rowState = gamesRowState,
                                         compactLandscape = isCompactLandscape,
@@ -850,6 +876,8 @@ private fun GamesPosterGrid(
     showNsfwPoster: Boolean,
     isGamesTabOpen: Boolean,
     isGamesPage: Boolean = false,
+    controllerConnected: Boolean = false,
+    holdFocus: Boolean = false,
     gridState: LazyGridState,
     rowState: LazyListState,
     compactLandscape: Boolean,
@@ -860,6 +888,10 @@ private fun GamesPosterGrid(
     onGameFocus: (GameItem) -> Unit = {}
 ) {
     val firstItemFocusRequester = remember { FocusRequester() }
+    val focusedItemFocusRequester = remember { FocusRequester() }
+    // Tracks whether any poster in this grid currently owns focus, so the grid can pull
+    // focus back if the top bar takes it while a controller is connected.
+    var hasGridFocus by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
     val navigationBarInset =
@@ -903,13 +935,20 @@ private fun GamesPosterGrid(
     // only reports isGamesTabOpen after it has settled, but retry briefly in case the
     // focus system briefly parks on the navigation bar while the page changes.
     var focusedForCurrentOpen by remember { mutableStateOf(false) }
-    LaunchedEffect(isGamesPage, isGamesTabOpen, games.isNotEmpty()) {
-        if (!isGamesPage) {
-            // Left the Games view, so the next visit focuses the first poster again.
+    LaunchedEffect(
+        isGamesPage,
+        isGamesTabOpen,
+        games.isNotEmpty(),
+        controllerConnected,
+        holdFocus
+    ) {
+        if (!isGamesPage || !controllerConnected) {
+            // Left the Games view (or no controller), so the next visit focuses the
+            // first poster again.
             focusedForCurrentOpen = false
             return@LaunchedEffect
         }
-        if (!isGamesTabOpen || games.isEmpty() || focusedForCurrentOpen) {
+        if (!holdFocus || !isGamesTabOpen || games.isEmpty() || focusedForCurrentOpen) {
             return@LaunchedEffect
         }
         focusedForCurrentOpen = true
@@ -939,6 +978,36 @@ private fun GamesPosterGrid(
         // poster clear of the app-switcher bar as part of the focus scroll animation.
     }
 
+    // The Games grid owns focus while a controller is connected. Initial composition can
+    // park focus on the top bar (its buttons are focusable), so pull it back to the
+    // poster that had it, or to the first poster on a fresh entry.
+    LaunchedEffect(holdFocus, hasGridFocus, focusedItemId, games) {
+        if (!holdFocus || hasGridFocus || games.isEmpty()) return@LaunchedEffect
+        delay(60)
+        // A focus move between posters can briefly report no focus; re-check before
+        // pulling focus back so normal navigation is never interrupted.
+        if (hasGridFocus) return@LaunchedEffect
+        val targetId = focusedItemId?.takeIf { id -> games.any { it.id == id } }
+            ?: games.first().id
+        val targetIndex = games.indexOfFirst { it.id == targetId }
+        if (targetIndex < 0) return@LaunchedEffect
+        if (compactLandscape) {
+            runCatching { rowState.scrollToItem(targetIndex) }
+        } else {
+            runCatching { gridState.scrollToItem(targetIndex) }
+        }
+        val requester = if (targetId == games.first().id) {
+            firstItemFocusRequester
+        } else {
+            focusedItemFocusRequester
+        }
+        repeat(3) {
+            runCatching { requester.requestFocus() }
+            delay(80)
+            if (hasGridFocus) return@LaunchedEffect
+        }
+    }
+
     if (compactLandscape) {
         // Small landscape screens: a single horizontal row that steps one poster at a
         // time. The row is centered vertically and does not fill the screen height, so a
@@ -961,6 +1030,8 @@ private fun GamesPosterGrid(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .focusGroup()
+                .onFocusChanged { hasGridFocus = it.hasFocus }
                 .then(
                     if (compactViewportHeight > 0.dp) {
                         Modifier.height(compactViewportHeight)
@@ -1018,6 +1089,12 @@ private fun GamesPosterGrid(
             ) {
                 itemsIndexed(games, key = { _, game -> game.id }) { index, game ->
                     val isFocused = game.id == focusedItemId && showFocusEffects
+                    val focusRequesterModifier = when {
+                        index == 0 -> Modifier.focusRequester(firstItemFocusRequester)
+                        game.id == focusedItemId ->
+                            Modifier.focusRequester(focusedItemFocusRequester)
+                        else -> Modifier
+                    }
 
                     SteamGamePosterCard(
                         game = game,
@@ -1028,7 +1105,7 @@ private fun GamesPosterGrid(
                         onLongClick = { onGameLongClick(game) },
                         onFocus = { onGameFocus(game) },
                         modifier = Modifier
-                            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                            .then(focusRequesterModifier)
                             .then(if (index == 0) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
                             .width(if (isFocused) 168.dp else 112.dp)
                     )
@@ -1039,7 +1116,10 @@ private fun GamesPosterGrid(
     }
 
     BoxWithConstraints(
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier
+            .fillMaxSize()
+            .focusGroup()
+            .onFocusChanged { hasGridFocus = it.hasFocus }
     ) {
         val horizontalPadding = 16.dp
         val spacing = 10.dp
@@ -1071,6 +1151,12 @@ private fun GamesPosterGrid(
             ) {
                 itemsIndexed(games, key = { _, game -> game.id }) { index, game ->
                     val isLeftmost = index % columnCount == 0
+                    val focusRequesterModifier = when {
+                        index == 0 -> Modifier.focusRequester(firstItemFocusRequester)
+                        game.id == focusedItemId ->
+                            Modifier.focusRequester(focusedItemFocusRequester)
+                        else -> Modifier
+                    }
                     SteamGamePosterCard(
                         game = game,
                         isFocused = game.id == focusedItemId && showFocusEffects,
@@ -1079,7 +1165,7 @@ private fun GamesPosterGrid(
                         onLongClick = { onGameLongClick(game) },
                         onFocus = { onGameFocus(game) },
                         modifier = Modifier
-                            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                            .then(focusRequesterModifier)
                             .then(if (isLeftmost) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
                     )
                 }

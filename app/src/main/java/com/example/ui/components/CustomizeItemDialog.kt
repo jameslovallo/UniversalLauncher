@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -91,6 +92,23 @@ private enum class CustomizeArtworkTab(val label: String) {
     CUSTOM_URL("Custom URL")
 }
 
+/**
+ * Filters the icon-theme picker by the display name or the raw drawable name. Packs name
+ * drawables inconsistently (`com_spotify_music`, `spotify`, ...), so matching both means
+ * a search for "spotify" finds the icon either way.
+ */
+internal fun filterIconPackIcons(
+    icons: List<IconPackIcon>,
+    query: String
+): List<IconPackIcon> {
+    val trimmed = query.trim()
+    if (trimmed.isBlank()) return icons
+    return icons.filter { icon ->
+        icon.label.contains(trimmed, ignoreCase = true) ||
+            icon.drawableName.contains(trimmed, ignoreCase = true)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CustomizeItemDialog(
@@ -131,6 +149,10 @@ fun CustomizeItemDialog(
     var customUrlInput by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<ArtworkOption>>(emptyList()) }
     var isSearching by remember { mutableStateOf(item.isGame) }
+    var iconQuery by remember(item.id) { mutableStateOf("") }
+    val filteredIconPackIcons = remember(iconPackIcons, iconQuery) {
+        filterIconPackIcons(iconPackIcons, iconQuery)
+    }
 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -489,26 +511,84 @@ fun CustomizeItemDialog(
                                 )
                             }
                         } else {
-                            LazyVerticalGrid(
-                                columns = GridCells.Adaptive(minSize = 72.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .testTag("customize_icon_pack_grid")
-                            ) {
-                                items(iconPackIcons, key = { it.drawableName }) { icon ->
-                                    IconPackOptionCard(
-                                        packPackage = iconPack.packageName,
-                                        icon = icon,
-                                        onClick = {
-                                            onSelectIconPackIcon(
-                                                item.id,
-                                                title,
-                                                icon.drawableName
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                OutlinedTextField(
+                                    value = iconQuery,
+                                    onValueChange = { iconQuery = it },
+                                    placeholder = {
+                                        Text("Search icons...", fontSize = 13.sp)
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.Search,
+                                            contentDescription = null
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        if (iconQuery.isNotEmpty()) {
+                                            IconButton(onClick = { iconQuery = "" }) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Clear icon search"
+                                                )
+                                            }
+                                        }
+                                    },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("customize_icon_pack_search")
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                if (filteredIconPackIcons.isEmpty()) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .weight(1f),
+                                        verticalArrangement = Arrangement.Center,
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Search,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(30.dp)
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = "No icons match \"${iconQuery.trim()}\".",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                } else {
+                                    LazyVerticalGrid(
+                                        columns = GridCells.Adaptive(minSize = 72.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .weight(1f)
+                                            .testTag("customize_icon_pack_grid")
+                                    ) {
+                                        items(
+                                            filteredIconPackIcons,
+                                            key = { it.drawableName }
+                                        ) { icon ->
+                                            IconPackOptionCard(
+                                                packPackage = iconPack.packageName,
+                                                icon = icon,
+                                                onClick = {
+                                                    onSelectIconPackIcon(
+                                                        item.id,
+                                                        title,
+                                                        icon.drawableName
+                                                    )
+                                                }
                                             )
                                         }
-                                    )
+                                    }
                                 }
                             }
                         }
