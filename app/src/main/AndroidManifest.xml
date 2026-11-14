@@ -22,6 +22,59 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.HOME" />
         </intent>
+        <!-- Installed icon packs. Each pack advertises one of the launcher theme actions
+             below; without these queries Android 11+ hides them from the launcher. -->
+        <intent>
+            <action android:name="org.adw.launcher.THEMES" />
+        </intent>
+        <intent>
+            <action android:name="org.adwfreak.launcher.THEMES" />
+        </intent>
+        <intent>
+            <action android:name="com.gau.go.launcherex.theme" />
+        </intent>
+        <intent>
+            <action android:name="com.novalauncher.THEME" />
+        </intent>
+        <intent>
+            <action android:name="com.anddoes.launcher.THEME" />
+        </intent>
+        <intent>
+            <action android:name="com.teslacoilsw.launcher.THEME" />
+        </intent>
+        <intent>
+            <action android:name="com.smartlauncher.THEMES" />
+        </intent>
+        <intent>
+            <action android:name="com.fede.launcher.THEMES" />
+        </intent>
+        <intent>
+            <action android:name="com.sec.android.app.launcher.THEMES" />
+        </intent>
+        <intent>
+            <action android:name="com.sonyericsson.home.THEME" />
+        </intent>
+        <intent>
+            <action android:name="com.huawei.android.thememanager.THEME" />
+        </intent>
+        <intent>
+            <action android:name="com.oppo.launcher.THEME" />
+        </intent>
+        <intent>
+            <action android:name="com.transparent.launcher.THEMES" />
+        </intent>
+        <intent>
+            <action android:name="com.apex.launcher.THEME" />
+        </intent>
+        <intent>
+            <action android:name="com.gtp.nextlauncher.theme" />
+        </intent>
+        <intent>
+            <action android:name="ch.deletescape.lawnchair.ICONPACK" />
+        </intent>
+        <intent>
+            <action android:name="app.lawnchair.ICONPACK" />
+        </intent>
         <!-- Moonlight and its forks (Artemis / Moonlight Noir, unofficial and rooted builds). -->
         <package android:name="com.limelight" />
         <package android:name="com.limelight.noir" />

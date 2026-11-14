@@ -288,6 +288,19 @@ class GameRepository(
         gameDao.updateTitleAndNsfwPoster(id, title, nsfwPosterUrl)
     }
 
+    suspend fun updateTitleAndLogoOverlay(
+        id: String,
+        title: String,
+        overlayLogo: Boolean,
+        logoUrl: String?
+    ) {
+        gameDao.updateTitleAndLogoOverlay(id, title, overlayLogo, logoUrl)
+    }
+
+    suspend fun updateLogoUrl(id: String, logoUrl: String?) {
+        gameDao.updateLogoUrl(id, logoUrl)
+    }
+
     suspend fun updateTitleAndNsfwOverlay(
         id: String,
         title: String,
@@ -356,6 +369,8 @@ class GameRepository(
                     favoriteOrder = existing?.favoriteOrder ?: 0,
                     posterUrl = resolvedPosterUrl,
                     nsfwPosterUrl = resolvedNsfwPosterUrl,
+                    logoUrl = remote.logoUrl,
+                    overlayLogo = remote.overlayLogo,
                     nsfwLogoUrl = remote.nsfwLogoUrl,
                     overlayNsfwLogo = remote.overlayNsfwLogo,
                     heroBannerUrl = remote.heroBannerUrl
@@ -406,6 +421,8 @@ class GameRepository(
                     isCustomized = remote.isCustomized,
                     posterUrl = resolvedPosterUrl,
                     nsfwPosterUrl = resolvedNsfwPosterUrl,
+                    logoUrl = remote.logoUrl,
+                    overlayLogo = remote.overlayLogo,
                     nsfwLogoUrl = remote.nsfwLogoUrl,
                     overlayNsfwLogo = remote.overlayNsfwLogo,
                     heroBannerUrl = remote.heroBannerUrl

@@ -74,6 +74,9 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.GameItem
 import com.example.data.service.ArtworkOption
+import com.example.data.service.IconPackIcon
+import com.example.data.service.IconPackInfo
+import com.example.data.service.IconPackManager
 import com.example.data.service.SteamGridDbService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -83,6 +86,7 @@ import java.io.File
 
 private enum class CustomizeArtworkTab(val label: String) {
     STEAMGRIDDB("SteamGridDB"),
+    ICON_THEME("Icon Theme"),
     LOCAL_PHOTO("Local Photo"),
     CUSTOM_URL("Custom URL")
 }
@@ -93,13 +97,16 @@ fun CustomizeItemDialog(
     item: GameItem,
     steamGridDbApiKey: String?,
     includeNsfw: Boolean = false,
+    iconPack: IconPackInfo? = null,
+    iconPackIcons: List<IconPackIcon> = emptyList(),
     onApplyTitle: (id: String, newTitle: String) -> Unit,
     onApplyPoster: (id: String, newTitle: String, isNsfwSlot: Boolean, artworkUrl: String?) -> Unit,
-    onSetOverlayLogo: (id: String, newTitle: String, enabled: Boolean) -> Unit,
-    onUpdateNsfwLogoUrl: (id: String, logoUrl: String?) -> Unit,
+    onSetOverlayLogo: (id: String, newTitle: String, isNsfwSlot: Boolean, enabled: Boolean) -> Unit,
+    onUpdateLogoUrl: (id: String, isNsfwSlot: Boolean, logoUrl: String?) -> Unit,
+    onSelectIconPackIcon: (id: String, newTitle: String, drawableName: String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val tabs = remember(item.isGame) {
+    val tabs = remember(item.isGame, iconPack) {
         if (item.isGame) {
             listOf(
                 CustomizeArtworkTab.STEAMGRIDDB,
@@ -107,14 +114,20 @@ fun CustomizeItemDialog(
                 CustomizeArtworkTab.CUSTOM_URL
             )
         } else {
-            listOf(
-                CustomizeArtworkTab.LOCAL_PHOTO,
-                CustomizeArtworkTab.CUSTOM_URL
-            )
+            buildList {
+                // Apps can borrow a different icon from the active theme.
+                if (iconPack != null) add(CustomizeArtworkTab.ICON_THEME)
+                add(CustomizeArtworkTab.LOCAL_PHOTO)
+                add(CustomizeArtworkTab.CUSTOM_URL)
+            }
         }
     }
     var title by remember(item.id) { mutableStateOf(item.title) }
     var selectedTab by remember(item.id, item.isGame) { mutableStateOf(tabs.first()) }
+    // The Icon Theme tab disappears if the active pack is removed while the sheet is open.
+    LaunchedEffect(tabs) {
+        if (selectedTab !in tabs) selectedTab = tabs.first()
+    }
     var customUrlInput by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<ArtworkOption>>(emptyList()) }
     var isSearching by remember { mutableStateOf(item.isGame) }
@@ -130,7 +143,11 @@ fun CustomizeItemDialog(
         else -> item.posterUrl
     }
     val hasAssignedPoster = !activeSlotUrl.isNullOrBlank()
-    val showLogoOverlay = isNsfwSlot && item.overlayNsfwLogo && !item.nsfwLogoUrl.isNullOrBlank()
+    // Each poster slot carries its own logo overlay, so the safe and adult posters can
+    // use different artwork.
+    val activeLogoUrl = if (isNsfwSlot) item.nsfwLogoUrl else item.logoUrl
+    val activeOverlay = if (isNsfwSlot) item.overlayNsfwLogo else item.overlayLogo
+    val showLogoOverlay = item.isGame && activeOverlay && !activeLogoUrl.isNullOrBlank()
 
     val commitTitleAndDismiss = {
         onApplyTitle(item.id, title)
@@ -167,7 +184,13 @@ fun CustomizeItemDialog(
         onResult = applyPickedUri
     )
 
-    LaunchedEffect(title, includeNsfw, item.isGame) {
+    LaunchedEffect(
+        title,
+        includeNsfw,
+        item.isGame,
+        item.overlayLogo,
+        item.overlayNsfwLogo
+    ) {
         if (!item.isGame) {
             searchResults = emptyList()
             isSearching = false
@@ -184,10 +207,10 @@ fun CustomizeItemDialog(
         delay(350)
         searchResults = SteamGridDbService.searchArtwork(query, steamGridDbApiKey, includeNsfw)
         isSearching = false
-        if (isNsfwSlot && item.overlayNsfwLogo) {
+        if (activeOverlay) {
             val resolvedLogo = SteamGridDbService.findLogoForGame(query, steamGridDbApiKey)
             if (!resolvedLogo.isNullOrBlank()) {
-                onUpdateNsfwLogoUrl(item.id, resolvedLogo)
+                onUpdateLogoUrl(item.id, isNsfwSlot, resolvedLogo)
             }
         }
     }
@@ -252,21 +275,25 @@ fun CustomizeItemDialog(
                 modifier = Modifier.fillMaxWidth().testTag("customize_name_input")
             )
 
-            if (isNsfwSlot) {
+            if (item.isGame) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { onSetOverlayLogo(item.id, title, !item.overlayNsfwLogo) }
+                        .clickable {
+                            onSetOverlayLogo(item.id, title, isNsfwSlot, !activeOverlay)
+                        }
                         .padding(horizontal = 4.dp)
                         .testTag("customize_overlay_logo_row"),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Checkbox(
-                        checked = item.overlayNsfwLogo,
-                        onCheckedChange = { checked -> onSetOverlayLogo(item.id, title, checked) },
+                        checked = activeOverlay,
+                        onCheckedChange = { checked ->
+                            onSetOverlayLogo(item.id, title, isNsfwSlot, checked)
+                        },
                         modifier = Modifier.testTag("customize_overlay_logo_checkbox")
                     )
                     Spacer(modifier = Modifier.width(6.dp))
@@ -376,7 +403,7 @@ fun CustomizeItemDialog(
                                                 imageUrl = activeSlotUrl!!,
                                                 contentDescription = "Assigned poster (tap to unassign)",
                                                 isSelected = true,
-                                                logoOverlayUrl = if (showLogoOverlay) item.nsfwLogoUrl else null,
+                                                logoOverlayUrl = if (showLogoOverlay) activeLogoUrl else null,
                                                 onClick = {
                                                     onApplyPoster(item.id, title, isNsfwSlot, null)
                                                 },
@@ -420,7 +447,7 @@ fun CustomizeItemDialog(
                                                 imageUrl = option.thumbnailUrl,
                                                 contentDescription = option.title,
                                                 isSelected = false,
-                                                logoOverlayUrl = if (showLogoOverlay) item.nsfwLogoUrl else null,
+                                                logoOverlayUrl = if (showLogoOverlay) activeLogoUrl else null,
                                                 onClick = {
                                                     onApplyPoster(
                                                         item.id,
@@ -432,6 +459,56 @@ fun CustomizeItemDialog(
                                             )
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+                    CustomizeArtworkTab.ICON_THEME -> { // Icon from the active icon theme
+                        if (iconPack == null || iconPackIcons.isEmpty()) {
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Image,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = if (iconPack == null) {
+                                        "Select an icon theme in Settings to choose from it."
+                                    } else {
+                                        "No icons found in ${iconPack.label}."
+                                    },
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        } else {
+                            LazyVerticalGrid(
+                                columns = GridCells.Adaptive(minSize = 72.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .testTag("customize_icon_pack_grid")
+                            ) {
+                                items(iconPackIcons, key = { it.drawableName }) { icon ->
+                                    IconPackOptionCard(
+                                        packPackage = iconPack.packageName,
+                                        icon = icon,
+                                        onClick = {
+                                            onSelectIconPackIcon(
+                                                item.id,
+                                                title,
+                                                icon.drawableName
+                                            )
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -521,6 +598,59 @@ fun CustomizeItemDialog(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun IconPackOptionCard(
+    packPackage: String,
+    icon: IconPackIcon,
+    onClick: () -> Unit
+) {
+    val context = LocalContext.current
+    // Previews are rendered on demand and cached, so a large theme does not block the
+    // sheet while every icon is rasterised up front.
+    var previewUrl by remember(packPackage, icon.drawableName) { mutableStateOf<String?>(null) }
+    var isLoading by remember(packPackage, icon.drawableName) { mutableStateOf(true) }
+    LaunchedEffect(packPackage, icon.drawableName) {
+        previewUrl = IconPackManager.previewUrl(context, packPackage, icon.drawableName)
+        isLoading = false
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(10.dp)
+            .testTag("icon_pack_icon_${icon.drawableName}"),
+        contentAlignment = Alignment.Center
+    ) {
+        when {
+            isLoading -> CircularProgressIndicator(
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(20.dp)
+            )
+            previewUrl != null -> AsyncImage(
+                model = previewUrl,
+                contentDescription = icon.label,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize()
+            )
+            else -> Icon(
+                imageVector = Icons.Default.Image,
+                contentDescription = icon.label,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
         }
     }
 }

@@ -126,6 +126,7 @@ import com.example.ui.components.EditFavoritesSheet
 import com.example.ui.components.FavoriteActionsSheet
 import com.example.ui.components.FavoritesHome
 import com.example.ui.components.ItemContextMenuSheet
+import com.example.ui.components.LocalThemedAppIcons
 import com.example.ui.components.SettingsModal
 import com.example.ui.components.SteamGamePosterCard
 import com.example.ui.components.TopNavBar
@@ -165,6 +166,10 @@ fun DashboardScreen(
     val favoritesLayout by viewModel.favoritesLayout.collectAsStateWithLifecycle()
     val steamGridDbApiKey by viewModel.steamGridDbApiKey.collectAsStateWithLifecycle()
     val steamGridDbIncludeNsfw by viewModel.steamGridDbIncludeNsfw.collectAsStateWithLifecycle()
+    val installedIconPacks by viewModel.installedIconPacks.collectAsStateWithLifecycle()
+    val selectedIconPack by viewModel.selectedIconPack.collectAsStateWithLifecycle()
+    val iconPackIcons by viewModel.iconPackIcons.collectAsStateWithLifecycle()
+    val themedAppIcons by viewModel.themedAppIcons.collectAsStateWithLifecycle()
 
     val controllerState by viewModel.controllerManager.controllerState.collectAsStateWithLifecycle()
 
@@ -352,474 +357,486 @@ fun DashboardScreen(
     val darkAmount = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
         .coerceIn(0f, 1f)
 
-    Box(
-        modifier = modifier.fillMaxSize()
-    ) {
-        // The native wallpaper shows through the transparent window. This translucent
-        // Material scrim keeps the Apps list readable over any wallpaper.
+    CompositionLocalProvider(LocalThemedAppIcons provides themedAppIcons) {
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    MaterialTheme.colorScheme.background.copy(
-                        alpha = appsBackgroundOpacity * (1f - darkAmount)
-                    )
-                )
-        )
-
-        // Fades to an opaque Material container as the pager settles on the Games page.
-        // surfaceContainerHighest is a defined Material palette tone that sits between
-        // the light and dark extremes instead of near-black.
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = darkAmount)
-                )
-        )
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                // In the compact landscape game row the cutout inset is handled inside
-                // the row, so the row can draw the previous poster underneath the camera.
-                .then(
-                    if (isCompactLandscape) Modifier else Modifier.displayCutoutPadding()
-                )
+            modifier = modifier.fillMaxSize()
         ) {
-            // Top Navigation Bar (+ Icon Left, Apps/Games Center, Settings Gear Right)
-            TopNavBar(
-                currentTab = currentTab,
-                alignEnd = isCompactLandscape,
-                // On compact landscape the favorites clock/date block is hidden, so the
-                // date and conditions live in the bar itself. They stay there for both
-                // Apps and Games so switching tabs never makes them pop in or out.
-                showDateWeather = isCompactLandscape,
-                weatherEnabled = weatherEnabled,
-                weather = weatherInfo,
-                temperatureUnit = temperatureUnit,
-                onOpenCalendar = { viewModel.openCalendarApp() },
-                onOpenWeather = { viewModel.openWeatherApp() },
-                onTabSelected = { viewModel.setTab(it) },
-                onOpenAddModal = { viewModel.openAddModal() },
-                onOpenSettings = { viewModel.openSettingsModal() },
-                modifier = if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
+            // The native wallpaper shows through the transparent window. This translucent
+            // Material scrim keeps the Apps list readable over any wallpaper.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        MaterialTheme.colorScheme.background.copy(
+                            alpha = appsBackgroundOpacity * (1f - darkAmount)
+                        )
+                    )
             )
 
-            // Optional Search Bar
-            AnimatedVisibility(visible = showSearchBar || searchQuery.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(
-                            if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
-                        )
-                        .padding(horizontal = 20.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { viewModel.setSearchQuery(it) },
-                        placeholder = {
-                            Text(if (currentTab == MainLibraryTab.GAMES) "Search games & cloud titles..." else "Search installed apps...")
-                        },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { viewModel.setSearchQuery("") }) {
-                                    Icon(Icons.Default.Clear, contentDescription = "Clear search")
-                                }
-                            }
-                        },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("search_text_input")
-                    )
-                }
-            }
-
-            // Main Content Area: swipe horizontally between the Games grid and Apps list.
-            HorizontalPager(
-                state = pagerState,
-                // On the compact landscape Games page the poster row owns horizontal
-                // drags. Disabling pager dragging here stops its overscroll from
-                // revealing the Apps page; a drag above/below the row still switches.
-                userScrollEnabled = !(isCompactLandscape &&
-                    gamesDisplay.isNotEmpty() &&
-                    pagerState.currentPage == 1 &&
-                    !pagerState.isScrollInProgress),
+            // Fades to an opaque Material container as the pager settles on the Games page.
+            // surfaceContainerHighest is a defined Material palette tone that sits between
+            // the light and dark extremes instead of near-black.
+            Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .testTag("library_pager")
-            ) { page ->
-                if (page == 1) {
-                    // Games View: Steam poster aspect ratio (2:3) with pull-to-refresh.
-                    // Confine directional focus navigation within the Games view so D-pad /
-                    // left stick left cannot escape to page 0 (Apps view).
-                    val pullToRefreshState = rememberPullToRefreshState()
-                    BoxWithConstraints(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .focusGroup()
-                            .focusProperties {
-                                exit = { direction ->
-                                    if (direction == FocusDirection.Left || direction == FocusDirection.Previous) {
-                                        FocusRequester.Cancel
-                                    } else {
-                                        FocusRequester.Default
-                                    }
-                                }
-                            }
-                    ) {
-                        val pageMaxHeight = maxHeight
-                        PullToRefreshBox(
-                            isRefreshing = gamesRefreshing,
-                            onRefresh = { viewModel.refreshGamesLibrary() },
-                            state = pullToRefreshState,
-                            indicator = {
-                                PullToRefreshDefaults.Indicator(
-                                    modifier = Modifier
-                                        .align(Alignment.TopCenter)
-                                        .testTag("games_pull_to_refresh_indicator"),
-                                    isRefreshing = gamesRefreshing,
-                                    state = pullToRefreshState,
-                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .testTag("games_pull_to_refresh")
-                        ) {
-                            if (gamesDisplay.isEmpty()) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = pageMaxHeight)
-                                        .verticalScroll(rememberScrollState())
-                                        .then(
-                                            if (isCompactLandscape) {
-                                                Modifier.displayCutoutPadding()
-                                            } else {
-                                                Modifier
-                                            }
-                                        )
-                                ) {
-                                    EmptyLibraryState(
-                                        isGamesTab = true,
-                                        searchQuery = searchQuery,
-                                        onAddClicked = { viewModel.openAddModal() },
-                                        modifier = Modifier.heightIn(min = pageMaxHeight)
-                                    )
-                                }
-                            } else {
-                                GamesPosterGrid(
-                                    games = gamesDisplay,
-                                    focusedItemId = focusedItemId,
-                                    showFocusEffects = controllerState.isConnected,
-                                    showNsfwPoster = steamGridDbIncludeNsfw,
-                                    isGamesTabOpen = currentTab == MainLibraryTab.GAMES &&
-                                        pagerState.currentPage == 1 &&
-                                        !pagerState.isScrollInProgress,
-                                    isGamesPage = currentTab == MainLibraryTab.GAMES,
-                                    gridState = gridState,
-                                    rowState = gamesRowState,
-                                    compactLandscape = isCompactLandscape,
-                                    compactViewportHeight = pageMaxHeight,
-                                    onSwipeToApps = {
-                                        scope.launch { pagerState.animateScrollToPage(0) }
-                                    },
-                                    onGameClick = { game ->
-                                        viewModel.setFocusedItem(game.id)
-                                        viewModel.launchItem(game)
-                                    },
-                                    onGameLongClick = { game ->
-                                        viewModel.openContextMenu(game)
-                                    },
-                                    onGameFocus = { game ->
-                                        viewModel.setFocusedItem(game.id)
-                                    }
-                                )
-                            }
-                        }
+                    .fillMaxSize()
+                    .background(
+                        MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = darkAmount)
+                    )
+            )
 
-                        SnackbarHost(
-                            hostState = gamesSnackbarHostState,
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .navigationBarsPadding()
-                                .padding(horizontal = 16.dp, vertical = 12.dp)
-                                .testTag("games_refresh_snackbar")
-                        )
-                    }
-                } else {
-                    // Apps View: a full-height favorites home. Swiping up reveals the
-                    // complete app list, which excludes favorites and games.
-                    // Confine directional focus navigation so D-pad / stick right cannot
-                    // escape to page 1 (Games view).
-                    Box(
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    // In the compact landscape game row the cutout inset is handled inside
+                    // the row, so the row can draw the previous poster underneath the camera.
+                    .then(
+                        if (isCompactLandscape) Modifier else Modifier.displayCutoutPadding()
+                    )
+            ) {
+                // Top Navigation Bar (+ Icon Left, Apps/Games Center, Settings Gear Right)
+                TopNavBar(
+                    currentTab = currentTab,
+                    alignEnd = isCompactLandscape,
+                    // On compact landscape the favorites clock/date block is hidden, so the
+                    // date and conditions live in the bar itself. They stay there for both
+                    // Apps and Games so switching tabs never makes them pop in or out.
+                    showDateWeather = isCompactLandscape,
+                    weatherEnabled = weatherEnabled,
+                    weather = weatherInfo,
+                    temperatureUnit = temperatureUnit,
+                    onOpenCalendar = { viewModel.openCalendarApp() },
+                    onOpenWeather = { viewModel.openWeatherApp() },
+                    onTabSelected = { viewModel.setTab(it) },
+                    onOpenAddModal = { viewModel.openAddModal() },
+                    onOpenSettings = { viewModel.openSettingsModal() },
+                    modifier = if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
+                )
+
+                // Optional Search Bar
+                AnimatedVisibility(visible = showSearchBar || searchQuery.isNotEmpty()) {
+                    Row(
                         modifier = Modifier
-                            .fillMaxSize()
+                            .fillMaxWidth()
                             .then(
                                 if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
                             )
-                            .focusGroup()
-                            .focusProperties {
-                                exit = { direction ->
-                                    if (direction == FocusDirection.Right || direction == FocusDirection.Next) {
-                                        FocusRequester.Cancel
-                                    } else {
-                                        FocusRequester.Default
+                            .padding(horizontal = 20.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { viewModel.setSearchQuery(it) },
+                            placeholder = {
+                                Text(if (currentTab == MainLibraryTab.GAMES) "Search games & cloud titles..." else "Search installed apps...")
+                            },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Clear search")
                                     }
                                 }
-                            }
-                    ) {
-                        VerticalPager(
-                            state = appsPagerState,
-                            flingBehavior = appsPagerFling,
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("search_text_input")
+                        )
+                    }
+                }
+
+                // Main Content Area: swipe horizontally between the Games grid and Apps list.
+                HorizontalPager(
+                    state = pagerState,
+                    // On the compact landscape Games page the poster row owns horizontal
+                    // drags. Disabling pager dragging here stops its overscroll from
+                    // revealing the Apps page; a drag above/below the row still switches.
+                    userScrollEnabled = !(isCompactLandscape &&
+                        gamesDisplay.isNotEmpty() &&
+                        pagerState.currentPage == 1 &&
+                        !pagerState.isScrollInProgress),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .testTag("library_pager")
+                ) { page ->
+                    if (page == 1) {
+                        // Games View: Steam poster aspect ratio (2:3) with pull-to-refresh.
+                        // Confine directional focus navigation within the Games view so D-pad /
+                        // left stick left cannot escape to page 0 (Apps view).
+                        val pullToRefreshState = rememberPullToRefreshState()
+                        BoxWithConstraints(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .testTag("apps_vertical_pager")
-                        ) { page ->
-                            if (page == 0) {
-                                FavoritesHome(
-                                    favorites = favoriteApps,
-                                    focusedItemId = focusedItemId,
-                                    layout = favoritesLayout,
-                                    showFocusEffects = controllerState.isConnected,
-                                    weatherEnabled = weatherEnabled,
-                                    weather = weatherInfo,
-                                    temperatureUnit = temperatureUnit,
-                                    firstItemFocusRequester = favoritesFirstFocusRequester,
-                                    onLaunchFavorite = { app ->
-                                        viewModel.setFocusedItem(app.id)
-                                        viewModel.launchItem(app)
-                                    },
-                                    onLongPressFavorite = { app ->
-                                        viewModel.openFavoriteActions(app)
-                                    },
-                                    onOpenClock = { viewModel.openClockApp() },
-                                    onOpenCalendar = { viewModel.openCalendarApp() },
-                                    onOpenWeather = { viewModel.openWeatherApp() },
-                                    onPullDown = { viewModel.expandNotificationShade() },
-                                    onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
-                                )
-                            } else {
-                                if (libraryDisplay.isEmpty()) {
-                                    EmptyAppDrawerState(hasFavorites = favoriteApps.isNotEmpty())
-                                } else {
-                                    AppsAlphabeticalList(
-                                        entries = appListEntries,
-                                        focusedItemId = focusedItemId,
-                                        layout = favoritesLayout,
-                                        showFocusEffects = controllerState.isConnected,
-                                        listState = appsListState,
-                                        gridState = appsGridState,
-                                        firstItemFocusRequester = appsListFirstFocusRequester,
-                                        onAppClick = { app ->
-                                            viewModel.setFocusedItem(app.id)
-                                            viewModel.launchItem(app)
-                                        },
-                                        onAppLongClick = { app ->
-                                            viewModel.openContextMenu(app)
-                                        },
-                                        onAppFocus = { app ->
-                                            viewModel.setFocusedItem(app.id)
-                                        },
-                                        onLetterSelected = { letter ->
-                                            val index = appListEntries.indexOfFirst {
-                                                it is AppListEntry.Letter && it.letter == letter
-                                            }
-                                            if (index >= 0) {
-                                                scope.launch {
-                                                    if (favoritesLayout == FavoritesLayout.ICONS) {
-                                                        appsGridState.scrollToItem(index)
-                                                    } else {
-                                                        appsListState.scrollToItem(index)
-                                                    }
+                                .focusGroup()
+                                .focusProperties {
+                                    exit = { direction ->
+                                        if (direction == FocusDirection.Left || direction == FocusDirection.Previous) {
+                                            FocusRequester.Cancel
+                                        } else {
+                                            FocusRequester.Default
+                                        }
+                                    }
+                                }
+                        ) {
+                            val pageMaxHeight = maxHeight
+                            PullToRefreshBox(
+                                isRefreshing = gamesRefreshing,
+                                onRefresh = { viewModel.refreshGamesLibrary() },
+                                state = pullToRefreshState,
+                                indicator = {
+                                    PullToRefreshDefaults.Indicator(
+                                        modifier = Modifier
+                                            .align(Alignment.TopCenter)
+                                            .testTag("games_pull_to_refresh_indicator"),
+                                        isRefreshing = gamesRefreshing,
+                                        state = pullToRefreshState,
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .testTag("games_pull_to_refresh")
+                            ) {
+                                if (gamesDisplay.isEmpty()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = pageMaxHeight)
+                                            .verticalScroll(rememberScrollState())
+                                            .then(
+                                                if (isCompactLandscape) {
+                                                    Modifier.displayCutoutPadding()
+                                                } else {
+                                                    Modifier
                                                 }
-                                            }
+                                            )
+                                    ) {
+                                        EmptyLibraryState(
+                                            isGamesTab = true,
+                                            searchQuery = searchQuery,
+                                            onAddClicked = { viewModel.openAddModal() },
+                                            modifier = Modifier.heightIn(min = pageMaxHeight)
+                                        )
+                                    }
+                                } else {
+                                    GamesPosterGrid(
+                                        games = gamesDisplay,
+                                        focusedItemId = focusedItemId,
+                                        showFocusEffects = controllerState.isConnected,
+                                        showNsfwPoster = steamGridDbIncludeNsfw,
+                                        isGamesTabOpen = currentTab == MainLibraryTab.GAMES &&
+                                            pagerState.currentPage == 1 &&
+                                            !pagerState.isScrollInProgress,
+                                        isGamesPage = currentTab == MainLibraryTab.GAMES,
+                                        gridState = gridState,
+                                        rowState = gamesRowState,
+                                        compactLandscape = isCompactLandscape,
+                                        compactViewportHeight = pageMaxHeight,
+                                        onSwipeToApps = {
+                                            scope.launch { pagerState.animateScrollToPage(0) }
+                                        },
+                                        onGameClick = { game ->
+                                            viewModel.setFocusedItem(game.id)
+                                            viewModel.launchItem(game)
+                                        },
+                                        onGameLongClick = { game ->
+                                            viewModel.openContextMenu(game)
+                                        },
+                                        onGameFocus = { game ->
+                                            viewModel.setFocusedItem(game.id)
                                         }
                                     )
                                 }
                             }
+
+                            SnackbarHost(
+                                hostState = gamesSnackbarHostState,
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .navigationBarsPadding()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                                    .testTag("games_refresh_snackbar")
+                            )
+                        }
+                    } else {
+                        // Apps View: a full-height favorites home. Swiping up reveals the
+                        // complete app list, which excludes favorites and games.
+                        // Confine directional focus navigation so D-pad / stick right cannot
+                        // escape to page 1 (Games view).
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .then(
+                                    if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
+                                )
+                                .focusGroup()
+                                .focusProperties {
+                                    exit = { direction ->
+                                        if (direction == FocusDirection.Right || direction == FocusDirection.Next) {
+                                            FocusRequester.Cancel
+                                        } else {
+                                            FocusRequester.Default
+                                        }
+                                    }
+                                }
+                        ) {
+                            VerticalPager(
+                                state = appsPagerState,
+                                flingBehavior = appsPagerFling,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .testTag("apps_vertical_pager")
+                            ) { page ->
+                                if (page == 0) {
+                                    FavoritesHome(
+                                        favorites = favoriteApps,
+                                        focusedItemId = focusedItemId,
+                                        layout = favoritesLayout,
+                                        showFocusEffects = controllerState.isConnected,
+                                        weatherEnabled = weatherEnabled,
+                                        weather = weatherInfo,
+                                        temperatureUnit = temperatureUnit,
+                                        firstItemFocusRequester = favoritesFirstFocusRequester,
+                                        onLaunchFavorite = { app ->
+                                            viewModel.setFocusedItem(app.id)
+                                            viewModel.launchItem(app)
+                                        },
+                                        onLongPressFavorite = { app ->
+                                            viewModel.openFavoriteActions(app)
+                                        },
+                                        onOpenClock = { viewModel.openClockApp() },
+                                        onOpenCalendar = { viewModel.openCalendarApp() },
+                                        onOpenWeather = { viewModel.openWeatherApp() },
+                                        onPullDown = { viewModel.expandNotificationShade() },
+                                        onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
+                                    )
+                                } else {
+                                    if (libraryDisplay.isEmpty()) {
+                                        EmptyAppDrawerState(hasFavorites = favoriteApps.isNotEmpty())
+                                    } else {
+                                        AppsAlphabeticalList(
+                                            entries = appListEntries,
+                                            focusedItemId = focusedItemId,
+                                            layout = favoritesLayout,
+                                            showFocusEffects = controllerState.isConnected,
+                                            listState = appsListState,
+                                            gridState = appsGridState,
+                                            firstItemFocusRequester = appsListFirstFocusRequester,
+                                            onAppClick = { app ->
+                                                viewModel.setFocusedItem(app.id)
+                                                viewModel.launchItem(app)
+                                            },
+                                            onAppLongClick = { app ->
+                                                viewModel.openContextMenu(app)
+                                            },
+                                            onAppFocus = { app ->
+                                                viewModel.setFocusedItem(app.id)
+                                            },
+                                            onLetterSelected = { letter ->
+                                                val index = appListEntries.indexOfFirst {
+                                                    it is AppListEntry.Letter && it.letter == letter
+                                                }
+                                                if (index >= 0) {
+                                                    scope.launch {
+                                                        if (favoritesLayout == FavoritesLayout.ICONS) {
+                                                            appsGridState.scrollToItem(index)
+                                                        } else {
+                                                            appsListState.scrollToItem(index)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Context Menu Modal (Tap and Hold on any card)
-        if (contextMenuItem != null) {
-            ItemContextMenuSheet(
-                item = contextMenuItem!!,
-                showNsfwPoster = steamGridDbIncludeNsfw,
-                canDelete = canDeleteContextMenuItem,
-                onCustomize = { viewModel.openEditCustomizer(contextMenuItem!!) },
-                onMove = {
-                    if (contextMenuItem!!.isGame) {
-                        viewModel.moveItemToApps(contextMenuItem!!)
-                    } else {
-                        viewModel.moveItemToGames(contextMenuItem!!)
-                    }
-                },
-                onToggleFavorite = { viewModel.toggleFavorite(contextMenuItem!!) },
-                onRemoveFromRecents = { viewModel.removeFromRecents(contextMenuItem!!) },
-                onOpenAppInfo = { viewModel.openAppInfo(contextMenuItem!!) },
-                onHide = { viewModel.hideItem(contextMenuItem!!) },
-                onDelete = { viewModel.deleteItem(contextMenuItem!!) },
-                onDismiss = { viewModel.closeContextMenu() }
-            )
-        }
+            // Context Menu Modal (Tap and Hold on any card)
+            if (contextMenuItem != null) {
+                ItemContextMenuSheet(
+                    item = contextMenuItem!!,
+                    showNsfwPoster = steamGridDbIncludeNsfw,
+                    canDelete = canDeleteContextMenuItem,
+                    onCustomize = { viewModel.openEditCustomizer(contextMenuItem!!) },
+                    onMove = {
+                        if (contextMenuItem!!.isGame) {
+                            viewModel.moveItemToApps(contextMenuItem!!)
+                        } else {
+                            viewModel.moveItemToGames(contextMenuItem!!)
+                        }
+                    },
+                    onToggleFavorite = { viewModel.toggleFavorite(contextMenuItem!!) },
+                    onRemoveFromRecents = { viewModel.removeFromRecents(contextMenuItem!!) },
+                    onOpenAppInfo = { viewModel.openAppInfo(contextMenuItem!!) },
+                    onHide = { viewModel.hideItem(contextMenuItem!!) },
+                    onDelete = { viewModel.deleteItem(contextMenuItem!!) },
+                    onDismiss = { viewModel.closeContextMenu() }
+                )
+            }
 
-        // Long-press menu for favorites (Customize, App Info, Edit favorites, Remove)
-        favoriteActionItem?.let { favorite ->
-            FavoriteActionsSheet(
-                item = favorite,
-                onCustomize = { viewModel.openEditCustomizer(favorite) },
-                onOpenAppInfo = { viewModel.openAppInfo(favorite) },
-                onEditFavorites = { viewModel.openFavoritesEditor() },
-                onRemoveFavorite = {
-                    viewModel.removeFavorite(favorite)
-                    viewModel.closeFavoriteActions()
-                },
-                onDismiss = { viewModel.closeFavoriteActions() }
-            )
-        }
+            // Long-press menu for favorites (Customize, App Info, Edit favorites, Remove)
+            favoriteActionItem?.let { favorite ->
+                FavoriteActionsSheet(
+                    item = favorite,
+                    onCustomize = { viewModel.openEditCustomizer(favorite) },
+                    onOpenAppInfo = { viewModel.openAppInfo(favorite) },
+                    onEditFavorites = { viewModel.openFavoritesEditor() },
+                    onRemoveFavorite = {
+                        viewModel.removeFavorite(favorite)
+                        viewModel.closeFavoriteActions()
+                    },
+                    onDismiss = { viewModel.closeFavoriteActions() }
+                )
+            }
 
-        // Drag-to-reorder favorites editor
-        if (showFavoritesEditor) {
-            EditFavoritesSheet(
-                favorites = favoriteApps,
-                onReorder = { viewModel.reorderFavorites(it) },
-                onRemoveFavorite = { viewModel.removeFavorite(it) },
-                onDismiss = { viewModel.closeFavoritesEditor() }
-            )
-        }
+            // Drag-to-reorder favorites editor
+            if (showFavoritesEditor) {
+                EditFavoritesSheet(
+                    favorites = favoriteApps,
+                    onReorder = { viewModel.reorderFavorites(it) },
+                    onRemoveFavorite = { viewModel.removeFavorite(it) },
+                    onDismiss = { viewModel.closeFavoritesEditor() }
+                )
+            }
 
-        // Customize Name & Artwork Dialog
-        if (editingItem != null) {
-            CustomizeItemDialog(
-                item = editingItem!!,
-                steamGridDbApiKey = steamGridDbApiKey,
-                includeNsfw = steamGridDbIncludeNsfw,
-                onApplyTitle = { id, newTitle ->
-                    viewModel.applyItemTitle(id, newTitle)
-                },
-                onApplyPoster = { id, newTitle, isNsfwSlot, artworkUrl ->
-                    viewModel.applyItemPoster(id, newTitle, isNsfwSlot, artworkUrl)
-                },
-                onSetOverlayLogo = { id, newTitle, enabled ->
-                    viewModel.setItemNsfwLogoOverlay(id, newTitle, enabled)
-                },
-                onUpdateNsfwLogoUrl = { id, logoUrl ->
-                    viewModel.updateItemNsfwLogoUrl(id, logoUrl)
-                },
-                onDismiss = { viewModel.closeEditCustomizer() }
-            )
-        }
+            // Customize Name & Artwork Dialog
+            if (editingItem != null) {
+                CustomizeItemDialog(
+                    item = editingItem!!,
+                    steamGridDbApiKey = steamGridDbApiKey,
+                    includeNsfw = steamGridDbIncludeNsfw,
+                    iconPack = installedIconPacks.firstOrNull {
+                        it.packageName == selectedIconPack
+                    },
+                    iconPackIcons = iconPackIcons,
+                    onApplyTitle = { id, newTitle ->
+                        viewModel.applyItemTitle(id, newTitle)
+                    },
+                    onApplyPoster = { id, newTitle, isNsfwSlot, artworkUrl ->
+                        viewModel.applyItemPoster(id, newTitle, isNsfwSlot, artworkUrl)
+                    },
+                    onSetOverlayLogo = { id, newTitle, isNsfwSlot, enabled ->
+                        viewModel.setItemLogoOverlay(id, newTitle, isNsfwSlot, enabled)
+                    },
+                    onUpdateLogoUrl = { id, isNsfwSlot, logoUrl ->
+                        viewModel.updateItemLogoUrl(id, isNsfwSlot, logoUrl)
+                    },
+                    onSelectIconPackIcon = { id, newTitle, drawableName ->
+                        viewModel.applyItemIconFromPack(id, newTitle, drawableName)
+                    },
+                    onDismiss = { viewModel.closeEditCustomizer() }
+                )
+            }
 
-        // Full Page Discover Screen (+ Button)
-        AnimatedVisibility(
-            visible = showAddModal,
-            enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it }),
-            exit = fadeOut() + slideOutHorizontally(targetOffsetX = { -it })
-        ) {
-            AddContentModal(
-                subView = addModalSubView,
-                onNavigateSubView = { viewModel.setAddModalSubView(it) },
-                onOpenPlayStore = { viewModel.openPlayStore() },
-                onOpenMoonlight = { viewModel.openMoonlight() },
-                onAddShortcut = { title, url, poster -> viewModel.addCustomShortcutToApps(title, url, poster) },
-                onAddGfnGame = { viewModel.addGfnGameToGames(it) },
-                onDismiss = { viewModel.closeAddModal() }
-            )
-        }
+            // Full Page Discover Screen (+ Button)
+            AnimatedVisibility(
+                visible = showAddModal,
+                enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it }),
+                exit = fadeOut() + slideOutHorizontally(targetOffsetX = { -it })
+            ) {
+                AddContentModal(
+                    subView = addModalSubView,
+                    onNavigateSubView = { viewModel.setAddModalSubView(it) },
+                    onOpenPlayStore = { viewModel.openPlayStore() },
+                    onOpenMoonlight = { viewModel.openMoonlight() },
+                    onAddShortcut = { title, url, poster -> viewModel.addCustomShortcutToApps(title, url, poster) },
+                    onAddGfnGame = { viewModel.addGfnGameToGames(it) },
+                    onDismiss = { viewModel.closeAddModal() }
+                )
+            }
 
-        // Full Page Settings Screen
-        AnimatedVisibility(
-            visible = showSettingsModal,
-            enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
-            exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it })
-        ) {
-            SettingsModal(
-                favoritesLayout = favoritesLayout,
-                steamGridDbApiKey = steamGridDbApiKey,
-                steamGridDbIncludeNsfw = steamGridDbIncludeNsfw,
-                hiddenItems = hiddenItems,
-                appsBackgroundOpacity = appsBackgroundOpacity,
-                themeStyle = themeStyle,
-                weatherEnabled = weatherEnabled,
-                weatherMode = weatherMode,
-                weatherZip = weatherZip,
-                weatherInfo = weatherInfo,
-                weatherError = weatherError,
-                temperatureUnit = temperatureUnit,
-                weatherApps = weatherApps,
-                weatherAppPackage = weatherAppPackage,
-                librarySyncBusy = librarySyncBusy,
-                librarySyncStatus = librarySyncStatus,
-                librarySyncConfigured = librarySyncConfigured,
-                librarySyncTarget = librarySyncTarget,
-                librarySyncLastSyncedAt = librarySyncLastSyncedAt,
-                isDefaultLauncher = { viewModel.isDefaultLauncher() },
-                isHomeOverrideEnabled = { viewModel.isHomeOverrideEnabled() },
-                onSelectFavoritesLayout = { viewModel.setFavoritesLayout(it) },
-                onSaveApiKey = { viewModel.saveSteamGridDbApiKey(it) },
-                onSteamGridDbIncludeNsfwChange = { viewModel.setSteamGridDbIncludeNsfw(it) },
-                onSetDefaultLauncher = { viewModel.openDefaultLauncherSettings() },
-                onSetAppsBackgroundOpacity = { viewModel.setAppsBackgroundOpacity(it) },
-                onSelectThemeStyle = { viewModel.setThemeStyle(it) },
-                onUnhideItem = { viewModel.unhideItem(it) },
-                onOpenHiddenItem = { viewModel.launchItem(it) },
-                onWeatherEnabledChange = { viewModel.setWeatherEnabled(it) },
-                onWeatherModeChange = { viewModel.setWeatherMode(it) },
-                onWeatherZipChange = { viewModel.setWeatherZip(it) },
-                onTemperatureUnitChange = { viewModel.setTemperatureUnit(it) },
-                onSelectWeatherApp = { viewModel.setWeatherAppPackage(it) },
-                onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() },
-                onChooseSyncFolder = { viewModel.chooseSyncFolder(it) },
-                onSyncLibraryNow = { viewModel.syncLibraryNow() },
-                onDisconnectLibrarySync = { viewModel.disconnectLibrarySync() },
-                onDismiss = { viewModel.closeSettingsModal() }
-            )
-        }
+            // Full Page Settings Screen
+            AnimatedVisibility(
+                visible = showSettingsModal,
+                enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
+                exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it })
+            ) {
+                SettingsModal(
+                    favoritesLayout = favoritesLayout,
+                    steamGridDbApiKey = steamGridDbApiKey,
+                    steamGridDbIncludeNsfw = steamGridDbIncludeNsfw,
+                    iconPacks = installedIconPacks,
+                    selectedIconPack = selectedIconPack,
+                    hiddenItems = hiddenItems,
+                    appsBackgroundOpacity = appsBackgroundOpacity,
+                    themeStyle = themeStyle,
+                    weatherEnabled = weatherEnabled,
+                    weatherMode = weatherMode,
+                    weatherZip = weatherZip,
+                    weatherInfo = weatherInfo,
+                    weatherError = weatherError,
+                    temperatureUnit = temperatureUnit,
+                    weatherApps = weatherApps,
+                    weatherAppPackage = weatherAppPackage,
+                    librarySyncBusy = librarySyncBusy,
+                    librarySyncStatus = librarySyncStatus,
+                    librarySyncConfigured = librarySyncConfigured,
+                    librarySyncTarget = librarySyncTarget,
+                    librarySyncLastSyncedAt = librarySyncLastSyncedAt,
+                    isDefaultLauncher = { viewModel.isDefaultLauncher() },
+                    isHomeOverrideEnabled = { viewModel.isHomeOverrideEnabled() },
+                    onSelectFavoritesLayout = { viewModel.setFavoritesLayout(it) },
+                    onSaveApiKey = { viewModel.saveSteamGridDbApiKey(it) },
+                    onSteamGridDbIncludeNsfwChange = { viewModel.setSteamGridDbIncludeNsfw(it) },
+                    onSelectIconPack = { viewModel.setIconPack(it) },
+                    onSetDefaultLauncher = { viewModel.openDefaultLauncherSettings() },
+                    onSetAppsBackgroundOpacity = { viewModel.setAppsBackgroundOpacity(it) },
+                    onSelectThemeStyle = { viewModel.setThemeStyle(it) },
+                    onUnhideItem = { viewModel.unhideItem(it) },
+                    onOpenHiddenItem = { viewModel.launchItem(it) },
+                    onWeatherEnabledChange = { viewModel.setWeatherEnabled(it) },
+                    onWeatherModeChange = { viewModel.setWeatherMode(it) },
+                    onWeatherZipChange = { viewModel.setWeatherZip(it) },
+                    onTemperatureUnitChange = { viewModel.setTemperatureUnit(it) },
+                    onSelectWeatherApp = { viewModel.setWeatherAppPackage(it) },
+                    onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() },
+                    onChooseSyncFolder = { viewModel.chooseSyncFolder(it) },
+                    onSyncLibraryNow = { viewModel.syncLibraryNow() },
+                    onDisconnectLibrarySync = { viewModel.disconnectLibrarySync() },
+                    onDismiss = { viewModel.closeSettingsModal() }
+                )
+            }
 
-        // Shown when the weather shortcut is tapped and several weather apps are
-        // installed without a saved choice. The selection is remembered in Settings.
-        weatherAppChooser?.let { apps ->
-            AlertDialog(
-                onDismissRequest = { viewModel.dismissWeatherAppChooser() },
-                title = { Text("Open weather with") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        apps.forEach { app ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { viewModel.chooseWeatherApp(app.packageName) }
-                                    .padding(horizontal = 8.dp, vertical = 12.dp)
-                                    .testTag("weather_chooser_${app.packageName}"),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = app.label,
-                                    fontSize = 15.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
+            // Shown when the weather shortcut is tapped and several weather apps are
+            // installed without a saved choice. The selection is remembered in Settings.
+            weatherAppChooser?.let { apps ->
+                AlertDialog(
+                    onDismissRequest = { viewModel.dismissWeatherAppChooser() },
+                    title = { Text("Open weather with") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            apps.forEach { app ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { viewModel.chooseWeatherApp(app.packageName) }
+                                        .padding(horizontal = 8.dp, vertical = 12.dp)
+                                        .testTag("weather_chooser_${app.packageName}"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = app.label,
+                                        fontSize = 15.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
                             }
                         }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { viewModel.dismissWeatherAppChooser() }) {
+                            Text("Cancel")
+                        }
                     }
-                },
-                confirmButton = {},
-                dismissButton = {
-                    TextButton(onClick = { viewModel.dismissWeatherAppChooser() }) {
-                        Text("Cancel")
-                    }
-                }
-            )
+                )
+            }
         }
     }
 }

@@ -247,6 +247,26 @@ class LibrarySyncCodecTest {
     }
 
     @Test
+    fun `safe logo overlay fields round trip and affect signature`() {
+        val base = gfnGame()
+        val withLogo = base.copy(
+            logoUrl = "https://cdn.example/safe-logo.png",
+            overlayLogo = true
+        )
+
+        val parsed = LibrarySyncCodec.parse(
+            LibrarySyncCodec.buildDocument(listOf(withLogo), 99L).toString()
+        )
+
+        assertEquals("https://cdn.example/safe-logo.png", parsed.items.single().logoUrl)
+        assertEquals(true, parsed.items.single().overlayLogo)
+        assertNotEquals(
+            LibrarySyncCodec.signature(listOf(base)),
+            LibrarySyncCodec.signature(listOf(withLogo))
+        )
+    }
+
+    @Test
     fun `chosen local file nsfw poster records content hash and changes signature`() {
         val deviceAFile = File(tempFolder.root, "picked_nsfw.img").apply {
             writeBytes(byteArrayOf(1, 2, 3, 4, 5, 6))

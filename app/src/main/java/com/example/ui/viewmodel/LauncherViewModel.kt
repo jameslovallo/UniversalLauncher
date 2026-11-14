@@ -10,6 +10,9 @@ import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
 import com.example.data.service.GeForceNowService
+import com.example.data.service.IconPackIcon
+import com.example.data.service.IconPackInfo
+import com.example.data.service.IconPackManager
 import com.example.data.service.InstalledAppsManager
 import com.example.data.service.LibrarySyncOutcome
 import com.example.data.service.LibrarySyncService
@@ -115,6 +118,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         prefs.getBoolean("sgdb_include_nsfw", false)
     )
     val steamGridDbIncludeNsfw: StateFlow<Boolean> = _steamGridDbIncludeNsfw.asStateFlow()
+
+    // Icon themes apply to the Apps view only (favorites and the app list). Games keep
+    // their own poster artwork.
+    private val _installedIconPacks = MutableStateFlow<List<IconPackInfo>>(emptyList())
+    val installedIconPacks: StateFlow<List<IconPackInfo>> = _installedIconPacks.asStateFlow()
+
+    private val _selectedIconPack = MutableStateFlow(
+        prefs.getString("icon_pack_package", null)?.takeIf { it.isNotBlank() }
+    )
+    val selectedIconPack: StateFlow<String?> = _selectedIconPack.asStateFlow()
+
+    private val _iconPackIcons = MutableStateFlow<List<IconPackIcon>>(emptyList())
+    val iconPackIcons: StateFlow<List<IconPackIcon>> = _iconPackIcons.asStateFlow()
+
+    // packageName -> rendered icon file for the active theme, consumed by AppIcon.
+    private val _themedAppIcons = MutableStateFlow<Map<String, String>>(emptyMap())
+    val themedAppIcons: StateFlow<Map<String, String>> = _themedAppIcons.asStateFlow()
 
     private val weatherService = WeatherService(application)
     private val librarySyncService = LibrarySyncService(application, repository, prefs)
@@ -247,6 +267,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
         if (_weatherEnabled.value) refreshWeather()
         refreshWeatherApps()
+        refreshIconPacks()
     }
 
     fun setTab(tab: MainLibraryTab) {
@@ -543,37 +564,124 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun setItemNsfwLogoOverlay(id: String, newTitle: String, enabled: Boolean) {
+    /** Toggles the logo-over-poster overlay for the safe or adult artwork slot. */
+    fun setItemLogoOverlay(
+        id: String,
+        newTitle: String,
+        isNsfwSlot: Boolean,
+        enabled: Boolean
+    ) {
         val current = _editingItem.value?.takeIf { it.id == id } ?: return
         val resolvedTitle = newTitle.trim().ifBlank { current.title }
-        _editingItem.value = current.copy(
-            title = resolvedTitle,
-            overlayNsfwLogo = enabled,
-            isCustomized = true
-        )
+        val existingLogo = if (isNsfwSlot) current.nsfwLogoUrl else current.logoUrl
+        _editingItem.value = if (isNsfwSlot) {
+            current.copy(title = resolvedTitle, overlayNsfwLogo = enabled, isCustomized = true)
+        } else {
+            current.copy(title = resolvedTitle, overlayLogo = enabled, isCustomized = true)
+        }
         viewModelScope.launch {
             val logoUrl = if (enabled) {
                 SteamGridDbService.findLogoForGame(resolvedTitle, _steamGridDbApiKey.value)
-                    ?: current.nsfwLogoUrl
+                    ?: existingLogo
             } else {
-                current.nsfwLogoUrl
+                existingLogo
             }
             val latest = _editingItem.value
             if (latest != null && latest.id == id) {
-                _editingItem.value = latest.copy(nsfwLogoUrl = logoUrl)
+                _editingItem.value = if (isNsfwSlot) {
+                    latest.copy(nsfwLogoUrl = logoUrl)
+                } else {
+                    latest.copy(logoUrl = logoUrl)
+                }
             }
-            repository.updateTitleAndNsfwOverlay(id, resolvedTitle, enabled, logoUrl)
+            if (isNsfwSlot) {
+                repository.updateTitleAndNsfwOverlay(id, resolvedTitle, enabled, logoUrl)
+            } else {
+                repository.updateTitleAndLogoOverlay(id, resolvedTitle, enabled, logoUrl)
+            }
         }
     }
 
-    fun updateItemNsfwLogoUrl(id: String, logoUrl: String?) {
+    fun updateItemLogoUrl(id: String, isNsfwSlot: Boolean, logoUrl: String?) {
         val current = _editingItem.value?.takeIf { it.id == id }
-        if (current != null && current.nsfwLogoUrl == logoUrl) return
         if (current != null) {
-            _editingItem.value = current.copy(nsfwLogoUrl = logoUrl)
+            val existing = if (isNsfwSlot) current.nsfwLogoUrl else current.logoUrl
+            if (existing == logoUrl) return
+            _editingItem.value = if (isNsfwSlot) {
+                current.copy(nsfwLogoUrl = logoUrl)
+            } else {
+                current.copy(logoUrl = logoUrl)
+            }
         }
         viewModelScope.launch {
-            repository.updateNsfwLogoUrl(id, logoUrl)
+            if (isNsfwSlot) {
+                repository.updateNsfwLogoUrl(id, logoUrl)
+            } else {
+                repository.updateLogoUrl(id, logoUrl)
+            }
+        }
+    }
+
+    // ---- Icon themes ---------------------------------------------------------------
+
+    /** Re-scans installed icon packs; called at startup and when Settings opens. */
+    fun refreshIconPacks() {
+        viewModelScope.launch {
+            val packs = runCatching { IconPackManager.installedIconPacks(getApplication()) }
+                .getOrDefault(emptyList())
+            _installedIconPacks.value = packs
+            val selected = _selectedIconPack.value
+            if (selected != null && packs.none { it.packageName == selected }) {
+                // The selected pack was uninstalled: fall back to the device icons.
+                prefs.edit().remove("icon_pack_package").apply()
+                _selectedIconPack.value = null
+                _iconPackIcons.value = emptyList()
+                _themedAppIcons.value = emptyMap()
+            } else if (selected != null) {
+                loadIconPack(selected)
+            }
+        }
+    }
+
+    fun setIconPack(packageName: String?) {
+        val resolved = packageName?.takeIf { it.isNotBlank() }
+        prefs.edit().apply {
+            if (resolved == null) remove("icon_pack_package")
+            else putString("icon_pack_package", resolved)
+        }.apply()
+        _selectedIconPack.value = resolved
+        if (resolved == null) {
+            _iconPackIcons.value = emptyList()
+            _themedAppIcons.value = emptyMap()
+        } else {
+            loadIconPack(resolved)
+        }
+    }
+
+    /** Resolves themed icons for installed packages and loads the picker catalog. */
+    private fun loadIconPack(packPackage: String) {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val packages = runCatching {
+                installedAppsManager.getInstalledApps().mapNotNull { it.packageName }
+            }.getOrDefault(emptyList())
+            _themedAppIcons.value = runCatching {
+                IconPackManager.iconMap(context, packPackage, packages)
+            }.getOrDefault(emptyMap())
+            _iconPackIcons.value = runCatching {
+                IconPackManager.icons(context, packPackage)
+            }.getOrDefault(emptyList())
+        }
+    }
+
+    /** Applies one drawable from the active theme as this item's custom icon. */
+    fun applyItemIconFromPack(id: String, newTitle: String, drawableName: String) {
+        val pack = _selectedIconPack.value ?: return
+        viewModelScope.launch {
+            val url = runCatching {
+                IconPackManager.renderIconChoice(getApplication(), pack, drawableName, id)
+            }.getOrNull() ?: return@launch
+            applyItemPoster(id, newTitle, isNsfwSlot = false, artworkUrl = url)
         }
     }
 
@@ -654,6 +762,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun openSettingsModal() {
         refreshLibrarySyncState()
         refreshWeatherApps()
+        refreshIconPacks()
         _showSettingsModal.value = true
     }
 

@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +43,14 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.GameItem
+
+/**
+ * `packageName` -> rendered icon file for the selected icon theme.
+ *
+ * Provided only around the Apps view, so a theme can never change artwork in the Games
+ * poster grid even when the same package appears in both.
+ */
+val LocalThemedAppIcons = compositionLocalOf<Map<String, String>> { emptyMap() }
 
 /**
  * A single left-aligned app row. Shared by the favorites home and the complete app
@@ -161,7 +170,16 @@ fun AppIconTile(
 @Composable
 fun AppIcon(app: GameItem, size: Dp) {
     val context = LocalContext.current
-    val imageUrl = app.iconUrl ?: app.posterUrl
+    val themedIcons = LocalThemedAppIcons.current
+    // Auto-generated device icons live in the app_icons cache. A file/URL chosen by the
+    // user (including one picked from an icon theme) lives elsewhere and always wins.
+    val usesDefaultIcon = app.iconUrl.isNullOrBlank() || app.iconUrl.contains("/app_icons/")
+    val themedUrl = if (usesDefaultIcon) {
+        app.packageName?.let { packageName -> themedIcons[packageName] }
+    } else {
+        null
+    }
+    val imageUrl = themedUrl ?: app.iconUrl ?: app.posterUrl
     // Broken URLs (e.g. icons saved before icons were copied to local files) fall back to
     // the initial letter instead of leaving an empty slot.
     var imageFailed by remember(imageUrl) { mutableStateOf(false) }

@@ -24,6 +24,10 @@ data class GameItem(
     val gfnCmsId: String? = null,
     val posterUrl: String? = null,
     val nsfwPosterUrl: String? = null,
+    // Transparent game logo composited over the safe poster.
+    val logoUrl: String? = null,
+    val overlayLogo: Boolean = false,
+    // Adult-only logo overlay, used while NSFW posters are enabled.
     val nsfwLogoUrl: String? = null,
     val overlayNsfwLogo: Boolean = false,
     val heroBannerUrl: String? = null,

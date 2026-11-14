@@ -118,6 +118,13 @@ fun SteamGamePosterCard(
                 } else {
                     game.posterUrl
                 }
+                // The safe and adult posters carry independent logo overlays.
+                val activeLogoUrl = if (showingNsfwPoster) game.nsfwLogoUrl else game.logoUrl
+                val activeLogoOverlay = if (showingNsfwPoster) {
+                    game.overlayNsfwLogo
+                } else {
+                    game.overlayLogo
+                }
                 val imageUrl = activePoster ?: game.heroBannerUrl ?: game.iconUrl
                 // A broken or unreachable URL should fall back to the type icon rather
                 // than leaving an empty card.
@@ -134,8 +141,14 @@ fun SteamGamePosterCard(
                         onError = { imageFailed = true },
                         modifier = Modifier.fillMaxSize()
                     )
-                    if (showingNsfwPoster && game.overlayNsfwLogo && !game.nsfwLogoUrl.isNullOrBlank()) {
-                        PosterLogoOverlay(logoUrl = game.nsfwLogoUrl)
+                    // Only composite the logo over real poster art, not the banner or
+                    // icon fallbacks.
+                    if (
+                        activeLogoOverlay &&
+                        !activeLogoUrl.isNullOrBlank() &&
+                        !activePoster.isNullOrBlank()
+                    ) {
+                        PosterLogoOverlay(logoUrl = activeLogoUrl)
                     }
                 } else {
                     // Fallback artistic card

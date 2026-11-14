@@ -94,6 +94,12 @@ interface GameDao {
     @Query("UPDATE games SET title = :title, nsfwPosterUrl = :nsfwPosterUrl, isCustomized = 1 WHERE id = :id")
     suspend fun updateTitleAndNsfwPoster(id: String, title: String, nsfwPosterUrl: String?)
 
+    @Query("UPDATE games SET title = :title, overlayLogo = :overlayLogo, logoUrl = :logoUrl, isCustomized = 1 WHERE id = :id")
+    suspend fun updateTitleAndLogoOverlay(id: String, title: String, overlayLogo: Boolean, logoUrl: String?)
+
+    @Query("UPDATE games SET logoUrl = :logoUrl WHERE id = :id")
+    suspend fun updateLogoUrl(id: String, logoUrl: String?)
+
     @Query("UPDATE games SET title = :title, overlayNsfwLogo = :overlayNsfwLogo, nsfwLogoUrl = :nsfwLogoUrl, isCustomized = 1 WHERE id = :id")
     suspend fun updateTitleAndNsfwOverlay(id: String, title: String, overlayNsfwLogo: Boolean, nsfwLogoUrl: String?)
 

@@ -67,6 +67,8 @@ internal object LibrarySyncCodec {
                 item.isCustomized ||
                     !item.posterUrl.isNullOrBlank() ||
                     !item.nsfwPosterUrl.isNullOrBlank() ||
+                    item.overlayLogo ||
+                    !item.logoUrl.isNullOrBlank() ||
                     item.overlayNsfwLogo ||
                     !item.nsfwLogoUrl.isNullOrBlank() ||
                     item.isHidden
@@ -270,6 +272,8 @@ internal object LibrarySyncCodec {
                 put("nsfwPosterHash", it)
             }
         }
+        shareableUrl(item.logoUrl)?.let { put("logoUrl", it) }
+        if (item.overlayLogo) put("overlayLogo", true)
         shareableUrl(item.nsfwLogoUrl)?.let { put("nsfwLogoUrl", it) }
         if (item.overlayNsfwLogo) put("overlayNsfwLogo", true)
         shareableUrl(item.heroBannerUrl)?.let { put("heroBannerUrl", it) }
@@ -300,6 +304,8 @@ internal object LibrarySyncCodec {
                 gfnCmsId = json.optNullableString("gfnCmsId"),
                 posterUrl = json.optNullableString("posterUrl"),
                 nsfwPosterUrl = json.optNullableString("nsfwPosterUrl"),
+                logoUrl = json.optNullableString("logoUrl"),
+                overlayLogo = json.optBoolean("overlayLogo", false),
                 nsfwLogoUrl = json.optNullableString("nsfwLogoUrl"),
                 overlayNsfwLogo = json.optBoolean("overlayNsfwLogo", false),
                 heroBannerUrl = json.optNullableString("heroBannerUrl"),
@@ -355,6 +361,8 @@ internal object LibrarySyncCodec {
             item.gfnCmsId.orEmpty(),
             posterToken,
             nsfwPosterToken,
+            shareableUrl(item.logoUrl).orEmpty(),
+            item.overlayLogo.toString(),
             shareableUrl(item.nsfwLogoUrl).orEmpty(),
             item.overlayNsfwLogo.toString(),
             shareableUrl(item.heroBannerUrl).orEmpty(),

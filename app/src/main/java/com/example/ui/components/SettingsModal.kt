@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Opacity
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.activity.compose.BackHandler
@@ -91,6 +92,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.GameItem
+import com.example.data.service.IconPackInfo
 import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherApp
 import com.example.data.service.WeatherInfo
@@ -106,6 +108,8 @@ fun SettingsModal(
     favoritesLayout: FavoritesLayout,
     steamGridDbApiKey: String?,
     steamGridDbIncludeNsfw: Boolean,
+    iconPacks: List<IconPackInfo>,
+    selectedIconPack: String?,
     hiddenItems: List<GameItem>,
     appsBackgroundOpacity: Float,
     themeStyle: ThemeStyle,
@@ -127,6 +131,7 @@ fun SettingsModal(
     onSelectFavoritesLayout: (FavoritesLayout) -> Unit,
     onSaveApiKey: (String) -> Unit,
     onSteamGridDbIncludeNsfwChange: (Boolean) -> Unit,
+    onSelectIconPack: (String?) -> Unit,
     onSetDefaultLauncher: () -> Unit,
     onSetAppsBackgroundOpacity: (Float) -> Unit,
     onSelectThemeStyle: (ThemeStyle) -> Unit,
@@ -271,6 +276,43 @@ fun SettingsModal(
                             }
                         }
                     }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            SettingsSection(
+                title = "Icon Theme",
+                description = "Changes icons in favorites and the app list. Games keep their own artwork.",
+                icon = Icons.Default.Palette
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IconPackRow(
+                        label = "Default icons",
+                        iconUrl = null,
+                        isSelected = selectedIconPack == null,
+                        onClick = { onSelectIconPack(null) },
+                        testTag = "icon_pack_default"
+                    )
+                    iconPacks.forEach { pack ->
+                        IconPackRow(
+                            label = pack.label,
+                            iconUrl = pack.iconUrl,
+                            isSelected = selectedIconPack == pack.packageName,
+                            onClick = { onSelectIconPack(pack.packageName) },
+                            testTag = "icon_pack_${pack.packageName}"
+                        )
+                    }
+                }
+                if (iconPacks.isEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "No icon packs installed. Install an icon theme from the " +
+                            "Play Store to use one here.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("icon_packs_empty")
+                    )
                 }
             }
 
@@ -800,6 +842,85 @@ private fun SettingsSection(
         }
         Spacer(modifier = Modifier.height(14.dp))
         content()
+    }
+}
+
+@Composable
+private fun IconPackRow(
+    label: String,
+    iconUrl: String?,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    val context = LocalContext.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            )
+            .border(
+                width = if (isSelected) 2.dp else 0.dp,
+                color = if (isSelected) MaterialTheme.colorScheme.primary
+                else androidx.compose.ui.graphics.Color.Transparent,
+                shape = RoundedCornerShape(14.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!iconUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(iconUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(34.dp).clip(CircleShape)
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Palette,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Text(
+            text = label,
+            fontSize = 14.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+
+        if (isSelected) {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(18.dp)
+            )
+        }
     }
 }
 
