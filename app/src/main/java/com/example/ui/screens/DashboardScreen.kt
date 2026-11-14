@@ -43,6 +43,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
@@ -80,6 +81,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -94,6 +96,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -143,6 +146,7 @@ import com.example.ui.theme.ThemeStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -376,12 +380,6 @@ fun DashboardScreen(
         }
     }
 
-    // 0f on the Apps page, 1f on the Games page. Drives the wallpaper scrim so the
-    // native wallpaper is visible behind Apps and fades into a dark Material surface
-    // for Games, following the swipe continuously.
-    val darkAmount = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
-        .coerceIn(0f, 1f)
-
     // While a controller is connected and the Games tab is showing, the poster grid owns
     // focus. The top bar must not keep it, and overlays (search, dialogs, sheets) are
     // exempt so they can take focus normally.
@@ -398,33 +396,61 @@ fun DashboardScreen(
         !showSettingsModal &&
         weatherAppChooser == null
 
+    val disablePagerSwipeInCompactGames by remember(isCompactLandscape, gamesDisplay.isEmpty()) {
+        derivedStateOf {
+            isCompactLandscape &&
+                gamesDisplay.isNotEmpty() &&
+                pagerState.currentPage == 1 &&
+                !pagerState.isScrollInProgress
+        }
+    }
+
+    val onGameClick = remember(viewModel) {
+        { game: GameItem ->
+            viewModel.setFocusedItem(game.id)
+            viewModel.launchItem(game)
+        }
+    }
+    val onGameLongClick = remember(viewModel) {
+        { game: GameItem -> viewModel.openContextMenu(game) }
+    }
+    val onGameFocus = remember(viewModel) {
+        { game: GameItem -> viewModel.setFocusedItem(game.id) }
+    }
+    val onAppClick = remember(viewModel) {
+        { app: GameItem ->
+            viewModel.setFocusedItem(app.id)
+            viewModel.launchItem(app)
+        }
+    }
+    val onAppLongClick = remember(viewModel) {
+        { app: GameItem -> viewModel.openContextMenu(app) }
+    }
+    val onAppFocus = remember(viewModel) {
+        { app: GameItem -> viewModel.setFocusedItem(app.id) }
+    }
+
+    val appsScrimColor = MaterialTheme.colorScheme.background
+    val gamesScrimColor = MaterialTheme.colorScheme.surfaceContainerHighest
+
     CompositionLocalProvider(LocalThemedAppIcons provides themedAppIcons) {
         Box(
-            modifier = modifier.fillMaxSize()
+            modifier = modifier
+                .fillMaxSize()
+                // Read pagerState offset in the draw phase so horizontal swiping and
+                // overscroll fade the wallpaper scrim without recomposing DashboardScreen.
+                .drawBehind {
+                    val darkAmount = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
+                        .coerceIn(0f, 1f)
+                    val appsAlpha = appsBackgroundOpacity * (1f - darkAmount)
+                    if (appsAlpha > 0f) {
+                        drawRect(appsScrimColor.copy(alpha = appsAlpha))
+                    }
+                    if (darkAmount > 0f) {
+                        drawRect(gamesScrimColor.copy(alpha = darkAmount))
+                    }
+                }
         ) {
-            // The native wallpaper shows through the transparent window. This translucent
-            // Material scrim keeps the Apps list readable over any wallpaper.
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        MaterialTheme.colorScheme.background.copy(
-                            alpha = appsBackgroundOpacity * (1f - darkAmount)
-                        )
-                    )
-            )
-
-            // Fades to an opaque Material container as the pager settles on the Games page.
-            // surfaceContainerHighest is a defined Material palette tone that sits between
-            // the light and dark extremes instead of near-black.
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = darkAmount)
-                    )
-            )
-
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -491,10 +517,7 @@ fun DashboardScreen(
                     // On the compact landscape Games page the poster row owns horizontal
                     // drags. Disabling pager dragging here stops its overscroll from
                     // revealing the Apps page; a drag above/below the row still switches.
-                    userScrollEnabled = !(isCompactLandscape &&
-                        gamesDisplay.isNotEmpty() &&
-                        pagerState.currentPage == 1 &&
-                        !pagerState.isScrollInProgress),
+                    userScrollEnabled = !disablePagerSwipeInCompactGames,
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
@@ -586,16 +609,9 @@ fun DashboardScreen(
                                         onSwipeToApps = {
                                             scope.launch { pagerState.animateScrollToPage(0) }
                                         },
-                                        onGameClick = { game ->
-                                            viewModel.setFocusedItem(game.id)
-                                            viewModel.launchItem(game)
-                                        },
-                                        onGameLongClick = { game ->
-                                            viewModel.openContextMenu(game)
-                                        },
-                                        onGameFocus = { game ->
-                                            viewModel.setFocusedItem(game.id)
-                                        }
+                                        onGameClick = onGameClick,
+                                        onGameLongClick = onGameLongClick,
+                                        onGameFocus = onGameFocus
                                     )
                                 }
                             }
@@ -673,16 +689,9 @@ fun DashboardScreen(
                                             listState = appsListState,
                                             gridState = appsGridState,
                                             firstItemFocusRequester = appsListFirstFocusRequester,
-                                            onAppClick = { app ->
-                                                viewModel.setFocusedItem(app.id)
-                                                viewModel.launchItem(app)
-                                            },
-                                            onAppLongClick = { app ->
-                                                viewModel.openContextMenu(app)
-                                            },
-                                            onAppFocus = { app ->
-                                                viewModel.setFocusedItem(app.id)
-                                            },
+                                            onAppClick = onAppClick,
+                                            onAppLongClick = onAppLongClick,
+                                            onAppFocus = onAppFocus,
                                             onLetterSelected = { letter ->
                                                 val index = appListEntries.indexOfFirst {
                                                     it is AppListEntry.Letter && it.letter == letter
@@ -1210,6 +1219,11 @@ private fun GamesPosterGrid(
                 },
             contentAlignment = Alignment.Center
         ) {
+            val compactPosterWidthPx = remember(density) {
+                with(density) { 168.dp.roundToPx() }
+            }
+            val compactPosterHeightPx = (compactPosterWidthPx * 1.5f).roundToInt()
+
             LazyRow(
                 state = rowState,
                 flingBehavior = snapFling,
@@ -1226,7 +1240,11 @@ private fun GamesPosterGrid(
                     .onGloballyPositioned { rowBounds = it.boundsInParent() }
                     .testTag("games_poster_row")
             ) {
-                itemsIndexed(games, key = { _, game -> game.id }) { index, game ->
+                itemsIndexed(
+                    items = games,
+                    key = { _, game -> game.id },
+                    contentType = { _, _ -> "game_poster" }
+                ) { index, game ->
                     val isFocused = game.id == focusedItemId && showFocusEffects
                     val focusRequesterModifier = when {
                         index == 0 -> Modifier.focusRequester(firstItemFocusRequester)
@@ -1234,15 +1252,20 @@ private fun GamesPosterGrid(
                             Modifier.focusRequester(focusedItemFocusRequester)
                         else -> Modifier
                     }
+                    val handleClick = remember(game, onGameClick) { { onGameClick(game) } }
+                    val handleLongClick = remember(game, onGameLongClick) { { onGameLongClick(game) } }
+                    val handleFocus = remember(game, onGameFocus) { { onGameFocus(game) } }
 
                     SteamGamePosterCard(
                         game = game,
                         isFocused = isFocused,
                         showFocusOutline = false,
                         showNsfwPoster = showNsfwPoster,
-                        onClick = { onGameClick(game) },
-                        onLongClick = { onGameLongClick(game) },
-                        onFocus = { onGameFocus(game) },
+                        posterWidthPx = compactPosterWidthPx,
+                        posterHeightPx = compactPosterHeightPx,
+                        onClick = handleClick,
+                        onLongClick = handleLongClick,
+                        onFocus = handleFocus,
                         modifier = Modifier
                             .then(focusRequesterModifier)
                             .then(if (index == 0) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
@@ -1269,6 +1292,10 @@ private fun GamesPosterGrid(
             3,
             ((availableWidth + spacing) / (96.dp + spacing)).toInt()
         )
+        val cellWidthDp = ((availableWidth - spacing * (columnCount - 1)) / columnCount)
+            .coerceAtLeast(1.dp)
+        val posterWidthPx = with(density) { cellWidthDp.roundToPx().coerceAtLeast(1) }
+        val posterHeightPx = (posterWidthPx * 1.5f).roundToInt().coerceAtLeast(1)
 
         CompositionLocalProvider(LocalBringIntoViewSpec provides focusBringIntoViewSpec) {
             LazyVerticalGrid(
@@ -1288,7 +1315,11 @@ private fun GamesPosterGrid(
                     .fillMaxSize()
                     .testTag("games_poster_grid")
             ) {
-                itemsIndexed(games, key = { _, game -> game.id }) { index, game ->
+                itemsIndexed(
+                    items = games,
+                    key = { _, game -> game.id },
+                    contentType = { _, _ -> "game_poster" }
+                ) { index, game ->
                     val isLeftmost = index % columnCount == 0
                     val focusRequesterModifier = when {
                         index == 0 -> Modifier.focusRequester(firstItemFocusRequester)
@@ -1296,13 +1327,19 @@ private fun GamesPosterGrid(
                             Modifier.focusRequester(focusedItemFocusRequester)
                         else -> Modifier
                     }
+                    val handleClick = remember(game, onGameClick) { { onGameClick(game) } }
+                    val handleLongClick = remember(game, onGameLongClick) { { onGameLongClick(game) } }
+                    val handleFocus = remember(game, onGameFocus) { { onGameFocus(game) } }
+
                     SteamGamePosterCard(
                         game = game,
                         isFocused = game.id == focusedItemId && showFocusEffects,
                         showNsfwPoster = showNsfwPoster,
-                        onClick = { onGameClick(game) },
-                        onLongClick = { onGameLongClick(game) },
-                        onFocus = { onGameFocus(game) },
+                        posterWidthPx = posterWidthPx,
+                        posterHeightPx = posterHeightPx,
+                        onClick = handleClick,
+                        onLongClick = handleLongClick,
+                        onFocus = handleFocus,
                         modifier = Modifier
                             .then(focusRequesterModifier)
                             .then(if (isLeftmost) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
@@ -1313,8 +1350,11 @@ private fun GamesPosterGrid(
     }
 }
 
+@Immutable
 private sealed interface AppListEntry {
+    @Immutable
     data class Letter(val letter: String) : AppListEntry
+    @Immutable
     data class App(val item: GameItem) : AppListEntry
 }
 
@@ -1394,40 +1434,59 @@ private fun AppsAlphabeticalList(
                         .fillMaxSize()
                         .testTag("apps_grid")
                 ) {
-                entries.forEach { entry ->
-                    when (entry) {
-                        is AppListEntry.Letter -> item(
-                            key = "section_${entry.letter}",
-                            span = { GridItemSpan(maxLineSpan) }
-                        ) {
-                            AppLetterHeader(letter = entry.letter)
+                    items(
+                        items = entries,
+                        key = { entry ->
+                            when (entry) {
+                                is AppListEntry.Letter -> "section_${entry.letter}"
+                                is AppListEntry.App -> entry.item.id
+                            }
+                        },
+                        span = { entry ->
+                            when (entry) {
+                                is AppListEntry.Letter -> GridItemSpan(maxLineSpan)
+                                is AppListEntry.App -> GridItemSpan(1)
+                            }
+                        },
+                        contentType = { entry ->
+                            when (entry) {
+                                is AppListEntry.Letter -> "letter"
+                                is AppListEntry.App -> "app_tile"
+                            }
                         }
-                        is AppListEntry.App -> item(key = entry.item.id) {
-                            AppIconTile(
-                                app = entry.item,
-                                isFocused = entry.item.id == focusedItemId,
-                                showFocusEffects = showFocusEffects,
-                                testTag = "app_row_${entry.item.id}",
-                                onClick = { onAppClick(entry.item) },
-                                onLongClick = { onAppLongClick(entry.item) },
-                                onFocus = { onAppFocus(entry.item) },
-                                contentPadding = PaddingValues(horizontal = 5.dp, vertical = 10.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .then(
-                                        if (entry.item.id == firstAppId) {
-                                            firstItemFocusRequester?.let { Modifier.focusRequester(it) }
-                                                ?: Modifier
-                                        } else {
-                                            Modifier
-                                        }
-                                    )
-                            )
+                    ) { entry ->
+                        when (entry) {
+                            is AppListEntry.Letter -> AppLetterHeader(letter = entry.letter)
+                            is AppListEntry.App -> {
+                                val app = entry.item
+                                val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
+                                val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
+                                val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
+                                AppIconTile(
+                                    app = app,
+                                    isFocused = app.id == focusedItemId,
+                                    showFocusEffects = showFocusEffects,
+                                    testTag = "app_row_${app.id}",
+                                    onClick = handleClick,
+                                    onLongClick = handleLongClick,
+                                    onFocus = handleFocus,
+                                    contentPadding = PaddingValues(horizontal = 5.dp, vertical = 10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .then(
+                                            if (app.id == firstAppId) {
+                                                firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                    ?: Modifier
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
         } else {
             LazyColumn(
                 state = listState,
@@ -1443,25 +1502,41 @@ private fun AppsAlphabeticalList(
                     .fillMaxHeight()
                     .testTag("apps_list")
             ) {
-                entries.forEach { entry ->
-                    when (entry) {
-                        is AppListEntry.Letter -> item(key = "section_${entry.letter}") {
-                            AppLetterHeader(letter = entry.letter)
+                items(
+                    items = entries,
+                    key = { entry ->
+                        when (entry) {
+                            is AppListEntry.Letter -> "section_${entry.letter}"
+                            is AppListEntry.App -> entry.item.id
                         }
-                        is AppListEntry.App -> item(key = entry.item.id) {
+                    },
+                    contentType = { entry ->
+                        when (entry) {
+                            is AppListEntry.Letter -> "letter"
+                            is AppListEntry.App -> "app_row"
+                        }
+                    }
+                ) { entry ->
+                    when (entry) {
+                        is AppListEntry.Letter -> AppLetterHeader(letter = entry.letter)
+                        is AppListEntry.App -> {
+                            val app = entry.item
+                            val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
+                            val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
+                            val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
                             AppTextRow(
-                                app = entry.item,
-                                isFocused = entry.item.id == focusedItemId,
+                                app = app,
+                                isFocused = app.id == focusedItemId,
                                 showFocusEffects = showFocusEffects,
-                                testTag = "app_row_${entry.item.id}",
-                                onClick = { onAppClick(entry.item) },
-                                onLongClick = { onAppLongClick(entry.item) },
-                                onFocus = { onAppFocus(entry.item) },
+                                testTag = "app_row_${app.id}",
+                                onClick = handleClick,
+                                onLongClick = handleLongClick,
+                                onFocus = handleFocus,
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .then(
-                                        if (entry.item.id == firstAppId) {
+                                        if (app.id == firstAppId) {
                                             firstItemFocusRequester?.let { Modifier.focusRequester(it) }
                                                 ?: Modifier
                                         } else {

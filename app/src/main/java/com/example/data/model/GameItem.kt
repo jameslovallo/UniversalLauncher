@@ -1,5 +1,6 @@
 package com.example.data.model
 
+import androidx.compose.runtime.Immutable
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -11,6 +12,7 @@ enum class GameType {
     MOONLIGHT
 }
 
+@Immutable
 @Entity(tableName = "games")
 data class GameItem(
     @PrimaryKey

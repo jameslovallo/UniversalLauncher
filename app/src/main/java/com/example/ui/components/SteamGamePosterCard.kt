@@ -9,13 +9,10 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,17 +30,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.size.Precision
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
+import kotlin.math.roundToInt
+
+private val PosterCardShape = RoundedCornerShape(16.dp)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -55,13 +59,16 @@ fun SteamGamePosterCard(
     modifier: Modifier = Modifier,
     showFocusOutline: Boolean = true,
     showNsfwPoster: Boolean = false,
+    posterWidthPx: Int = 0,
+    posterHeightPx: Int = 0,
     onFocus: (() -> Unit)? = null,
 ) {
+    val context = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     val isFocusedByCompose by interactionSource.collectIsFocusedAsState()
     val effectivelyFocused = isFocused || isFocusedByCompose
 
-    val scale by animateFloatAsState(
+    val scaleState = animateFloatAsState(
         targetValue = if (effectivelyFocused) 1.05f else 1.0f,
         animationSpec = tween(150),
         label = "poster_scale"
@@ -70,7 +77,13 @@ fun SteamGamePosterCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .scale(scale)
+            .graphicsLayer {
+                val s = scaleState.value
+                if (s != 1f) {
+                    scaleX = s
+                    scaleY = s
+                }
+            }
             .onFocusChanged { focusState ->
                 if (focusState.isFocused) {
                     onFocus?.invoke()
@@ -97,18 +110,20 @@ fun SteamGamePosterCard(
                         else -> 0.dp
                     },
                     color = when {
-                        !showFocusOutline -> androidx.compose.ui.graphics.Color.Transparent
+                        !showFocusOutline -> Color.Transparent
                         effectivelyFocused -> MaterialTheme.colorScheme.primary
                         else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                     },
-                    shape = RoundedCornerShape(16.dp)
+                    shape = PosterCardShape
                 ),
-            shape = RoundedCornerShape(16.dp),
+            shape = PosterCardShape,
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
             ),
+            // Avoid casting expensive rounded shadows on every unfocused card during scroll;
+            // the 1.dp outline already separates unfocused posters cleanly.
             elevation = CardDefaults.cardElevation(
-                defaultElevation = if (effectivelyFocused) 8.dp else 2.dp
+                defaultElevation = if (effectivelyFocused) 8.dp else 0.dp
             )
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -131,11 +146,20 @@ fun SteamGamePosterCard(
                 var imageFailed by remember(imageUrl) { mutableStateOf(false) }
 
                 if (!imageUrl.isNullOrBlank() && !imageFailed) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
+                    val posterRequest = remember(context, imageUrl, posterWidthPx, posterHeightPx) {
+                        ImageRequest.Builder(context)
                             .data(imageUrl)
-                            .crossfade(true)
-                            .build(),
+                            .apply {
+                                if (posterWidthPx > 0 && posterHeightPx > 0) {
+                                    size(posterWidthPx, posterHeightPx)
+                                    precision(Precision.INEXACT)
+                                }
+                            }
+                            .crossfade(false)
+                            .build()
+                    }
+                    AsyncImage(
+                        model = posterRequest,
                         contentDescription = "${game.title} poster",
                         contentScale = ContentScale.Crop,
                         onError = { imageFailed = true },
@@ -148,7 +172,11 @@ fun SteamGamePosterCard(
                         !activeLogoUrl.isNullOrBlank() &&
                         !activePoster.isNullOrBlank()
                     ) {
-                        PosterLogoOverlay(logoUrl = activeLogoUrl)
+                        PosterLogoOverlay(
+                            logoUrl = activeLogoUrl,
+                            posterWidthPx = posterWidthPx,
+                            posterHeightPx = posterHeightPx
+                        )
                     }
                 } else {
                     // Fallback artistic card
@@ -187,30 +215,53 @@ fun SteamGamePosterCard(
 @Composable
 fun PosterLogoOverlay(
     logoUrl: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    posterWidthPx: Int = 0,
+    posterHeightPx: Int = 0,
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val horizontalPadding = maxWidth * 0.10f
-        val bottomPadding = maxHeight * 0.10f
-        val maxLogoHeight = maxHeight * 0.35f
+    val context = LocalContext.current
+    val logoMaxWidthPx = (posterWidthPx * 0.80f).roundToInt()
+    val logoMaxHeightPx = (posterHeightPx * 0.35f).roundToInt()
+    val logoRequest = remember(context, logoUrl, logoMaxWidthPx, logoMaxHeightPx) {
+        ImageRequest.Builder(context)
+            .data(logoUrl)
+            .apply {
+                if (logoMaxWidthPx > 0 && logoMaxHeightPx > 0) {
+                    size(logoMaxWidthPx, logoMaxHeightPx)
+                    precision(Precision.INEXACT)
+                }
+            }
+            .crossfade(false)
+            .build()
+    }
 
+    Box(modifier = modifier.fillMaxSize()) {
         AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(logoUrl)
-                .crossfade(true)
-                .build(),
+            model = logoRequest,
             contentDescription = null,
             contentScale = ContentScale.Fit,
             alignment = Alignment.BottomCenter,
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(
-                    start = horizontalPadding,
-                    end = horizontalPadding,
-                    bottom = bottomPadding
-                )
-                .fillMaxWidth()
-                .heightIn(max = maxLogoHeight)
+                .fillMaxSize()
+                .layout { measurable, constraints ->
+                    val parentWidth = constraints.maxWidth
+                    val parentHeight = constraints.maxHeight
+                    val maxW = (parentWidth * 0.80f).roundToInt().coerceAtLeast(0)
+                    val maxH = (parentHeight * 0.35f).roundToInt().coerceAtLeast(0)
+                    val bottomPad = (parentHeight * 0.10f).roundToInt()
+                    val childConstraints = Constraints(
+                        minWidth = maxW,
+                        maxWidth = maxW,
+                        minHeight = 0,
+                        maxHeight = maxH
+                    )
+                    val placeable = measurable.measure(childConstraints)
+                    val x = ((parentWidth - placeable.width) / 2).coerceAtLeast(0)
+                    val y = (parentHeight - bottomPad - placeable.height).coerceAtLeast(0)
+                    layout(parentWidth, parentHeight) {
+                        placeable.placeRelative(x, y)
+                    }
+                }
         )
     }
 }

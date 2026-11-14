@@ -121,27 +121,9 @@ fun FavoritesHome(
 
     // The clock and date are hidden only on small screens in landscape (phones held
     // sideways); landscape tablets keep them because there is room.
-    val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val showClockAndDate = !isLandscape || configuration.screenHeightDp >= 480
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(1_000L)
-        }
-    }
-
-    val is24Hour = remember { DateFormat.is24HourFormat(context) }
-    val timeFormatter = remember(is24Hour) {
-        SimpleDateFormat(if (is24Hour) "HH:mm" else "h:mm", Locale.getDefault())
-    }
-    val dateFormatter = remember {
-        SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
-    }
-    val nowDate = Date(now)
 
     Column(
         modifier = modifier
@@ -192,67 +174,17 @@ fun FavoritesHome(
         horizontalAlignment = contentAlignment
     ) {
         if (showClockAndDate) {
-            Text(
-                text = timeFormatter.format(nowDate),
-                fontSize = 64.sp,
-                fontWeight = FontWeight.Light,
-                color = MaterialTheme.colorScheme.onSurface,
+            FavoritesClockAndDate(
+                isTextLayout = isTextLayout,
                 textAlign = textAlign,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .clickable { onOpenClock() }
-                    .padding(vertical = 4.dp)
-                    .then(if (isTextLayout) Modifier.padding(start = textRowInset) else Modifier.padding(horizontal = 20.dp))
-                    .testTag("favorites_clock")
+                textRowInset = textRowInset,
+                weatherEnabled = weatherEnabled,
+                weather = weather,
+                temperatureUnit = temperatureUnit,
+                onOpenClock = onOpenClock,
+                onOpenCalendar = onOpenCalendar,
+                onOpenWeather = onOpenWeather,
             )
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = if (isTextLayout) Arrangement.Start else Arrangement.Center,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable { onOpenCalendar() }
-                    .padding(vertical = 4.dp)
-                    .then(if (isTextLayout) Modifier.padding(start = textRowInset) else Modifier.padding(horizontal = 14.dp))
-                    .testTag("favorites_date_row")
-            ) {
-                Text(
-                    text = dateFormatter.format(nowDate),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    textAlign = textAlign,
-                    modifier = Modifier.testTag("favorites_date")
-                )
-
-                if (weatherEnabled && weather != null) {
-                    Spacer(modifier = Modifier.width(10.dp))
-                    // Separate click target from the date row: tapping the conditions
-                    // opens the user's weather app, while tapping the date opens Calendar.
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { onOpenWeather() }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                            .testTag("favorites_weather"),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = weatherIcon(weather.weatherCode),
-                            contentDescription = weatherDescription(weather.weatherCode),
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = weather.temperatureDisplay(temperatureUnit, showUnit = false),
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-            }
 
             Spacer(modifier = Modifier.height(34.dp))
         }
@@ -385,6 +317,100 @@ fun FavoritesHome(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FavoritesClockAndDate(
+    isTextLayout: Boolean,
+    textAlign: TextAlign,
+    textRowInset: androidx.compose.ui.unit.Dp,
+    weatherEnabled: Boolean,
+    weather: WeatherInfo?,
+    temperatureUnit: TemperatureUnit,
+    onOpenClock: () -> Unit,
+    onOpenCalendar: () -> Unit,
+    onOpenWeather: () -> Unit,
+) {
+    val context = LocalContext.current
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1_000L)
+        }
+    }
+
+    val is24Hour = remember(context) { DateFormat.is24HourFormat(context) }
+    val timeFormatter = remember(is24Hour) {
+        SimpleDateFormat(if (is24Hour) "HH:mm" else "h:mm", Locale.getDefault())
+    }
+    val dateFormatter = remember {
+        SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
+    }
+    val nowDate = remember(now) { Date(now) }
+
+    Text(
+        text = timeFormatter.format(nowDate),
+        fontSize = 64.sp,
+        fontWeight = FontWeight.Light,
+        color = MaterialTheme.colorScheme.onSurface,
+        textAlign = textAlign,
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .clickable { onOpenClock() }
+            .padding(vertical = 4.dp)
+            .then(if (isTextLayout) Modifier.padding(start = textRowInset) else Modifier.padding(horizontal = 20.dp))
+            .testTag("favorites_clock")
+    )
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (isTextLayout) Arrangement.Start else Arrangement.Center,
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onOpenCalendar() }
+            .padding(vertical = 4.dp)
+            .then(if (isTextLayout) Modifier.padding(start = textRowInset) else Modifier.padding(horizontal = 14.dp))
+            .testTag("favorites_date_row")
+    ) {
+        Text(
+            text = dateFormatter.format(nowDate),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = textAlign,
+            modifier = Modifier.testTag("favorites_date")
+        )
+
+        if (weatherEnabled && weather != null) {
+            Spacer(modifier = Modifier.width(10.dp))
+            // Separate click target from the date row: tapping the conditions
+            // opens the user's weather app, while tapping the date opens Calendar.
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenWeather() }
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .testTag("favorites_weather"),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = weatherIcon(weather.weatherCode),
+                    contentDescription = weatherDescription(weather.weatherCode),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = weather.temperatureDisplay(temperatureUnit, showUnit = false),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
         }
     }

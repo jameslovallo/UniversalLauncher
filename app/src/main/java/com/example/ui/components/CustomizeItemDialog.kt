@@ -1,6 +1,8 @@
 package com.example.ui.components
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -898,10 +900,64 @@ private fun copyPickedImage(
         val dir = File(context.filesDir, "custom_art").apply { mkdirs() }
         val safeId = itemId.replace(Regex("[^A-Za-z0-9._-]"), "_")
         val prefix = "${safeId}_${slotSuffix}-"
-        val target = File(dir, "$prefix${System.currentTimeMillis()}.img")
+        val maxDimPx = if (slotSuffix.startsWith("icon")) 512 else 1200
+
+        // Inspect dimensions first so huge camera/gallery photos are stored at a display-ready
+        // size instead of forcing Coil to decode multi-megapixel files during scroll.
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         context.contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().use { output -> input.copyTo(output) }
-        } ?: return null
+            BitmapFactory.decodeStream(input, null, bounds)
+        }
+
+        val target: File
+        if (bounds.outWidth > maxDimPx || bounds.outHeight > maxDimPx) {
+            var sampleSize = 1
+            while (
+                (bounds.outWidth / (sampleSize * 2)) >= maxDimPx ||
+                (bounds.outHeight / (sampleSize * 2)) >= maxDimPx
+            ) {
+                sampleSize *= 2
+            }
+            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+            val sampled = context.contentResolver.openInputStream(uri)?.use { input ->
+                BitmapFactory.decodeStream(input, null, decodeOpts)
+            }
+            if (sampled != null) {
+                val longest = maxOf(sampled.width, sampled.height)
+                val finalBitmap = if (longest > maxDimPx) {
+                    val scale = maxDimPx.toFloat() / longest.toFloat()
+                    val w = (sampled.width * scale).toInt().coerceAtLeast(1)
+                    val h = (sampled.height * scale).toInt().coerceAtLeast(1)
+                    Bitmap.createScaledBitmap(sampled, w, h, true).also {
+                        if (it != sampled) sampled.recycle()
+                    }
+                } else {
+                    sampled
+                }
+                val hasAlpha = finalBitmap.hasAlpha()
+                val ext = if (hasAlpha) "png" else "jpg"
+                target = File(dir, "$prefix${System.currentTimeMillis()}.$ext")
+                target.outputStream().use { out ->
+                    finalBitmap.compress(
+                        if (hasAlpha) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG,
+                        90,
+                        out
+                    )
+                }
+                finalBitmap.recycle()
+            } else {
+                target = File(dir, "$prefix${System.currentTimeMillis()}.img")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                } ?: return null
+            }
+        } else {
+            target = File(dir, "$prefix${System.currentTimeMillis()}.img")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            } ?: return null
+        }
+
         if (target.length() == 0L) {
             target.delete()
             return null

@@ -28,11 +28,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.size.Precision
 import com.example.data.model.GameItem
 
 /**
@@ -71,13 +73,19 @@ fun AppTextRow(
     onFocus: (() -> Unit)? = null,
 ) {
     val focused = isFocused && showFocusEffects
+    val rowShape = remember { RoundedCornerShape(21.dp) }
 
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(21.dp))
-            .background(
-                if (focused) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-                else Color.Transparent
+            .then(
+                if (focused) {
+                    Modifier.background(
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                        rowShape
+                    )
+                } else {
+                    Modifier
+                }
             )
             .onFocusChanged { if (it.isFocused) onFocus?.invoke() }
             .combinedClickable(
@@ -130,7 +138,7 @@ fun AppIconTile(
     onFocus: (() -> Unit)? = null,
 ) {
     val focused = isFocused && showFocusEffects
-    val scale by animateFloatAsState(
+    val scaleState = animateFloatAsState(
         targetValue = if (focused) 1.08f else 1f,
         animationSpec = tween(150),
         label = "app_icon_scale"
@@ -138,8 +146,17 @@ fun AppIconTile(
 
     Column(
         modifier = modifier
-            .scale(scale)
-            .clip(RoundedCornerShape(16.dp))
+            .then(
+                if (showFocusEffects) {
+                    Modifier.graphicsLayer {
+                        val s = scaleState.value
+                        scaleX = s
+                        scaleY = s
+                    }
+                } else {
+                    Modifier
+                }
+            )
             .onFocusChanged { if (it.isFocused) onFocus?.invoke() }
             .combinedClickable(
                 onClick = onClick,
@@ -196,6 +213,10 @@ fun resolveAppIconUrl(
 @Composable
 fun AppIcon(app: GameItem, size: Dp) {
     val context = LocalContext.current
+    val density = LocalDensity.current
+    val sizePx = remember(density, size) {
+        with(density) { size.roundToPx().coerceAtLeast(1) }
+    }
     val themedIcons = LocalThemedAppIcons.current
     val imageUrl = resolveAppIconUrl(app, themedIcons)
     // Broken URLs (e.g. icons saved before icons were copied to local files) fall back to
@@ -203,11 +224,16 @@ fun AppIcon(app: GameItem, size: Dp) {
     var imageFailed by remember(imageUrl) { mutableStateOf(false) }
 
     if (!imageUrl.isNullOrBlank() && !imageFailed) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
+        val request = remember(context, imageUrl, sizePx) {
+            ImageRequest.Builder(context)
                 .data(imageUrl)
+                .size(sizePx, sizePx)
+                .precision(Precision.INEXACT)
                 .crossfade(false)
-                .build(),
+                .build()
+        }
+        AsyncImage(
+            model = request,
             contentDescription = null,
             contentScale = ContentScale.Crop,
             onError = { imageFailed = true },
