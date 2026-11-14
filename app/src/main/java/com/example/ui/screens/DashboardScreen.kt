@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.content.res.Configuration
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -170,6 +171,7 @@ fun DashboardScreen(
     val installedIconPacks by viewModel.installedIconPacks.collectAsStateWithLifecycle()
     val selectedIconPack by viewModel.selectedIconPack.collectAsStateWithLifecycle()
     val iconPackIcons by viewModel.iconPackIcons.collectAsStateWithLifecycle()
+    val selectedPackOverrides by viewModel.selectedPackOverrides.collectAsStateWithLifecycle()
     val themedAppIcons by viewModel.themedAppIcons.collectAsStateWithLifecycle()
 
     val controllerState by viewModel.controllerManager.controllerState.collectAsStateWithLifecycle()
@@ -203,9 +205,14 @@ fun DashboardScreen(
         )
     }
 
+    var isLauncherActive by remember {
+        mutableStateOf(viewModel.isDefaultLauncher() || viewModel.isHomeOverrideEnabled())
+    }
+
     // Re-scan installed apps whenever the launcher comes back to the foreground, so a
     // freshly installed app appears without restarting.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        isLauncherActive = viewModel.isDefaultLauncher() || viewModel.isHomeOverrideEnabled()
         viewModel.refreshInstalledApps()
         viewModel.refreshWeather()
         viewModel.refreshWeatherApps()
@@ -259,6 +266,30 @@ fun DashboardScreen(
         state = appsPagerState,
         snapPositionalThreshold = 0.12f
     )
+
+    // Keep swipe-back inside the launcher: close search, return from the app drawer or
+    // Games tab to favorites, and stay on favorites when acting as the home screen so
+    // Back does not finish and relaunch MainActivity (which briefly flashed unthemed icons).
+    val shouldHandleHomeBack = showSearchBar ||
+        searchQuery.isNotEmpty() ||
+        currentTab != MainLibraryTab.APPS ||
+        appsPagerState.currentPage != 0 ||
+        isLauncherActive
+    BackHandler(enabled = shouldHandleHomeBack) {
+        when {
+            showSearchBar || searchQuery.isNotEmpty() -> {
+                viewModel.setSearchQuery("")
+                showSearchBar = false
+            }
+            currentTab == MainLibraryTab.APPS && appsPagerState.currentPage != 0 -> {
+                scope.launch { appsPagerState.animateScrollToPage(0) }
+            }
+            currentTab == MainLibraryTab.GAMES -> {
+                viewModel.setTab(MainLibraryTab.APPS)
+            }
+            else -> Unit
+        }
+    }
 
     LaunchedEffect(pagerState.currentPage) {
         val tab = if (pagerState.currentPage == 0) MainLibraryTab.APPS else MainLibraryTab.GAMES
@@ -732,14 +763,26 @@ fun DashboardScreen(
 
             // Customize Name & Artwork Dialog
             if (editingItem != null) {
+                val item = editingItem!!
+                val selectedPackDrawable = if (!item.isGame && selectedIconPack != null) {
+                    selectedPackOverrides[item.id]
+                } else {
+                    null
+                }
+                val canResetIcon = !item.isGame && (
+                    selectedPackDrawable != null ||
+                        (!item.iconUrl.isNullOrBlank() && !item.iconUrl.contains("/app_icons/"))
+                    )
                 CustomizeItemDialog(
-                    item = editingItem!!,
+                    item = item,
                     steamGridDbApiKey = steamGridDbApiKey,
                     includeNsfw = steamGridDbIncludeNsfw,
                     iconPack = installedIconPacks.firstOrNull {
                         it.packageName == selectedIconPack
                     },
                     iconPackIcons = iconPackIcons,
+                    selectedPackDrawable = selectedPackDrawable,
+                    canResetIcon = canResetIcon,
                     onApplyTitle = { id, newTitle ->
                         viewModel.applyItemTitle(id, newTitle)
                     },
@@ -754,6 +797,9 @@ fun DashboardScreen(
                     },
                     onSelectIconPackIcon = { id, newTitle, drawableName ->
                         viewModel.applyItemIconFromPack(id, newTitle, drawableName)
+                    },
+                    onResetIcon = { id ->
+                        viewModel.resetItemIcon(id)
                     },
                     onDismiss = { viewModel.closeEditCustomizer() }
                 )

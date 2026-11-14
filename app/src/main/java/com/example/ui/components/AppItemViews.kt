@@ -167,19 +167,36 @@ fun AppIconTile(
     }
 }
 
+/**
+ * True when [iconUrl] points to an explicit user-picked image or URL rather than the
+ * auto-generated `app_icons` cache (or a legacy `custom_icons` file).
+ */
+fun hasCustomAppIconUrl(iconUrl: String?): Boolean =
+    !iconUrl.isNullOrBlank() &&
+        !iconUrl.contains("/app_icons/") &&
+        !iconUrl.contains("/custom_icons/")
+
+/**
+ * Resolves the icon URL to display for a non-game item across every icon surface:
+ * favorites, app list, context menu headers, hidden apps, and the customization sheet.
+ */
+fun resolveAppIconUrl(
+    item: GameItem,
+    themedIcons: Map<String, String>
+): String? {
+    val themedUrl = if (!item.isGame && !hasCustomAppIconUrl(item.iconUrl)) {
+        themedIcons[item.id] ?: item.packageName?.let { themedIcons[it] }
+    } else {
+        null
+    }
+    return themedUrl ?: item.iconUrl ?: item.posterUrl
+}
+
 @Composable
 fun AppIcon(app: GameItem, size: Dp) {
     val context = LocalContext.current
     val themedIcons = LocalThemedAppIcons.current
-    // Auto-generated device icons live in the app_icons cache. A file/URL chosen by the
-    // user (including one picked from an icon theme) lives elsewhere and always wins.
-    val usesDefaultIcon = app.iconUrl.isNullOrBlank() || app.iconUrl.contains("/app_icons/")
-    val themedUrl = if (usesDefaultIcon) {
-        app.packageName?.let { packageName -> themedIcons[packageName] }
-    } else {
-        null
-    }
-    val imageUrl = themedUrl ?: app.iconUrl ?: app.posterUrl
+    val imageUrl = resolveAppIconUrl(app, themedIcons)
     // Broken URLs (e.g. icons saved before icons were copied to local files) fall back to
     // the initial letter instead of leaving an empty slot.
     var imageFailed by remember(imageUrl) { mutableStateOf(false) }
@@ -188,7 +205,7 @@ fun AppIcon(app: GameItem, size: Dp) {
         AsyncImage(
             model = ImageRequest.Builder(context)
                 .data(imageUrl)
-                .crossfade(true)
+                .crossfade(false)
                 .build(),
             contentDescription = null,
             contentScale = ContentScale.Crop,

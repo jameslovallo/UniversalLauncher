@@ -134,10 +134,13 @@ class GameRepository(
             } else if (!existing.isDeleted) {
                 // A customized item keeps its user-chosen name, icon and artwork; only the
                 // launch target is refreshed from the package.
+                val keepCustomIcon = !existing.iconUrl.isNullOrBlank() &&
+                    !existing.iconUrl.contains("/app_icons/")
                 val updated = if (existing.isCustomized) {
                     existing.copy(
                         packageName = app.packageName,
-                        activityName = app.activityName
+                        activityName = app.activityName,
+                        iconUrl = if (keepCustomIcon) existing.iconUrl else app.iconUrl
                     )
                 } else {
                     existing.copy(
@@ -282,6 +285,10 @@ class GameRepository(
 
     suspend fun updateTitleAndArtwork(id: String, title: String, posterUrl: String?, iconUrl: String?) {
         gameDao.updateTitleAndArtwork(id, title, posterUrl, iconUrl)
+    }
+
+    suspend fun updateIconUrl(id: String, iconUrl: String?) {
+        gameDao.updateIconUrl(id, iconUrl)
     }
 
     suspend fun updateTitleAndNsfwPoster(id: String, title: String, nsfwPosterUrl: String?) {

@@ -91,6 +91,9 @@ interface GameDao {
     @Query("UPDATE games SET title = :title, posterUrl = :posterUrl, iconUrl = :iconUrl, isCustomized = 1 WHERE id = :id")
     suspend fun updateTitleAndArtwork(id: String, title: String, posterUrl: String?, iconUrl: String?)
 
+    @Query("UPDATE games SET iconUrl = :iconUrl WHERE id = :id")
+    suspend fun updateIconUrl(id: String, iconUrl: String?)
+
     @Query("UPDATE games SET title = :title, nsfwPosterUrl = :nsfwPosterUrl, isCustomized = 1 WHERE id = :id")
     suspend fun updateTitleAndNsfwPoster(id: String, title: String, nsfwPosterUrl: String?)
 

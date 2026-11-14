@@ -9,6 +9,8 @@ import android.net.Uri
 import android.os.Build
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.drawable.toBitmap
+import com.example.data.model.GameItem
+import com.example.data.model.GameType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
@@ -121,6 +123,66 @@ object IconPackManager {
         }.toMap()
     }
 
+    /**
+     * Resolves themed icon URLs for [items] (combining `appfilter.xml` matches and any
+     * remembered per-app [customOverrides] for [packPackage]).
+     *
+     * Entries are keyed by `item.id` (and `item.packageName` for installed apps) so every
+     * icon-rendering surface—home favorites, app drawer, context menu headers, and hidden
+     * apps—resolves the same themed or overridden icon.
+     */
+    suspend fun resolveIconsForPack(
+        context: Context,
+        packPackage: String,
+        items: Collection<GameItem>,
+        customOverrides: Map<String, String>
+    ): Map<String, String> = withContext(Dispatchers.IO) {
+        val packContext = packageContext(context, packPackage) ?: return@withContext emptyMap()
+        val resources = packContext.resources
+        val appFilter = parseAppFilter(packContext, packPackage).packages
+        val dir = packDirectory(context, packPackage).apply { mkdirs() }
+        val result = LinkedHashMap<String, String>()
+
+        if (appFilter.isNotEmpty()) {
+            val renderedByPackage = HashMap<String, String>()
+            for (item in items) {
+                val packageName = item.packageName ?: continue
+                val url = renderedByPackage[packageName] ?: run {
+                    val drawableName = appFilter[packageName] ?: return@run null
+                    val file = File(dir, "${sanitize(packageName)}.png")
+                    if (!file.exists() || file.length() == 0L) {
+                        renderToFile(resources, packPackage, drawableName, ICON_SIZE_PX, file)
+                            ?: return@run null
+                    }
+                    Uri.fromFile(file).toString().also { renderedByPackage[packageName] = it }
+                } ?: continue
+                result[packageName] = url
+                result[item.id] = url
+            }
+        }
+
+        if (customOverrides.isNotEmpty()) {
+            val itemsById = items.associateBy { it.id }
+            val choicesDir = File(dir, "_choices").apply { mkdirs() }
+            for ((itemId, drawableName) in customOverrides) {
+                val url = renderChoiceInDir(
+                    resources = resources,
+                    packPackage = packPackage,
+                    drawableName = drawableName,
+                    itemId = itemId,
+                    choicesDir = choicesDir
+                ) ?: continue
+                result[itemId] = url
+                val item = itemsById[itemId]
+                if (item != null && item.type == GameType.INSTALLED_APP && !item.packageName.isNullOrBlank()) {
+                    result[item.packageName] = url
+                }
+            }
+        }
+
+        result
+    }
+
     /** Every drawable the theme offers, without rendering previews yet. */
     suspend fun icons(context: Context, packPackage: String): List<IconPackIcon> =
         withContext(Dispatchers.IO) {
@@ -150,6 +212,48 @@ object IconPackManager {
             ) ?: return@withContext null
         }
         Uri.fromFile(file).toString()
+    }
+
+    /**
+     * Renders and caches a custom drawable choice inside the pack's own `_choices` folder
+     * so re-selecting this pack later reuses the cached file immediately without clobbering
+     * the app's default icon.
+     */
+    suspend fun renderPackChoice(
+        context: Context,
+        packPackage: String,
+        drawableName: String,
+        itemId: String
+    ): String? = withContext(Dispatchers.IO) {
+        val packContext = packageContext(context, packPackage) ?: return@withContext null
+        val choicesDir = File(packDirectory(context, packPackage), "_choices").apply { mkdirs() }
+        renderChoiceInDir(
+            resources = packContext.resources,
+            packPackage = packPackage,
+            drawableName = drawableName,
+            itemId = itemId,
+            choicesDir = choicesDir
+        )
+    }
+
+    private fun renderChoiceInDir(
+        resources: Resources,
+        packPackage: String,
+        drawableName: String,
+        itemId: String,
+        choicesDir: File
+    ): String? {
+        val safeItem = sanitize(itemId)
+        val safeDrawable = sanitize(drawableName)
+        val prefix = "${safeItem}__"
+        val file = File(choicesDir, "$prefix$safeDrawable.png")
+        if (!file.exists() || file.length() == 0L) {
+            renderToFile(resources, packPackage, drawableName, ICON_SIZE_PX, file)
+                ?: return null
+        }
+        choicesDir.listFiles { candidate -> candidate.name.startsWith(prefix) && candidate != file }
+            ?.forEach { it.delete() }
+        return Uri.fromFile(file).toString()
     }
 
     /**

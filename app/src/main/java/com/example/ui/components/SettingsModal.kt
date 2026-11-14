@@ -931,7 +931,12 @@ private fun HiddenItemRow(
     onRestore: () -> Unit
 ) {
     val context = LocalContext.current
-    val imageUrl = item.iconUrl ?: item.posterUrl
+    val themedIcons = LocalThemedAppIcons.current
+    val imageUrl = if (item.isGame) {
+        item.posterUrl ?: item.heroBannerUrl ?: item.iconUrl
+    } else {
+        resolveAppIconUrl(item, themedIcons)
+    }
 
     Row(
         modifier = Modifier
@@ -954,7 +959,7 @@ private fun HiddenItemRow(
                 AsyncImage(
                     model = ImageRequest.Builder(context)
                         .data(imageUrl)
-                        .crossfade(true)
+                        .crossfade(false)
                         .build(),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,

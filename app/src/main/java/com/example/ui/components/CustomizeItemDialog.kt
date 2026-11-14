@@ -32,11 +32,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -117,11 +119,14 @@ fun CustomizeItemDialog(
     includeNsfw: Boolean = false,
     iconPack: IconPackInfo? = null,
     iconPackIcons: List<IconPackIcon> = emptyList(),
+    selectedPackDrawable: String? = null,
+    canResetIcon: Boolean = false,
     onApplyTitle: (id: String, newTitle: String) -> Unit,
     onApplyPoster: (id: String, newTitle: String, isNsfwSlot: Boolean, artworkUrl: String?) -> Unit,
     onSetOverlayLogo: (id: String, newTitle: String, isNsfwSlot: Boolean, enabled: Boolean) -> Unit,
     onUpdateLogoUrl: (id: String, isNsfwSlot: Boolean, logoUrl: String?) -> Unit,
     onSelectIconPackIcon: (id: String, newTitle: String, drawableName: String) -> Unit,
+    onResetIcon: (id: String) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val tabs = remember(item.isGame, iconPack) {
@@ -251,24 +256,60 @@ fun CustomizeItemDialog(
                 .fillMaxHeight(0.88f)
                 .padding(20.dp)
         ) {
+            val themedIcons = LocalThemedAppIcons.current
+            val resolvedPreviewIcon = if (!item.isGame) resolveAppIconUrl(item, themedIcons) else null
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = "Customize Name & Artwork",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = item.displayCategory,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    if (!item.isGame) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .testTag("customize_icon_preview"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (!resolvedPreviewIcon.isNullOrBlank()) {
+                                AsyncImage(
+                                    model = resolvedPreviewIcon,
+                                    contentDescription = "${item.title} current icon",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Apps,
+                                    contentDescription = "${item.title} icon",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+                    }
+                    Column {
+                        Text(
+                            text = "Customize Name & Artwork",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = item.displayCategory,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
 
                 IconButton(
@@ -324,6 +365,29 @@ fun CustomizeItemDialog(
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            } else {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { onResetIcon(item.id) },
+                    enabled = canResetIcon,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("customize_reset_icon_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.RestartAlt,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Reset icon to default",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
             }
@@ -579,6 +643,7 @@ fun CustomizeItemDialog(
                                             IconPackOptionCard(
                                                 packPackage = iconPack.packageName,
                                                 icon = icon,
+                                                isSelected = icon.drawableName == selectedPackDrawable,
                                                 onClick = {
                                                     onSelectIconPackIcon(
                                                         item.id,
@@ -686,6 +751,7 @@ fun CustomizeItemDialog(
 private fun IconPackOptionCard(
     packPackage: String,
     icon: IconPackIcon,
+    isSelected: Boolean = false,
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -705,8 +771,9 @@ private fun IconPackOptionCard(
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
             .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant,
+                width = if (isSelected) 2.5.dp else 1.dp,
+                color = if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outlineVariant,
                 shape = RoundedCornerShape(12.dp)
             )
             .clickable(onClick = onClick)
@@ -731,6 +798,23 @@ private fun IconPackOptionCard(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(24.dp)
             )
+        }
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Selected",
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(12.dp)
+                )
+            }
         }
     }
 }

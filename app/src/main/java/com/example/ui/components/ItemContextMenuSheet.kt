@@ -239,12 +239,17 @@ internal fun ContextMenuHeaderBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            val activePoster = if (showNsfwPoster && !item.nsfwPosterUrl.isNullOrBlank()) {
-                item.nsfwPosterUrl
+            val themedIcons = LocalThemedAppIcons.current
+            val previewImage = if (item.isGame) {
+                val activePoster = if (showNsfwPoster && !item.nsfwPosterUrl.isNullOrBlank()) {
+                    item.nsfwPosterUrl
+                } else {
+                    item.posterUrl
+                }
+                activePoster ?: item.heroBannerUrl ?: item.iconUrl
             } else {
-                item.posterUrl
+                resolveAppIconUrl(item, themedIcons) ?: item.heroBannerUrl
             }
-            val previewImage = activePoster ?: item.heroBannerUrl ?: item.iconUrl
             Box(
                 modifier = Modifier
                     .size(54.dp)
@@ -256,7 +261,7 @@ internal fun ContextMenuHeaderBar(
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
                             .data(previewImage)
-                            .crossfade(true)
+                            .crossfade(false)
                             .build(),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,

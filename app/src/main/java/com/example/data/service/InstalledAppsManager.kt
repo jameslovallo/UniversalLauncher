@@ -86,6 +86,12 @@ class InstalledAppsManager(private val context: Context) {
         }.sortedBy { it.title.lowercase() }
     }
 
+    /** Resolves and caches the default launcher icon URL for an installed package. */
+    suspend fun getDefaultIconUrl(packageName: String): String? = withContext(Dispatchers.IO) {
+        val versionStamp = packageVersionStamp(packageName)
+        AppIconStore.iconUrl(context, packageName, versionStamp)
+    }
+
     /**
      * Launchable weather apps, used by the favorites weather shortcut and its Settings
      * picker. There is no public weather intent in the Android SDK, so the list is built
