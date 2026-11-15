@@ -1179,13 +1179,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val launchIntent = lunaGame.launchUrl
                 ?.takeIf { it.isNotBlank() }
                 ?: AmazonLunaService.createLunaLaunchIntentUri()
+            val resolvedArtworkSource = when {
+                resolvedPoster.isNullOrBlank() -> "LUNA"
+                resolvedPoster.contains("steamgriddb", ignoreCase = true) -> "STEAMGRIDDB"
+                lunaGame.posterUrl != null -> lunaGame.customArtworkSource ?: "LUNA"
+                else -> "STEAMGRIDDB"
+            }
             val userGame = lunaGame.copy(
                 id = "user_luna_$slugKey",
                 type = GameType.AMAZON_LUNA,
                 isGame = true,
                 launchUrl = launchIntent,
                 posterUrl = resolvedPoster,
-                customArtworkSource = if (resolvedPoster != null) "STEAMGRIDDB" else "LUNA"
+                customArtworkSource = resolvedArtworkSource
             )
             repository.insertUserGame(userGame)
             closeAddModal()

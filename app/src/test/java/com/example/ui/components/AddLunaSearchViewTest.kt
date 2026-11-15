@@ -73,6 +73,7 @@ class AddLunaSearchViewTest {
         composeRule.onNodeWithText("Free with Amazon Prime (2)").assertIsDisplayed()
         composeRule.onNodeWithText("Fortnite").assertIsDisplayed()
         composeRule.onNodeWithText("Fallout New Vegas").assertIsDisplayed()
+        composeRule.onNodeWithText("LUNA").assertDoesNotExist()
 
         // Search filters from full catalog
         composeRule.onNodeWithTag("add_luna_search").performTextInput("Control")
@@ -81,6 +82,7 @@ class AddLunaSearchViewTest {
 
         composeRule.onNodeWithTag("luna_prime_header").assertDoesNotExist()
         composeRule.onNodeWithText("Control Ultimate Edition").assertIsDisplayed()
+        composeRule.onNodeWithText("LUNA").assertDoesNotExist()
         composeRule.onNodeWithTag("luna_game_luna_control").performClick()
         composeRule.waitForIdle()
 

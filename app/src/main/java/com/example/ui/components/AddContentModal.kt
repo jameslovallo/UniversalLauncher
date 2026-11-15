@@ -1,5 +1,8 @@
 package com.example.ui.components
 
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -67,6 +70,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -74,11 +79,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.size.Precision
 import com.example.data.model.GameItem
 import com.example.data.service.AmazonLunaService
+import com.example.data.service.AppIconStore
 import com.example.data.service.GeForceNowService
+import com.example.data.service.InstalledAppsManager
+import com.example.data.service.MOONLIGHT_PACKAGES
 import com.example.ui.viewmodel.AddModalSubView
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 @Composable
 fun AddContentModal(
@@ -200,6 +212,9 @@ fun AddContentModal(
     }
 }
 
+private const val GEFORCE_NOW_PACKAGE_NAME = "com.nvidia.geforcenow"
+private const val PLAY_STORE_PACKAGE_NAME = "com.android.vending"
+
 private data class DiscoverOption(
     val icon: ImageVector,
     val title: String,
@@ -207,20 +222,86 @@ private data class DiscoverOption(
     val onClick: () -> Unit
 )
 
+internal suspend fun resolveDiscoverOptionIcons(
+    context: Context,
+    themedIcons: Map<String, String>
+): Map<String, String> = withContext(Dispatchers.IO) {
+    val installedAppsManager = InstalledAppsManager(context)
+    val lunaPackages = buildList {
+        add(AmazonLunaService.LUNA_PACKAGE_NAME)
+        installedAppsManager.findInstalledLunaPwaPackage()?.let(::add)
+    }
+    val mappings = listOf(
+        "option_add_luna" to lunaPackages,
+        "option_add_gfn" to listOf(GEFORCE_NOW_PACKAGE_NAME),
+        "option_add_moonlight" to MOONLIGHT_PACKAGES,
+        "option_play_store" to listOf(PLAY_STORE_PACKAGE_NAME)
+    )
+    buildMap {
+        for ((tag, candidates) in mappings) {
+            val url = resolveFirstInstalledPackageIconUrl(context, candidates, themedIcons)
+            if (!url.isNullOrBlank()) {
+                put(tag, url)
+            }
+        }
+    }
+}
+
+private suspend fun resolveFirstInstalledPackageIconUrl(
+    context: Context,
+    packages: List<String>,
+    themedIcons: Map<String, String>
+): String? {
+    val pm = context.packageManager
+    for (pkg in packages) {
+        val packageInfo = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(pkg, PackageManager.PackageInfoFlags.of(0L))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(pkg, 0)
+            }
+        } catch (_: PackageManager.NameNotFoundException) {
+            null
+        } catch (_: Exception) {
+            null
+        } ?: continue
+
+        val themedUrl = themedIcons["app_$pkg"] ?: themedIcons[pkg]
+        if (!themedUrl.isNullOrBlank()) return themedUrl
+
+        val iconUrl = AppIconStore.iconUrl(context, pkg, packageInfo.lastUpdateTime)
+        if (!iconUrl.isNullOrBlank()) return iconUrl
+    }
+    return null
+}
+
 @Composable
-private fun OptionsSelectView(
+internal fun OptionsSelectView(
     onSelectPlayStore: () -> Unit,
     onSelectGfn: () -> Unit,
     onSelectLuna: () -> Unit,
     onSelectMoonlight: () -> Unit,
-    onSelectWebUrl: () -> Unit
+    onSelectWebUrl: () -> Unit,
+    iconResolver: suspend (Context, Map<String, String>) -> Map<String, String> = { ctx, themed ->
+        resolveDiscoverOptionIcons(ctx, themed)
+    }
 ) {
+    val context = LocalContext.current
+    val themedIcons = LocalThemedAppIcons.current
+    var resolvedIcons by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+
+    LaunchedEffect(context, themedIcons) {
+        resolvedIcons = runCatching { iconResolver(context, themedIcons) }
+            .getOrDefault(emptyMap())
+    }
+
     val options = listOf(
         DiscoverOption(
-            icon = Icons.Default.Storefront,
-            title = "Play Store",
-            testTag = "option_play_store",
-            onClick = onSelectPlayStore
+            icon = Icons.Default.VideogameAsset,
+            title = "Amazon Luna",
+            testTag = "option_add_luna",
+            onClick = onSelectLuna
         ),
         DiscoverOption(
             icon = Icons.Default.Cloud,
@@ -229,16 +310,16 @@ private fun OptionsSelectView(
             onClick = onSelectGfn
         ),
         DiscoverOption(
-            icon = Icons.Default.VideogameAsset,
-            title = "Amazon Luna",
-            testTag = "option_add_luna",
-            onClick = onSelectLuna
-        ),
-        DiscoverOption(
             icon = Icons.Default.Nightlight,
             title = "Moonlight",
             testTag = "option_add_moonlight",
             onClick = onSelectMoonlight
+        ),
+        DiscoverOption(
+            icon = Icons.Default.Storefront,
+            title = "Play Store",
+            testTag = "option_play_store",
+            onClick = onSelectPlayStore
         ),
         DiscoverOption(
             icon = Icons.Default.Link,
@@ -274,6 +355,7 @@ private fun OptionsSelectView(
                             rowItems.forEach { option ->
                                 OptionCard(
                                     icon = option.icon,
+                                    appIconUrl = resolvedIcons[option.testTag],
                                     title = option.title,
                                     onClick = option.onClick,
                                     testTag = option.testTag,
@@ -289,6 +371,7 @@ private fun OptionsSelectView(
                     options.forEach { option ->
                         OptionCard(
                             icon = option.icon,
+                            appIconUrl = resolvedIcons[option.testTag],
                             title = option.title,
                             onClick = option.onClick,
                             testTag = option.testTag,
@@ -304,12 +387,18 @@ private fun OptionsSelectView(
 @Composable
 private fun OptionCard(
     icon: ImageVector,
+    appIconUrl: String?,
     title: String,
     onClick: () -> Unit,
     testTag: String,
     modifier: Modifier = Modifier
 ) {
     val shape = RoundedCornerShape(20.dp)
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val sizePx = remember(density) { with(density) { 54.dp.roundToPx().coerceAtLeast(1) } }
+    var imageFailed by remember(appIconUrl) { mutableStateOf(false) }
+
     Card(
         onClick = onClick,
         colors = CardDefaults.cardColors(
@@ -328,19 +417,41 @@ private fun OptionCard(
                 .padding(20.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(54.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
+            if (!appIconUrl.isNullOrBlank() && !imageFailed) {
+                val request = remember(context, appIconUrl, sizePx) {
+                    ImageRequest.Builder(context)
+                        .data(appIconUrl)
+                        .size(sizePx, sizePx)
+                        .precision(Precision.INEXACT)
+                        .crossfade(false)
+                        .build()
+                }
+                AsyncImage(
+                    model = request,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(28.dp)
+                    contentScale = ContentScale.Fit,
+                    onError = { imageFailed = true },
+                    modifier = Modifier
+                        .size(54.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .testTag("${testTag}_app_icon")
                 )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(54.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .testTag("${testTag}_symbolic_icon"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(16.dp))
@@ -427,18 +538,28 @@ private fun AddShortcutFormView(
 }
 
 @Composable
-private fun AddGfnSearchView(
-    onGameSelected: (GameItem) -> Unit
+internal fun AddGfnSearchView(
+    onGameSelected: (GameItem) -> Unit,
+    catalogLoader: suspend (String) -> GeForceNowService.GfnBrowseResult = { query ->
+        GeForceNowService.browseOrSearchCatalog(query)
+    }
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var gfnTitles by remember { mutableStateOf<List<GameItem>>(emptyList()) }
+    var defaultClassification by remember {
+        mutableStateOf(GeForceNowService.GfnDefaultClassification.RECENTLY_ADDED)
+    }
     var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(searchQuery) {
         // Debounce so typing doesn't trigger a burst of catalog/artwork requests.
         isLoading = true
         if (searchQuery.isNotBlank()) delay(300)
-        gfnTitles = GeForceNowService.searchOrSyncCatalog(searchQuery)
+        val result = runCatching { catalogLoader(searchQuery) }.getOrNull()
+        gfnTitles = result?.games.orEmpty()
+        if (result != null) {
+            defaultClassification = result.classification
+        }
         isLoading = false
     }
 
@@ -459,7 +580,24 @@ private fun AddGfnSearchView(
             modifier = Modifier.fillMaxWidth().testTag("add_gfn_search")
         )
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        if (searchQuery.isBlank() && !isLoading && gfnTitles.isNotEmpty()) {
+            Text(
+                text = when (defaultClassification) {
+                    GeForceNowService.GfnDefaultClassification.RECENTLY_ADDED ->
+                        "Recently added to GeForce NOW (${gfnTitles.size})"
+                    GeForceNowService.GfnDefaultClassification.CATALOG_FALLBACK ->
+                        "GeForce NOW Catalog (${gfnTitles.size})"
+                },
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(bottom = 8.dp)
+                    .testTag("gfn_default_header")
+            )
+        }
 
         if (isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -467,7 +605,11 @@ private fun AddGfnSearchView(
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "Loading GeForce NOW titles & box art...",
+                        text = if (searchQuery.isBlank()) {
+                            "Loading recently added GeForce NOW games..."
+                        } else {
+                            "Searching GeForce NOW titles & box art..."
+                        },
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -516,7 +658,8 @@ private fun AddGfnSearchView(
                         modifier = Modifier
                             .clip(RoundedCornerShape(14.dp))
                             .clickable { onGameSelected(gfnGame) }
-                            .padding(4.dp),
+                            .padding(4.dp)
+                            .testTag("gfn_game_${gfnGame.id}"),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Card(
@@ -526,26 +669,23 @@ private fun AddGfnSearchView(
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                         ) {
-                            Box(modifier = Modifier.fillMaxSize()) {
-                                AsyncImage(
-                                    model = gfnGame.posterUrl ?: gfnGame.heroBannerUrl,
-                                    contentDescription = gfnGame.title,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(6.dp)
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(MaterialTheme.colorScheme.primary)
-                                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "GFN",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onPrimary
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                val artUrl = gfnGame.posterUrl ?: gfnGame.heroBannerUrl
+                                var imageFailed by remember(artUrl) { mutableStateOf(false) }
+                                if (!artUrl.isNullOrBlank() && !imageFailed) {
+                                    AsyncImage(
+                                        model = artUrl,
+                                        contentDescription = gfnGame.title,
+                                        contentScale = ContentScale.Crop,
+                                        onError = { imageFailed = true },
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Cloud,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(36.dp)
                                     )
                                 }
                             }
@@ -795,21 +935,6 @@ private fun LunaPosterOptionItem(
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(36.dp)
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(MaterialTheme.colorScheme.primary)
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "LUNA",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimary
                     )
                 }
             }

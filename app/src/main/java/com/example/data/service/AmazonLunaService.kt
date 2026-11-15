@@ -6,19 +6,28 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.URI
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 object AmazonLunaService {
     const val LUNA_BASE_URL = "https://luna.amazon.com"
     const val LUNA_PACKAGE_NAME = "com.amazon.spiderpork"
+
+    internal const val TEMPO_GET_PAGE_URL =
+        "https://proxy-prod.tempo.digital.a2z.com/getPage"
+    private const val TEMPO_CLIENT_REACT_VERSION = "1.0.37488.0"
+    private const val TEMPO_MARKETPLACE_ID = "ATVPDKIKX0DER"
+    private const val TEMPO_SEARCH_PAGE_SIZE = 60
 
     private const val PRIME_WP_JSON_URL =
         "https://clouddosage.com/wp-json/wp/v2/gamelists?slug=free-games-on-amazon-luna-with-amazon-prime"
@@ -34,10 +43,11 @@ object AmazonLunaService {
     private const val CATALOG_PAGE_URL =
         "https://clouddosage.com/gamelists/amazon-luna-games/"
 
-    private const val USER_AGENT =
-        "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+    private const val DESKTOP_USER_AGENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     private const val CACHE_TTL_MS: Long = 24 * 60 * 60 * 1000L
     private const val MAX_CONCURRENT_POSTER_FETCHES = 4
+    private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)
@@ -66,34 +76,52 @@ object AmazonLunaService {
         val slug: String,
         val webUrl: String = LUNA_BASE_URL,
         val imageUrl: String? = null,
+        val heroBannerUrl: String? = null,
+        val publisher: String? = null,
+        val genres: List<String> = emptyList(),
+        val releaseYear: String? = null,
         val includedWithPrime: Boolean = false
     ) {
-        fun toGameItem(posterOverride: String? = null): GameItem = GameItem(
-            id = "luna_$id",
-            title = title,
-            type = GameType.AMAZON_LUNA,
-            isGame = true,
-            launchUrl = createLunaLaunchIntentUri(webUrl),
-            posterUrl = posterOverride ?: posterCache[title.lowercase(Locale.ROOT)] ?: imageUrl,
-            heroBannerUrl = null,
-            genre = if (includedWithPrime) "Included with Prime" else "Amazon Luna",
-            publisher = "Amazon Luna",
-            description = if (includedWithPrime) {
-                "Play $title on Amazon Luna (included with Amazon Prime)."
-            } else {
-                "Stream $title on Amazon Luna."
-            },
-            tags = listOfNotNull(
-                "Amazon Luna",
-                "Cloud",
-                if (includedWithPrime) "Amazon Prime" else null
-            ).joinToString(", "),
-            customArtworkSource = if (posterOverride != null || posterCache.containsKey(title.lowercase(Locale.ROOT))) {
-                "STEAMGRIDDB"
-            } else {
-                "LUNA"
+        fun toGameItem(posterOverride: String? = null): GameItem {
+            val cachedPoster = posterCache[title.lowercase(Locale.ROOT)]
+            val resolvedPoster = posterOverride ?: imageUrl ?: cachedPoster
+            val artworkSource = when {
+                posterOverride != null -> "STEAMGRIDDB"
+                !imageUrl.isNullOrBlank() -> "LUNA"
+                cachedPoster != null -> "STEAMGRIDDB"
+                else -> "LUNA"
             }
-        )
+            val resolvedGenre = when {
+                genres.isNotEmpty() -> genres.joinToString(", ")
+                includedWithPrime -> "Included with Prime"
+                else -> "Amazon Luna"
+            }
+            val resolvedPublisher = publisher?.takeIf { it.isNotBlank() } ?: "Amazon Luna"
+            val yearSuffix = releaseYear?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+            return GameItem(
+                id = "luna_$id",
+                title = title,
+                type = GameType.AMAZON_LUNA,
+                isGame = true,
+                launchUrl = createLunaLaunchIntentUri(webUrl),
+                posterUrl = resolvedPoster,
+                heroBannerUrl = heroBannerUrl,
+                genre = resolvedGenre,
+                publisher = resolvedPublisher,
+                description = if (includedWithPrime) {
+                    "Play $title$yearSuffix on Amazon Luna (included with Amazon Prime)."
+                } else {
+                    "Stream $title$yearSuffix on Amazon Luna."
+                },
+                tags = buildList {
+                    add("Amazon Luna")
+                    add("Cloud")
+                    if (includedWithPrime) add("Amazon Prime")
+                    genres.forEach { if (it.isNotBlank()) add(it) }
+                }.distinct().joinToString(", "),
+                customArtworkSource = artworkSource
+            )
+        }
     }
 
     /**
@@ -164,8 +192,9 @@ object AmazonLunaService {
     }
 
     /**
-     * Searches the live Amazon Luna catalog (combining the Prime-included list and full
-     * Luna catalog). Returns all Prime-included games when [query] is blank.
+     * Searches the live Amazon Luna catalog via Luna's Tempo search API and merges any
+     * local substring matches from the cached Prime-included and browse catalogs.
+     * Returns all Prime-included games when [query] is blank.
      */
     suspend fun searchCatalog(query: String?): Result<List<GameItem>> = withContext(Dispatchers.IO) {
         val trimmed = query?.trim().orEmpty()
@@ -173,23 +202,49 @@ object AmazonLunaService {
             return@withContext getPrimeIncludedGames()
         }
         runCatching {
-            val fullCatalog = runCatching { fetchFullCatalogEntries() }.getOrDefault(emptyList())
-            val primeEntries = runCatching { fetchPrimeCatalogEntries() }.getOrDefault(emptyList())
-            val merged = mergeCatalogEntries(primeEntries = primeEntries, fullEntries = fullCatalog)
-            if (merged.isEmpty()) {
-                throw IOException("Could not load Amazon Luna catalog")
+            val tempoSearchResult = runCatching { fetchTempoSearchEntries(trimmed) }
+            val primeEntriesResult = runCatching { fetchPrimeCatalogEntries() }
+            val fullCatalogResult = runCatching { fetchFullCatalogEntries() }
+
+            if (tempoSearchResult.isFailure &&
+                primeEntriesResult.isFailure &&
+                fullCatalogResult.isFailure
+            ) {
+                throw IOException(
+                    "Could not load Amazon Luna catalog",
+                    tempoSearchResult.exceptionOrNull() ?: primeEntriesResult.exceptionOrNull()
+                )
             }
+
+            val primeEntries = primeEntriesResult.getOrDefault(emptyList())
+            val fullCatalog = fullCatalogResult.getOrDefault(emptyList())
+            val primeIds = primeEntries.map { it.id }.toSet()
+            val primeTitles = primeEntries.map { it.title.lowercase(Locale.ROOT) }.toSet()
+
+            val searchEntries = tempoSearchResult.getOrDefault(emptyList()).map { entry ->
+                val isPrime = entry.id in primeIds ||
+                    entry.title.lowercase(Locale.ROOT) in primeTitles
+                if (isPrime) entry.copy(includedWithPrime = true) else entry
+            }
+
             val lower = trimmed.lowercase(Locale.ROOT)
-            merged.filter { entry ->
-                entry.title.lowercase(Locale.ROOT).contains(lower) ||
-                    entry.slug.lowercase(Locale.ROOT).contains(lower)
-            }.map { it.toGameItem() }
+            val localMatches = mergeCatalogEntries(primeEntries = primeEntries, fullEntries = fullCatalog)
+                .filter { entry ->
+                    entry.title.lowercase(Locale.ROOT).contains(lower) ||
+                        entry.slug.lowercase(Locale.ROOT).contains(lower)
+                }
+
+            val combined = mergeOrderedCatalogEntries(
+                primaryEntries = searchEntries,
+                secondaryEntries = localMatches
+            )
+            combined.map { it.toGameItem() }
         }
     }
 
     /**
      * Resolves and caches a portrait poster URL from SteamGridDB for a Luna title.
-     * Used lazily by Discover grid cards and before saving a game to the library.
+     * Used lazily by Discover grid cards when a fallback source lacks artwork.
      */
     suspend fun resolvePosterForTitle(title: String, allowFallbackSearch: Boolean = false): String? =
         withContext(Dispatchers.IO) {
@@ -220,16 +275,27 @@ object AmazonLunaService {
             }
         }
 
-        val wpEntries = fetchFirstNonEmpty(
-            listOf(PRIME_WP_JSON_URL, PRIME_FALLBACK_WP_JSON_URL)
-        ) { url ->
-            val body = executeGet(url, accept = "application/json") ?: return@fetchFirstNonEmpty emptyList()
-            parseWpGamelistJson(body, includedWithPrime = true)
-        }
-        val entries = wpEntries.ifEmpty {
-            fetchFirstNonEmpty(listOf(PRIME_PAGE_URL, PRIME_FALLBACK_PAGE_URL)) { url ->
-                val html = executeGet(url, accept = "text/html") ?: return@fetchFirstNonEmpty emptyList()
-                parseGamelistHtml(html, includedWithPrime = true, isFullDocument = true)
+        val tempoEntries = runCatching {
+            val body = executeTempoPost(
+                buildTempoBrowseRequestBody(query = "included_with_prime", sort = "TITLE_A_TO_Z")
+            ) ?: return@runCatching emptyList()
+            parseTempoGetPageResponse(body, includedWithPrime = true)
+        }.getOrDefault(emptyList())
+
+        val entries = tempoEntries.ifEmpty {
+            val wpEntries = fetchFirstNonEmpty(
+                listOf(PRIME_WP_JSON_URL, PRIME_FALLBACK_WP_JSON_URL)
+            ) { url ->
+                val body = executeGet(url, accept = "application/json")
+                    ?: return@fetchFirstNonEmpty emptyList()
+                parseWpGamelistJson(body, includedWithPrime = true)
+            }
+            wpEntries.ifEmpty {
+                fetchFirstNonEmpty(listOf(PRIME_PAGE_URL, PRIME_FALLBACK_PAGE_URL)) { url ->
+                    val html = executeGet(url, accept = "text/html")
+                        ?: return@fetchFirstNonEmpty emptyList()
+                    parseGamelistHtml(html, includedWithPrime = true, isFullDocument = true)
+                }
             }
         }
 
@@ -249,19 +315,272 @@ object AmazonLunaService {
             }
         }
 
-        val wpEntries = executeGet(CATALOG_WP_JSON_URL, accept = "application/json")
-            ?.let { parseWpGamelistJson(it, includedWithPrime = false) }
-            .orEmpty()
-        val entries = wpEntries.ifEmpty {
-            executeGet(CATALOG_PAGE_URL, accept = "text/html")
-                ?.let { parseGamelistHtml(it, includedWithPrime = false, isFullDocument = true) }
+        val tempoEntries = runCatching {
+            val body = executeTempoPost(
+                buildTempoBrowseRequestBody(query = "all_games", sort = "TITLE_A_TO_Z")
+            ) ?: return@runCatching emptyList()
+            parseTempoGetPageResponse(body, includedWithPrime = false)
+        }.getOrDefault(emptyList())
+
+        val entries = tempoEntries.ifEmpty {
+            val wpEntries = executeGet(CATALOG_WP_JSON_URL, accept = "application/json")
+                ?.let { parseWpGamelistJson(it, includedWithPrime = false) }
                 .orEmpty()
+            wpEntries.ifEmpty {
+                executeGet(CATALOG_PAGE_URL, accept = "text/html")
+                    ?.let { parseGamelistHtml(it, includedWithPrime = false, isFullDocument = true) }
+                    .orEmpty()
+            }
         }
         if (entries.isNotEmpty()) {
             cachedFullCatalog = entries
             fullCatalogTimestamp = now
         }
         return entries
+    }
+
+    private fun fetchTempoSearchEntries(query: String): List<LunaCatalogEntry> {
+        val body = executeTempoPost(
+            buildTempoSearchRequestBody(
+                query = query,
+                pageSize = TEMPO_SEARCH_PAGE_SIZE,
+                startIndex = 0
+            )
+        ) ?: throw IOException("Amazon Luna search request failed")
+        return parseTempoGetPageResponse(body, includedWithPrime = false)
+    }
+
+    private fun buildTempoBrowseRequestBody(
+        query: String,
+        sort: String = "TITLE_A_TO_Z"
+    ): String = buildTempoBasePayload().apply {
+        put(
+            "pageContext",
+            JSONObject().apply {
+                put("pageType", "multistate_browse_results")
+                put("pageId", "default")
+            }
+        )
+        put(
+            "searchContext",
+            JSONObject().apply {
+                put("query", query)
+                put("sort", sort)
+                put("filtersList", JSONArray())
+            }
+        )
+    }.toString()
+
+    private fun buildTempoSearchRequestBody(
+        query: String,
+        pageSize: Int = TEMPO_SEARCH_PAGE_SIZE,
+        startIndex: Int = 0
+    ): String = buildTempoBasePayload().apply {
+        put(
+            "pageContext",
+            JSONObject().apply {
+                put("pageType", "multistate_search_results")
+                put("pageId", "default")
+            }
+        )
+        put(
+            "searchContext",
+            JSONObject().apply {
+                put("query", query)
+                put("sort", "RELEVANCE")
+                put(
+                    "pagination",
+                    JSONObject().apply {
+                        put("pageSize", pageSize)
+                        put("startIndex", startIndex)
+                    }
+                )
+            }
+        )
+    }.toString()
+
+    private fun buildTempoBasePayload(): JSONObject = JSONObject().apply {
+        put("featureScheme", "WEB_V1")
+        put(
+            "clientContext",
+            JSONObject().apply {
+                put(
+                    "browserMetadata",
+                    JSONObject().apply {
+                        put("browserClientRole", "BROWSER")
+                        put("browserType", "Chrome")
+                        put("browserVersion", "131.0.0.0")
+                        put("deviceModel", "unknown")
+                        put("deviceType", "unknown")
+                        put("osName", "Windows")
+                        put("osVersion", "10")
+                    }
+                )
+                put("refMarker", JSONObject.NULL)
+                put("referrer", JSONObject.NULL)
+            }
+        )
+        put(
+            "inputContext",
+            JSONObject().apply {
+                put("gamepadTypes", JSONArray())
+            }
+        )
+        put("dynamicFeatures", JSONArray())
+    }
+
+    private fun executeTempoPost(jsonPayload: String): String? {
+        val request = Request.Builder()
+            .url(TEMPO_GET_PAGE_URL)
+            .post(jsonPayload.toRequestBody(JSON_MEDIA_TYPE))
+            .addHeader("Accept", "application/json")
+            .addHeader("Accept-Language", "en-US")
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Origin", LUNA_BASE_URL)
+            .addHeader("Referer", "$LUNA_BASE_URL/")
+            .addHeader("User-Agent", DESKTOP_USER_AGENT)
+            .addHeader("x-amz-locale", "en_US")
+            .addHeader("x-amz-marketplace-id", TEMPO_MARKETPLACE_ID)
+            .addHeader("x-amz-platform", "web")
+            .addHeader("x-amz-device-type", "browser")
+            .addHeader("x-amz-client-version", "-")
+            .addHeader("x-amz-react-version", TEMPO_CLIENT_REACT_VERSION)
+            .addHeader("x-amz-country-of-residence", "US")
+            .addHeader("x-amzn-RequestId", UUID.randomUUID().toString())
+            .build()
+        return try {
+            httpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) null else response.body?.string()
+            }
+        } catch (_: IOException) {
+            null
+        }
+    }
+
+    internal fun parseTempoGetPageResponse(
+        jsonBody: String,
+        includedWithPrime: Boolean
+    ): List<LunaCatalogEntry> {
+        val trimmed = jsonBody.trim()
+        if (trimmed.isEmpty()) return emptyList()
+        val root = runCatching { JSONObject(trimmed) }.getOrNull() ?: return emptyList()
+        val mainContent = root
+            .optJSONObject("pageMemberGroups")
+            ?.optJSONObject("mainContent")
+            ?: return emptyList()
+        val topWidgets = mainContent.optJSONArray("widgets") ?: return emptyList()
+
+        val cardWidgets = mutableListOf<JSONObject>()
+        collectCardWidgets(topWidgets, cardWidgets, depth = 0)
+
+        val entries = LinkedHashMap<String, LunaCatalogEntry>()
+        for (widget in cardWidgets) {
+            val rawPresentation = widget.optString("presentationData")
+            if (rawPresentation.isBlank()) continue
+            val presentation = runCatching { JSONObject(rawPresentation) }.getOrNull() ?: continue
+
+            val rawTitle = presentation.optString("title")
+            val title = rawTitle.replace(WHITESPACE_REGEX, " ").trim()
+                .takeIf { it.length in 2..200 } ?: continue
+
+            val targetPath = widget.optJSONArray("actions")
+                ?.optJSONObject(0)
+                ?.optString("target")
+                ?.trim()
+                .orEmpty()
+
+            val imagePortrait = presentation.optString("imagePortrait")
+                .trim()
+                .takeIf { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+            val imageLandscape = presentation.optString("imageLandscape")
+                .trim()
+                .takeIf { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+            val gameId = presentation.optString("gameId").trim()
+
+            // Skip non-game promotional/header widgets that happen to carry a title.
+            val isGameCard = targetPath.contains("/game/") ||
+                gameId.isNotEmpty() ||
+                imagePortrait != null
+            if (!isGameCard) continue
+
+            val webUrl = when {
+                targetPath.startsWith("https://", ignoreCase = true) ||
+                    targetPath.startsWith("http://", ignoreCase = true) -> targetPath
+                targetPath.startsWith("/") -> "$LUNA_BASE_URL$targetPath"
+                else -> LUNA_BASE_URL
+            }
+
+            val pathSegments = targetPath
+                .substringBefore('?')
+                .trim('/')
+                .split('/')
+                .filter { it.isNotBlank() }
+
+            val slug = when {
+                pathSegments.size >= 2 && pathSegments[0].equals("game", ignoreCase = true) ->
+                    pathSegments[1]
+                else -> slugify(title)
+            }
+            val entryId = when {
+                pathSegments.size >= 3 && pathSegments[0].equals("game", ignoreCase = true) ->
+                    pathSegments.last()
+                else -> slug
+            }
+
+            val hoverDetails = presentation.optJSONObject("hoverDetails")
+            val publisher = hoverDetails?.optString("publishersText")?.trim()?.takeIf { it.isNotBlank() }
+            val releaseYear = presentation.optString("releaseYear").trim().takeIf { it.isNotBlank() }
+            val genreTags = buildList {
+                val genresArray = presentation.optJSONArray("genreTags")
+                if (genresArray != null) {
+                    for (i in 0 until genresArray.length()) {
+                        val tag = genresArray.optString(i).trim()
+                        if (tag.isNotBlank()) add(tag)
+                    }
+                }
+            }
+
+            val entry = LunaCatalogEntry(
+                id = entryId,
+                title = title,
+                slug = slug,
+                webUrl = webUrl,
+                imageUrl = imagePortrait,
+                heroBannerUrl = imageLandscape,
+                publisher = publisher,
+                genres = genreTags,
+                releaseYear = releaseYear,
+                includedWithPrime = includedWithPrime
+            )
+
+            val dedupeKey = title.lowercase(Locale.ROOT)
+            val existing = entries[dedupeKey]
+            entries[dedupeKey] = if (existing == null) {
+                entry
+            } else {
+                mergeEntryPair(existing, entry)
+            }
+        }
+
+        return entries.values.toList()
+    }
+
+    private fun collectCardWidgets(
+        widgets: JSONArray,
+        out: MutableList<JSONObject>,
+        depth: Int
+    ) {
+        if (depth > 5) return
+        for (i in 0 until widgets.length()) {
+            val widget = widgets.optJSONObject(i) ?: continue
+            if (widget.optString("presentationData").isNotBlank()) {
+                out += widget
+            }
+            val nested = widget.optJSONArray("widgets")
+            if (nested != null && nested.length() > 0) {
+                collectCardWidgets(nested, out, depth + 1)
+            }
+        }
     }
 
     private inline fun fetchFirstNonEmpty(
@@ -279,7 +598,7 @@ object AmazonLunaService {
         val request = Request.Builder()
             .url(url)
             .addHeader("Accept", accept)
-            .addHeader("User-Agent", USER_AGENT)
+            .addHeader("User-Agent", DESKTOP_USER_AGENT)
             .build()
         return try {
             httpClient.newCall(request).execute().use { response ->
@@ -296,19 +615,53 @@ object AmazonLunaService {
     ): List<LunaCatalogEntry> {
         val byKey = LinkedHashMap<String, LunaCatalogEntry>()
         for (entry in primeEntries) {
-            byKey[entry.title.lowercase(Locale.ROOT)] = entry.copy(includedWithPrime = true)
+            val key = entry.title.lowercase(Locale.ROOT)
+            val flagged = entry.copy(includedWithPrime = true)
+            val existing = byKey[key]
+            byKey[key] = if (existing == null) flagged else mergeEntryPair(existing, flagged)
         }
         for (entry in fullEntries) {
             val key = entry.title.lowercase(Locale.ROOT)
             val existing = byKey[key]
-            if (existing == null) {
-                byKey[key] = entry
-            } else if (existing.imageUrl.isNullOrBlank() && !entry.imageUrl.isNullOrBlank()) {
-                byKey[key] = existing.copy(imageUrl = entry.imageUrl)
-            }
+            byKey[key] = if (existing == null) entry else mergeEntryPair(existing, entry)
         }
         return byKey.values.toList()
     }
+
+    internal fun mergeOrderedCatalogEntries(
+        primaryEntries: List<LunaCatalogEntry>,
+        secondaryEntries: List<LunaCatalogEntry>
+    ): List<LunaCatalogEntry> {
+        val byKey = LinkedHashMap<String, LunaCatalogEntry>()
+        for (entry in primaryEntries) {
+            val key = entry.title.lowercase(Locale.ROOT)
+            val existing = byKey[key]
+            byKey[key] = if (existing == null) entry else mergeEntryPair(existing, entry)
+        }
+        for (entry in secondaryEntries) {
+            val key = entry.title.lowercase(Locale.ROOT)
+            val existing = byKey[key]
+            byKey[key] = if (existing == null) entry else mergeEntryPair(existing, entry)
+        }
+        return byKey.values.toList()
+    }
+
+    private fun mergeEntryPair(
+        first: LunaCatalogEntry,
+        second: LunaCatalogEntry
+    ): LunaCatalogEntry = first.copy(
+        webUrl = if (first.webUrl == LUNA_BASE_URL && second.webUrl != LUNA_BASE_URL) {
+            second.webUrl
+        } else {
+            first.webUrl
+        },
+        imageUrl = first.imageUrl?.takeIf { it.isNotBlank() } ?: second.imageUrl,
+        heroBannerUrl = first.heroBannerUrl?.takeIf { it.isNotBlank() } ?: second.heroBannerUrl,
+        publisher = first.publisher?.takeIf { it.isNotBlank() } ?: second.publisher,
+        genres = first.genres.ifEmpty { second.genres },
+        releaseYear = first.releaseYear?.takeIf { it.isNotBlank() } ?: second.releaseYear,
+        includedWithPrime = first.includedWithPrime || second.includedWithPrime
+    )
 
     internal fun parseWpGamelistJson(
         jsonBody: String,

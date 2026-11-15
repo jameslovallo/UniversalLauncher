@@ -83,6 +83,9 @@
         <package android:name="com.limelight.root" />
         <!-- Amazon Luna native app, PWA/WebAPK handlers, and browsers. -->
         <package android:name="com.amazon.spiderpork" />
+        <!-- GeForce NOW and Google Play Store for Discover app icons and launching. -->
+        <package android:name="com.nvidia.geforcenow" />
+        <package android:name="com.android.vending" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.BROWSABLE" />

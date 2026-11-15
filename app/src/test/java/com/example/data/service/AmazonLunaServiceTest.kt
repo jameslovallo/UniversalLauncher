@@ -144,6 +144,190 @@ class AmazonLunaServiceTest {
     }
 
     @Test
+    fun `parseTempoGetPageResponse extracts missing games like Star Wars Galactic Racer with portrait and landscape art`() {
+        val presentationGalacticRacer = org.json.JSONObject().apply {
+            put("title", "STAR WARS: Galactic Racer™")
+            put("imagePortrait", "https://m.media-amazon.com/images/I/81wxZcCl3dL.png")
+            put("imageLandscape", "https://m.media-amazon.com/images/I/91KCNdndiqL.png")
+            put("gameId", "amzn1.luna.product.bef8572c-d814-4c91-b8e7-980d5c84ad16")
+            put("releaseYear", "2026")
+            put("genreTags", org.json.JSONArray(listOf("Racing")))
+            put(
+                "hoverDetails",
+                org.json.JSONObject().apply {
+                    put("publishersText", "Secret Mode")
+                }
+            )
+        }.toString()
+
+        val presentationHogwarts = org.json.JSONObject().apply {
+            put("title", "Hogwarts Legacy")
+            put("imagePortrait", "https://m.media-amazon.com/images/I/91example.jpg")
+            put("imageLandscape", "https://m.media-amazon.com/images/I/92example.jpg")
+            put("gameId", "amzn1.luna.product.1111")
+            put("releaseYear", "2023")
+            put("genreTags", org.json.JSONArray(listOf("Action", "RPG")))
+        }.toString()
+
+        val promoWidgetPresentation = org.json.JSONObject().apply {
+            put("title", "Included with Prime")
+        }.toString()
+
+        val responseJson = org.json.JSONObject().apply {
+            put(
+                "pageMemberGroups",
+                org.json.JSONObject().apply {
+                    put(
+                        "mainContent",
+                        org.json.JSONObject().apply {
+                            put(
+                                "widgets",
+                                org.json.JSONArray().apply {
+                                    put(
+                                        org.json.JSONObject().apply {
+                                            put("presentationData", promoWidgetPresentation)
+                                            put(
+                                                "actions",
+                                                org.json.JSONArray().apply {
+                                                    put(
+                                                        org.json.JSONObject().apply {
+                                                            put("target", "/store/included-with-prime")
+                                                        }
+                                                    )
+                                                }
+                                            )
+                                        }
+                                    )
+                                    put(
+                                        org.json.JSONObject().apply {
+                                            put("id", "collection_browse_included_with_prime")
+                                            put(
+                                                "widgets",
+                                                org.json.JSONArray().apply {
+                                                    put(
+                                                        org.json.JSONObject().apply {
+                                                            put("presentationData", presentationGalacticRacer)
+                                                            put(
+                                                                "actions",
+                                                                org.json.JSONArray().apply {
+                                                                    put(
+                                                                        org.json.JSONObject().apply {
+                                                                            put(
+                                                                                "target",
+                                                                                "/game/star-wars-galactic-racer/B0HLN4GG5K"
+                                                                            )
+                                                                        }
+                                                                    )
+                                                                }
+                                                            )
+                                                        }
+                                                    )
+                                                    put(
+                                                        org.json.JSONObject().apply {
+                                                            put("presentationData", presentationHogwarts)
+                                                            put(
+                                                                "actions",
+                                                                org.json.JSONArray().apply {
+                                                                    put(
+                                                                        org.json.JSONObject().apply {
+                                                                            put("target", "/game/hogwarts-legacy/B0CL999999")
+                                                                        }
+                                                                    )
+                                                                }
+                                                            )
+                                                        }
+                                                    )
+                                                }
+                                            )
+                                        }
+                                    )
+                                }
+                            )
+                        }
+                    )
+                }
+            )
+        }.toString()
+
+        val entries = AmazonLunaService.parseTempoGetPageResponse(
+            jsonBody = responseJson,
+            includedWithPrime = true
+        )
+
+        assertEquals(2, entries.size)
+        val starWars = entries[0]
+        assertEquals("B0HLN4GG5K", starWars.id)
+        assertEquals("STAR WARS: Galactic Racer™", starWars.title)
+        assertEquals("star-wars-galactic-racer", starWars.slug)
+        assertEquals(
+            "https://luna.amazon.com/game/star-wars-galactic-racer/B0HLN4GG5K",
+            starWars.webUrl
+        )
+        assertEquals("https://m.media-amazon.com/images/I/81wxZcCl3dL.png", starWars.imageUrl)
+        assertEquals("https://m.media-amazon.com/images/I/91KCNdndiqL.png", starWars.heroBannerUrl)
+        assertEquals("Secret Mode", starWars.publisher)
+        assertEquals(listOf("Racing"), starWars.genres)
+        assertEquals("2026", starWars.releaseYear)
+        assertTrue(starWars.includedWithPrime)
+
+        val gameItem = starWars.toGameItem()
+        assertEquals("luna_B0HLN4GG5K", gameItem.id)
+        assertEquals(GameType.AMAZON_LUNA, gameItem.type)
+        assertEquals("https://m.media-amazon.com/images/I/81wxZcCl3dL.png", gameItem.posterUrl)
+        assertEquals("https://m.media-amazon.com/images/I/91KCNdndiqL.png", gameItem.heroBannerUrl)
+        assertEquals("Secret Mode", gameItem.publisher)
+        assertEquals("Racing", gameItem.genre)
+        assertEquals("LUNA", gameItem.customArtworkSource)
+        assertEquals(
+            "intent://luna.amazon.com/game/star-wars-galactic-racer/B0HLN4GG5K#Intent;scheme=https;package=com.amazon.spiderpork;S.browser_fallback_url=https://luna.amazon.com/game/star-wars-galactic-racer/B0HLN4GG5K;end;",
+            gameItem.launchUrl
+        )
+    }
+
+    @Test
+    fun `parseTempoGetPageResponse ignores malformed json and deduplicates ordered search results`() {
+        assertTrue(AmazonLunaService.parseTempoGetPageResponse("not-json", includedWithPrime = true).isEmpty())
+        assertTrue(AmazonLunaService.parseTempoGetPageResponse("{}", includedWithPrime = true).isEmpty())
+
+        val searchEntry = AmazonLunaService.LunaCatalogEntry(
+            id = "B0HLN4GG5K",
+            title = "STAR WARS: Galactic Racer™",
+            slug = "star-wars-galactic-racer",
+            webUrl = "https://luna.amazon.com/game/star-wars-galactic-racer/B0HLN4GG5K",
+            imageUrl = "https://m.media-amazon.com/images/I/81wxZcCl3dL.png",
+            includedWithPrime = false
+        )
+        val primeMatch = AmazonLunaService.LunaCatalogEntry(
+            id = "B0HLN4GG5K",
+            title = "STAR WARS: Galactic Racer™",
+            slug = "star-wars-galactic-racer",
+            webUrl = "https://luna.amazon.com/game/star-wars-galactic-racer/B0HLN4GG5K",
+            imageUrl = null,
+            publisher = "Secret Mode",
+            includedWithPrime = true
+        )
+        val extraLocal = AmazonLunaService.LunaCatalogEntry(
+            id = "B0EXTRA",
+            title = "Star Wars Outlaws",
+            slug = "star-wars-outlaws",
+            webUrl = "https://luna.amazon.com/game/star-wars-outlaws/B0EXTRA",
+            imageUrl = "https://m.media-amazon.com/images/I/outlaws.png",
+            includedWithPrime = false
+        )
+
+        val merged = AmazonLunaService.mergeOrderedCatalogEntries(
+            primaryEntries = listOf(searchEntry),
+            secondaryEntries = listOf(primeMatch, extraLocal)
+        )
+        assertEquals(2, merged.size)
+        assertEquals("STAR WARS: Galactic Racer™", merged[0].title)
+        assertTrue(merged[0].includedWithPrime)
+        assertEquals("https://m.media-amazon.com/images/I/81wxZcCl3dL.png", merged[0].imageUrl)
+        assertEquals("Secret Mode", merged[0].publisher)
+        assertEquals("Star Wars Outlaws", merged[1].title)
+    }
+
+    @Test
     fun `selectLunaPwaPackage prefers webapk domain handler and excludes generic browsers`() {
         val selected = selectLunaPwaPackage(
             lunaHandlerPackages = setOf(

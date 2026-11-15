@@ -21,6 +21,7 @@ object GeForceNowService {
     // GFNDB mirrors NVIDIA's public GeForce NOW catalog. All 6,000+ titles are served
     // as a static JSON index with NVIDIA image URLs that contain the official CMS id.
     private const val GFNDB_INDEX_URL = "https://gfndb.info/data/index.json"
+    private const val GFNDB_CHANGES_URL = "https://gfndb.info/changes"
     private const val GFNDB_GAME_BASE_URL = "https://gfndb.info/game"
 
     // The catalog index only ships square icons. Each game's detail page carries
@@ -31,6 +32,10 @@ object GeForceNowService {
     private val BOX_ART_REGEX = Regex(
         """https://img\.nvidiagrid\.net/apps/[0-9a-fA-F-]+/ZZ/GAME_BOX_ART_01_[0-9a-fA-F-]+\.(?:jpg|png)"""
     )
+    private val ADDED_CHANGE_ROW_REGEX = Regex(
+        """<a\b[^>]*href=["']/game/([^"'/?#]+)/?["'][^>]*data-type=["']added["'][^>]*>|<a\b[^>]*data-type=["']added["'][^>]*href=["']/game/([^"'/?#]+)/?["'][^>]*>""",
+        RegexOption.IGNORE_CASE
+    )
 
     // UTM parameters are required by NVIDIA's GFN Deep Linking SDK.
     private const val UTM_SOURCE = "universal_launcher"
@@ -39,12 +44,28 @@ object GeForceNowService {
     private val httpClient = OkHttpClient.Builder().build()
 
     // Cached catalog so repeated searches don't re-download the full index.
+    @Volatile
     private var cachedCatalog: List<GfnCatalogEntry>? = null
+    @Volatile
     private var cacheTimestamp: Long = 0L
+    @Volatile
+    private var cachedRecentlyAddedSlugs: List<String>? = null
+    @Volatile
+    private var recentlyAddedTimestamp: Long = 0L
     private const val CACHE_TTL_MS: Long = 24 * 60 * 60 * 1000L // 24 hours
 
     // slug -> resolved box-art URL (per-process cache).
     private val boxArtCache = ConcurrentHashMap<String, String>()
+
+    enum class GfnDefaultClassification {
+        RECENTLY_ADDED,
+        CATALOG_FALLBACK
+    }
+
+    data class GfnBrowseResult(
+        val games: List<GameItem>,
+        val classification: GfnDefaultClassification = GfnDefaultClassification.CATALOG_FALLBACK
+    )
 
     /**
      * Canonical GeForce NOW catalog entry.
@@ -197,38 +218,46 @@ object GeForceNowService {
     /**
      * Search titles from the live GeForce NOW catalog.
      *
-     * The GFNDB index only contains square icons, so the real portrait box art is
-     * resolved from each matched title's detail page (bounded + cached).
-     *
-     * Resolution order:
-     * 1. Live catalog match (title / developer / store / slug) — accurate art + deep link.
-     * 2. Not found — returns an empty list rather than fabricating artwork or deep links.
+     * When [query] is blank, lists recently added GeForce NOW titles from GFNDB's changes feed
+     * (falling back to the catalog index when the feed is unavailable).
      */
-    suspend fun searchOrSyncCatalog(query: String? = null): List<GameItem> = withContext(Dispatchers.IO) {
+    suspend fun searchOrSyncCatalog(query: String? = null): List<GameItem> =
+        browseOrSearchCatalog(query).games
+
+    suspend fun browseOrSearchCatalog(query: String? = null): GfnBrowseResult = withContext(Dispatchers.IO) {
         val catalog = fetchCatalog()
 
-        val matches = if (query.isNullOrBlank()) {
-            catalog
+        val (matches, classification) = if (query.isNullOrBlank()) {
+            val recentSlugs = runCatching { fetchRecentlyAddedSlugs() }.getOrDefault(emptyList())
+            val catalogBySlug = catalog.associateBy { it.slug }
+            val recentEntries = recentSlugs.mapNotNull { catalogBySlug[it] }
+                .distinctBy { it.gfnCmsId }
+            if (recentEntries.isNotEmpty()) {
+                recentEntries to GfnDefaultClassification.RECENTLY_ADDED
+            } else {
+                catalog to GfnDefaultClassification.CATALOG_FALLBACK
+            }
         } else {
             val lowercaseQuery = query.lowercase().trim()
-            catalog.filter { entry ->
+            val filtered = catalog.filter { entry ->
                 entry.title.lowercase().contains(lowercaseQuery) ||
-                        entry.slug.lowercase().contains(lowercaseQuery) ||
-                        entry.developer?.lowercase()?.contains(lowercaseQuery) == true ||
-                        entry.stores.any { it.lowercase().contains(lowercaseQuery) }
+                    entry.slug.lowercase().contains(lowercaseQuery) ||
+                    entry.developer?.lowercase()?.contains(lowercaseQuery) == true ||
+                    entry.stores.any { it.lowercase().contains(lowercaseQuery) }
             }
+            filtered to GfnDefaultClassification.CATALOG_FALLBACK
         }
 
         if (matches.isEmpty()) {
             // The title is not in the GeForce NOW catalog. Return empty so the caller can
             // surface an honest "not found" state instead of showing fabricated art/links.
-            return@withContext emptyList()
+            return@withContext GfnBrowseResult(emptyList(), classification)
         }
 
         // Keep the payload bounded: resolving art is one small request per title.
         val limited = matches.take(MAX_SEARCH_RESULTS)
         val semaphore = Semaphore(MAX_CONCURRENT_ART_FETCHES)
-        coroutineScope {
+        val games = coroutineScope {
             limited.map { entry ->
                 async {
                     semaphore.withPermit {
@@ -237,6 +266,44 @@ object GeForceNowService {
                 }
             }.awaitAll()
         }
+        GfnBrowseResult(games = games, classification = classification)
+    }
+
+    private fun fetchRecentlyAddedSlugs(): List<String> {
+        val now = System.currentTimeMillis()
+        cachedRecentlyAddedSlugs?.let { cached ->
+            if (now - recentlyAddedTimestamp < CACHE_TTL_MS && cached.isNotEmpty()) {
+                return cached
+            }
+        }
+
+        val request = Request.Builder()
+            .url(GFNDB_CHANGES_URL)
+            .addHeader("Accept", "text/html")
+            .addHeader("User-Agent", "UniversalLauncher/1.0")
+            .build()
+
+        return httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@use emptyList()
+            val html = response.body?.string() ?: return@use emptyList()
+            val slugs = parseRecentlyAddedSlugs(html)
+            if (slugs.isNotEmpty()) {
+                cachedRecentlyAddedSlugs = slugs
+                recentlyAddedTimestamp = now
+            }
+            slugs
+        }
+    }
+
+    internal fun parseRecentlyAddedSlugs(changesHtml: String): List<String> {
+        val slugs = LinkedHashSet<String>()
+        ADDED_CHANGE_ROW_REGEX.findAll(changesHtml).forEach { match ->
+            val slug = match.groupValues[1].ifBlank { match.groupValues[2] }.trim()
+            if (slug.isNotEmpty()) {
+                slugs += slug
+            }
+        }
+        return slugs.toList()
     }
 
     /**

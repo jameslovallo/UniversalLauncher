@@ -257,6 +257,18 @@ class InstalledAppsManager(private val context: Context) {
         return false
     }
 
+    /** Returns the package name of an installed Amazon Luna PWA/WebAPK if present. */
+    fun findInstalledLunaPwaPackage(webUrl: String = AmazonLunaService.LUNA_BASE_URL): String? {
+        val lunaHandlers = queryBrowsableHandlerPackages(webUrl)
+        val genericHandlers = queryBrowsableHandlerPackages("https://nonexistent.invalid/")
+        return selectLunaPwaPackage(
+            lunaHandlerPackages = lunaHandlers,
+            genericHandlerPackages = genericHandlers,
+            lunaAppPackage = AmazonLunaService.LUNA_PACKAGE_NAME,
+            selfPackage = context.packageName
+        )
+    }
+
     private fun queryBrowsableHandlerPackages(url: String): Set<String> {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
             addCategory(Intent.CATEGORY_BROWSABLE)
