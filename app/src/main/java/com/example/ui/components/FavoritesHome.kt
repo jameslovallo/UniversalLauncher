@@ -31,7 +31,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AcUnit
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
@@ -73,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.data.model.GameItem
+import com.example.data.model.GameType
 import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherInfo
 import com.example.data.service.temperatureDisplay
@@ -424,10 +427,13 @@ fun FavoriteActionsSheet(
     onCustomize: () -> Unit,
     onOpenAppInfo: () -> Unit,
     onEditFavorites: () -> Unit,
+    onMoveToFolder: () -> Unit = {},
+    onManageFolderApps: () -> Unit = {},
     onRemoveFavorite: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val isFolder = item.type == GameType.FOLDER
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -444,7 +450,7 @@ fun FavoriteActionsSheet(
         ) {
             ContextMenuHeaderBar(
                 item = item,
-                subtitle = "Favorite app",
+                subtitle = if (isFolder) "Favorite folder" else "Favorite app",
                 onCustomize = onCustomize,
                 onOpenAppInfo = onOpenAppInfo,
                 headerTestTag = "favorite_context_menu_header",
@@ -454,6 +460,22 @@ fun FavoriteActionsSheet(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
             Spacer(modifier = Modifier.height(8.dp))
+
+            if (isFolder) {
+                FavoriteActionRow(
+                    icon = Icons.Default.Apps,
+                    title = "Manage folder apps",
+                    onClick = onManageFolderApps,
+                    testTag = "favorite_action_manage_folder"
+                )
+            } else {
+                FavoriteActionRow(
+                    icon = Icons.Default.CreateNewFolder,
+                    title = "Move to folder",
+                    onClick = onMoveToFolder,
+                    testTag = "favorite_action_move_to_folder"
+                )
+            }
 
             FavoriteActionRow(
                 icon = Icons.Default.Edit,

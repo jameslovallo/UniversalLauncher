@@ -219,10 +219,12 @@ fun SteamGamePosterCard(
                     Icon(
                         imageVector = when (game.type) {
                             GameType.GEFORCE_NOW -> Icons.Default.Cloud
+                            GameType.AMAZON_LUNA -> Icons.Default.Cloud
                             GameType.INSTALLED_APP -> Icons.Default.SportsEsports
                             GameType.SHORTCUT -> Icons.Default.Link
                             GameType.CUSTOM_CLOUD -> Icons.Default.Cloud
                             GameType.MOONLIGHT -> Icons.Default.SportsEsports
+                            GameType.FOLDER -> Icons.Default.SportsEsports
                         },
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,

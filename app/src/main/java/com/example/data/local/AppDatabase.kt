@@ -20,7 +20,7 @@ class Converters {
         value?.let { runCatching { GameType.valueOf(it) }.getOrNull() } ?: GameType.GEFORCE_NOW
 }
 
-@Database(entities = [GameItem::class], version = 8, exportSchema = false)
+@Database(entities = [GameItem::class], version = 9, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun gameDao(): GameDao
@@ -73,6 +73,12 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE games ADD COLUMN folderId TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -86,7 +92,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_4_5,
                     MIGRATION_5_6,
                     MIGRATION_6_7,
-                    MIGRATION_7_8
+                    MIGRATION_7_8,
+                    MIGRATION_8_9
                 )
                     .fallbackToDestructiveMigration(true)
                     .build()

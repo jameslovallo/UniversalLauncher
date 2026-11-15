@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
+import com.example.data.service.AmazonLunaService
 import com.example.data.service.GeForceNowService
 import com.example.data.service.IconPackIcon
 import com.example.data.service.IconPackInfo
@@ -48,6 +49,7 @@ enum class MainLibraryTab {
 enum class AddModalSubView {
     OPTIONS,
     ADD_GFN,
+    ADD_LUNA,
     ADD_WEB_URL
 }
 
@@ -92,6 +94,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _showFavoritesEditor = MutableStateFlow(false)
     val showFavoritesEditor: StateFlow<Boolean> = _showFavoritesEditor.asStateFlow()
+
+    // Folder sheets
+    private val _openFolderId = MutableStateFlow<String?>(null)
+    val openFolderId: StateFlow<String?> = _openFolderId.asStateFlow()
+
+    private val _folderPickerTargetItem = MutableStateFlow<GameItem?>(null)
+    val folderPickerTargetItem: StateFlow<GameItem?> = _folderPickerTargetItem.asStateFlow()
+
+    private val _manageFolderId = MutableStateFlow<String?>(null)
+    val manageFolderId: StateFlow<String?> = _manageFolderId.asStateFlow()
 
     // Add Content Modal
     private val _showAddModal = MutableStateFlow(false)
@@ -241,18 +253,34 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         list.filter { it.isGame }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Apps Tab: all non-game applications, alphabetised for the app list
+    // Apps Tab: all non-game applications (excluding folder members), folders sorted after Z
     val appsList: StateFlow<List<GameItem>> = allItems.map { list ->
-        list.filter { !it.isGame }.sortedBy { it.title.lowercase() }
+        list.filter { !it.isGame && it.folderId == null }
+            .sortedWith(compareBy<GameItem> { it.type == GameType.FOLDER }.thenBy { it.title.lowercase() })
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Favorites home: favorited apps in the user's custom order
+    // All folders in alphabetical order
+    val foldersList: StateFlow<List<GameItem>> = allItems.map { list ->
+        list.filter { !it.isGame && it.type == GameType.FOLDER }
+            .sortedBy { it.title.lowercase() }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // folderId -> sorted list of non-folder apps inside that folder
+    val folderMembersMap: StateFlow<Map<String, List<GameItem>>> = allItems.map { list ->
+        list.filter { !it.isGame && it.type != GameType.FOLDER && !it.folderId.isNullOrBlank() }
+            .sortedBy { it.title.lowercase() }
+            .groupBy { it.folderId!! }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    // Favorites home: favorited apps (and favorited folders) in the user's custom order
     val favoriteApps: StateFlow<List<GameItem>> = repository.favoriteApps
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Full app list shown after swiping up: no favorites and no games
+    // Full app list shown after swiping up: no favorites, no games, no folder members;
+    // unfavorited folders appear after Z.
     val libraryApps: StateFlow<List<GameItem>> = allItems.map { list ->
-        list.filter { !it.isGame && !it.isFavorite }.sortedBy { it.title.lowercase() }
+        list.filter { !it.isGame && !it.isFavorite && it.folderId == null }
+            .sortedWith(compareBy<GameItem> { it.type == GameType.FOLDER }.thenBy { it.title.lowercase() })
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Hidden items for the Settings restore list
@@ -316,6 +344,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun launchItem(item: GameItem) {
+        if (item.type == GameType.FOLDER) {
+            openFolder(item.id)
+            return
+        }
+
         viewModelScope.launch {
             repository.recordPlay(item.id)
         }
@@ -331,6 +364,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 // GeForce NOW cannot stream in an embedded browser (browser allowlist and
                 // no Widevine), so hand the deep link to the native app or a real browser.
                 installedAppsManager.openExternally(url)
+            }
+            GameType.AMAZON_LUNA -> {
+                installedAppsManager.launchLunaGame(item.launchUrl)
             }
             GameType.CUSTOM_CLOUD -> {
                 val url = item.launchUrl ?: "https://play.geforcenow.com"
@@ -376,6 +412,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     else -> launchApp()
                 }
             }
+            GameType.FOLDER -> Unit
         }
     }
 
@@ -421,7 +458,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _editingItem.value != null ||
         _contextMenuItem.value != null ||
         _favoriteActionItem.value != null ||
-        _showFavoritesEditor.value
+        _showFavoritesEditor.value ||
+        _openFolderId.value != null ||
+        _folderPickerTargetItem.value != null ||
+        _manageFolderId.value != null
 
     fun closeContextMenu() {
         _contextMenuItem.value = null
@@ -436,11 +476,64 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun moveItemToGames(item: GameItem) {
+        if (item.type == GameType.FOLDER) return
         viewModelScope.launch {
             repository.setIsGame(item.id, true)
             repository.ensureAutoPoster(item.copy(isGame = true))
             closeContextMenu()
             setTab(MainLibraryTab.GAMES)
+        }
+    }
+
+    // ---- Folder management ---------------------------------------------------------
+
+    fun openFolder(folderId: String) {
+        _openFolderId.value = folderId
+    }
+
+    fun closeFolder() {
+        _openFolderId.value = null
+    }
+
+    fun openFolderPicker(item: GameItem) {
+        _contextMenuItem.value = null
+        _favoriteActionItem.value = null
+        _folderPickerTargetItem.value = item
+    }
+
+    fun closeFolderPicker() {
+        _folderPickerTargetItem.value = null
+    }
+
+    fun openManageFolderApps(folderId: String) {
+        _contextMenuItem.value = null
+        _favoriteActionItem.value = null
+        _manageFolderId.value = folderId
+    }
+
+    fun closeManageFolderApps() {
+        _manageFolderId.value = null
+    }
+
+    fun createFolder(title: String, initialMemberId: String? = null) {
+        viewModelScope.launch {
+            repository.createFolder(title, initialMemberId)
+            _folderPickerTargetItem.value = null
+        }
+    }
+
+    fun moveItemToFolder(itemId: String, folderId: String?) {
+        viewModelScope.launch {
+            repository.moveItemToFolder(itemId, folderId)
+            _folderPickerTargetItem.value = null
+            _contextMenuItem.value = null
+        }
+    }
+
+    fun setFolderMembers(folderId: String, memberIds: Set<String>) {
+        viewModelScope.launch {
+            repository.setFolderMembers(folderId, memberIds)
+            _manageFolderId.value = null
         }
     }
 
@@ -508,13 +601,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun deleteItem(item: GameItem) {
         if (!canDeleteLibraryItem(item)) return
         viewModelScope.launch {
-            // Native apps in the Apps tab get a real uninstall prompt; shortcuts and
-            // other library entries are simply removed. Deleting records a tombstone so
-            // the app sync cannot bring the tile back on the next launch.
-            if (item.type == GameType.INSTALLED_APP && !item.isGame) {
-                item.packageName?.let { installedAppsManager.uninstallApp(it) }
+            if (item.type == GameType.FOLDER) {
+                repository.deleteFolder(item.id)
+                if (_openFolderId.value == item.id) _openFolderId.value = null
+                if (_manageFolderId.value == item.id) _manageFolderId.value = null
+            } else {
+                // Native apps in the Apps tab get a real uninstall prompt; shortcuts and
+                // other library entries are simply removed. Deleting records a tombstone so
+                // the app sync cannot bring the tile back on the next launch.
+                if (item.type == GameType.INSTALLED_APP && !item.isGame) {
+                    item.packageName?.let { installedAppsManager.uninstallApp(it) }
+                }
+                repository.deleteGame(item.id)
             }
-            repository.deleteGame(item.id)
             if (_focusedItemId.value == item.id) {
                 _focusedItemId.value = null
             }
@@ -525,6 +624,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun hideItem(item: GameItem) {
         viewModelScope.launch {
             repository.setHidden(item.id, true)
+            if (_openFolderId.value == item.id) {
+                _openFolderId.value = null
+            }
             if (_focusedItemId.value == item.id) {
                 _focusedItemId.value = null
             }
@@ -1058,6 +1160,32 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 id = "user_gfn_${gfnGame.gfnCmsId ?: System.currentTimeMillis()}",
                 posterUrl = resolvedPoster,
                 isGame = true
+            )
+            repository.insertUserGame(userGame)
+            closeAddModal()
+            _currentTab.value = MainLibraryTab.GAMES
+        }
+    }
+
+    fun addLunaGameToGames(lunaGame: GameItem) {
+        viewModelScope.launch {
+            val resolvedPoster = lunaGame.posterUrl
+                ?: AmazonLunaService.resolvePosterForTitle(
+                    lunaGame.title,
+                    allowFallbackSearch = true
+                )
+            val slugKey = lunaGame.id.removePrefix("luna_")
+                .ifBlank { System.currentTimeMillis().toString() }
+            val launchIntent = lunaGame.launchUrl
+                ?.takeIf { it.isNotBlank() }
+                ?: AmazonLunaService.createLunaLaunchIntentUri()
+            val userGame = lunaGame.copy(
+                id = "user_luna_$slugKey",
+                type = GameType.AMAZON_LUNA,
+                isGame = true,
+                launchUrl = launchIntent,
+                posterUrl = resolvedPoster,
+                customArtworkSource = if (resolvedPoster != null) "STEAMGRIDDB" else "LUNA"
             )
             repository.insertUserGame(userGame)
             closeAddModal()

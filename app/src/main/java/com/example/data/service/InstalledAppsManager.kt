@@ -190,6 +190,90 @@ class InstalledAppsManager(private val context: Context) {
     }
 
     /**
+     * Launch an Amazon Luna title following strict preference order:
+     * 1. Native Amazon Luna app (`com.amazon.spiderpork`)
+     * 2. Installed Amazon Luna PWA / WebAPK
+     * 3. Luna website in a browser (`https://luna.amazon.com`)
+     */
+    fun launchLunaGame(launchUriOrUrl: String?): Boolean {
+        val webUrl = AmazonLunaService.extractWebUrl(launchUriOrUrl)
+        val intentUri = launchUriOrUrl?.takeIf { it.startsWith("intent:", ignoreCase = true) }
+            ?: AmazonLunaService.createLunaLaunchIntentUri(webUrl)
+
+        // 1. Prefer the native Amazon Luna app if installed.
+        if (isPackageInstalled(AmazonLunaService.LUNA_PACKAGE_NAME)) {
+            try {
+                val appIntent = Intent.parseUri(intentUri, Intent.URI_INTENT_SCHEME).apply {
+                    setPackage(AmazonLunaService.LUNA_PACKAGE_NAME)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(appIntent)
+                return true
+            } catch (_: Exception) {
+                if (launchApp(AmazonLunaService.LUNA_PACKAGE_NAME)) {
+                    return true
+                }
+            }
+        }
+
+        // 2. Next preference: an installed Luna PWA (WebAPK / domain-scoped handler).
+        val lunaHandlers = queryBrowsableHandlerPackages(webUrl)
+        val genericHandlers = queryBrowsableHandlerPackages("https://nonexistent.invalid/")
+        val pwaPackage = selectLunaPwaPackage(
+            lunaHandlerPackages = lunaHandlers,
+            genericHandlerPackages = genericHandlers,
+            lunaAppPackage = AmazonLunaService.LUNA_PACKAGE_NAME,
+            selfPackage = context.packageName
+        )
+        if (pwaPackage != null) {
+            try {
+                val pwaIntent = Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)).apply {
+                    addCategory(Intent.CATEGORY_BROWSABLE)
+                    setPackage(pwaPackage)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(pwaIntent)
+                return true
+            } catch (_: Exception) {
+                // Fall through to browser launch if the PWA handler failed.
+            }
+        }
+
+        // 3. Final fallback: open the Luna website in Chrome or the default browser.
+        val uri = Uri.parse(webUrl)
+        for (browserPackage in listOf("com.android.chrome", null)) {
+            val webIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (browserPackage != null) setPackage(browserPackage)
+            }
+            try {
+                context.startActivity(webIntent)
+                return true
+            } catch (_: Exception) {
+                // Try the next browser option.
+            }
+        }
+        return false
+    }
+
+    private fun queryBrowsableHandlerPackages(url: String): Set<String> {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+        }
+        val infos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.queryIntentActivities(
+                intent,
+                PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong())
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.queryIntentActivities(intent, PackageManager.MATCH_ALL)
+        }
+        return infos.mapNotNullTo(LinkedHashSet()) { it.activityInfo?.packageName }
+    }
+
+    /**
      * Launch a pinned shortcut through the launcher APIs. This preserves the publisher's
      * original intent, including extras that cannot be serialised into a URI.
      */
@@ -521,6 +605,22 @@ private val UUID_PATTERN = Regex(
     "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" +
         "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
+
+internal fun selectLunaPwaPackage(
+    lunaHandlerPackages: Set<String>,
+    genericHandlerPackages: Set<String>,
+    lunaAppPackage: String = AmazonLunaService.LUNA_PACKAGE_NAME,
+    selfPackage: String = ""
+): String? {
+    val domainSpecific = lunaHandlerPackages.filter { pkg ->
+        pkg.isNotBlank() &&
+            pkg != lunaAppPackage &&
+            pkg != selfPackage &&
+            pkg !in genericHandlerPackages
+    }
+    return domainSpecific.firstOrNull { it.contains("webapk", ignoreCase = true) }
+        ?: domainSpecific.firstOrNull()
+}
 
 internal fun isProtectedApplicationFlags(flags: Int): Boolean =
     (flags and PROTECTED_APP_FLAGS) != 0

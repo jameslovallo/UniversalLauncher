@@ -40,8 +40,10 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Nightlight
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.VideogameAsset
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -49,12 +51,14 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -71,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.GameItem
+import com.example.data.service.AmazonLunaService
 import com.example.data.service.GeForceNowService
 import com.example.ui.viewmodel.AddModalSubView
 import kotlinx.coroutines.delay
@@ -83,6 +88,7 @@ fun AddContentModal(
     onOpenMoonlight: () -> Unit,
     onAddShortcut: (title: String, url: String, posterUrl: String?) -> Unit,
     onAddGfnGame: (GameItem) -> Unit,
+    onAddLunaGame: (GameItem) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val handleBack: () -> Unit = {
@@ -142,6 +148,7 @@ fun AddContentModal(
                         text = when (subView) {
                             AddModalSubView.OPTIONS -> "Discover"
                             AddModalSubView.ADD_GFN -> "Add GeForce Now Game"
+                            AddModalSubView.ADD_LUNA -> "Add Amazon Luna Game"
                             AddModalSubView.ADD_WEB_URL -> "Add Web URL"
                         },
                         fontSize = 28.sp,
@@ -166,6 +173,7 @@ fun AddContentModal(
                             OptionsSelectView(
                                 onSelectPlayStore = onOpenPlayStore,
                                 onSelectGfn = { onNavigateSubView(AddModalSubView.ADD_GFN) },
+                                onSelectLuna = { onNavigateSubView(AddModalSubView.ADD_LUNA) },
                                 onSelectMoonlight = onOpenMoonlight,
                                 onSelectWebUrl = { onNavigateSubView(AddModalSubView.ADD_WEB_URL) }
                             )
@@ -178,6 +186,11 @@ fun AddContentModal(
                         AddModalSubView.ADD_GFN -> {
                             AddGfnSearchView(
                                 onGameSelected = onAddGfnGame
+                            )
+                        }
+                        AddModalSubView.ADD_LUNA -> {
+                            AddLunaSearchView(
+                                onGameSelected = onAddLunaGame
                             )
                         }
                     }
@@ -198,6 +211,7 @@ private data class DiscoverOption(
 private fun OptionsSelectView(
     onSelectPlayStore: () -> Unit,
     onSelectGfn: () -> Unit,
+    onSelectLuna: () -> Unit,
     onSelectMoonlight: () -> Unit,
     onSelectWebUrl: () -> Unit
 ) {
@@ -213,6 +227,12 @@ private fun OptionsSelectView(
             title = "GeForce Now",
             testTag = "option_add_gfn",
             onClick = onSelectGfn
+        ),
+        DiscoverOption(
+            icon = Icons.Default.VideogameAsset,
+            title = "Amazon Luna",
+            testTag = "option_add_luna",
+            onClick = onSelectLuna
         ),
         DiscoverOption(
             icon = Icons.Default.Nightlight,
@@ -546,5 +566,265 @@ private fun AddGfnSearchView(
                 }
             }
         }
+    }
+}
+
+@Composable
+internal fun AddLunaSearchView(
+    onGameSelected: (GameItem) -> Unit,
+    catalogLoader: suspend (String) -> Result<List<GameItem>> = { query ->
+        AmazonLunaService.searchCatalog(query)
+    },
+    posterResolver: suspend (GameItem) -> String? = { game ->
+        AmazonLunaService.resolvePosterForTitle(game.title, allowFallbackSearch = false)
+    }
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    var lunaTitles by remember { mutableStateOf<List<GameItem>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var reloadTrigger by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(searchQuery, reloadTrigger) {
+        isLoading = true
+        errorMessage = null
+        if (searchQuery.isNotBlank()) delay(300)
+        val result = catalogLoader(searchQuery)
+        result
+            .onSuccess { items ->
+                lunaTitles = items
+                errorMessage = null
+            }
+            .onFailure { err ->
+                lunaTitles = emptyList()
+                errorMessage = err.message ?: "Unable to load Amazon Luna catalog."
+            }
+        isLoading = false
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Search Amazon Luna titles...") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Clear")
+                    }
+                }
+            },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("add_luna_search")
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        if (searchQuery.isBlank() && !isLoading && errorMessage == null && lunaTitles.isNotEmpty()) {
+            Text(
+                text = "Free with Amazon Prime (${lunaTitles.size})",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(bottom = 8.dp)
+                    .testTag("luna_prime_header")
+            )
+        }
+
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = if (searchQuery.isBlank()) {
+                            "Loading free Prime games on Amazon Luna..."
+                        } else {
+                            "Searching Amazon Luna catalog..."
+                        },
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else if (errorMessage != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Cloud,
+                    contentDescription = "Catalog unavailable",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = errorMessage ?: "Unable to load Amazon Luna catalog.",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { reloadTrigger += 1 },
+                    modifier = Modifier.testTag("luna_retry_button")
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Retry")
+                }
+            }
+        } else if (lunaTitles.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.VideogameAsset,
+                    contentDescription = "No results",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = if (searchQuery.isNotBlank()) {
+                        "No Amazon Luna title matching \"$searchQuery\""
+                    } else {
+                        "No Prime-included Amazon Luna games found"
+                    },
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Try a different game title, or add a custom shortcut instead.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 120.dp),
+                contentPadding = PaddingValues(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("luna_poster_grid")
+            ) {
+                items(lunaTitles, key = { it.id }) { lunaGame ->
+                    LunaPosterOptionItem(
+                        game = lunaGame,
+                        posterResolver = posterResolver,
+                        onSelect = onGameSelected
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LunaPosterOptionItem(
+    game: GameItem,
+    posterResolver: suspend (GameItem) -> String?,
+    onSelect: (GameItem) -> Unit
+) {
+    var resolvedPoster by remember(game.id, game.posterUrl) { mutableStateOf(game.posterUrl) }
+    var imageFailed by remember(resolvedPoster) { mutableStateOf(false) }
+
+    LaunchedEffect(game.id) {
+        if (resolvedPoster.isNullOrBlank()) {
+            val fetched = runCatching { posterResolver(game) }.getOrNull()
+            if (!fetched.isNullOrBlank()) {
+                resolvedPoster = fetched
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable {
+                val chosen = if (!resolvedPoster.isNullOrBlank()) {
+                    game.copy(posterUrl = resolvedPoster)
+                } else {
+                    game
+                }
+                onSelect(chosen)
+            }
+            .padding(4.dp)
+            .testTag("luna_game_${game.id}"),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                val artUrl = resolvedPoster ?: game.heroBannerUrl
+                if (!artUrl.isNullOrBlank() && !imageFailed) {
+                    AsyncImage(
+                        model = artUrl,
+                        contentDescription = game.title,
+                        contentScale = ContentScale.Crop,
+                        onError = { imageFailed = true },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.VideogameAsset,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(36.dp)
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.primary)
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "LUNA",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = game.title,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
     }
 }

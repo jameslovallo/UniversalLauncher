@@ -261,8 +261,6 @@ fun CustomizeItemDialog(
                 .fillMaxHeight(0.88f)
                 .padding(20.dp)
         ) {
-            val themedIcons = LocalThemedAppIcons.current
-            val resolvedPreviewIcon = if (!item.isGame) resolveAppIconUrl(item, themedIcons) else null
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -278,28 +276,10 @@ fun CustomizeItemDialog(
                         Box(
                             modifier = Modifier
                                 .size(44.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
                                 .testTag("customize_icon_preview"),
                             contentAlignment = Alignment.Center
                         ) {
-                            if (!resolvedPreviewIcon.isNullOrBlank()) {
-                                AsyncImage(
-                                    model = resolvedPreviewIcon,
-                                    contentDescription = "${item.title} current icon",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .size(44.dp)
-                                        .clip(CircleShape)
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Apps,
-                                    contentDescription = "${item.title} icon",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
+                            AppIcon(app = item, size = 44.dp)
                         }
                     }
                     Column {

@@ -5,7 +5,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,7 +18,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -44,6 +51,7 @@ import coil.request.ImageRequest
 import coil.size.Precision
 import coil.transform.CircleCropTransformation
 import com.example.data.model.GameItem
+import com.example.data.model.GameType
 
 /**
  * `packageName` -> rendered icon file for the selected icon theme.
@@ -52,6 +60,11 @@ import com.example.data.model.GameItem
  * poster grid even when the same package appears in both.
  */
 val LocalThemedAppIcons = compositionLocalOf<Map<String, String>> { emptyMap() }
+
+/**
+ * `folderId` -> ordered member apps for rendering geometric folder preview icons.
+ */
+val LocalFolderPreviewItems = compositionLocalOf<Map<String, List<GameItem>>> { emptyMap() }
 
 /**
  * A single left-aligned app row. Shared by the favorites home and the complete app
@@ -259,6 +272,8 @@ fun AppIcon(app: GameItem, size: Dp) {
             onError = { imageFailed = true },
             modifier = Modifier.size(size)
         )
+    } else if (app.type == GameType.FOLDER) {
+        FolderPreviewIcon(folderId = app.id, size = size)
     } else {
         Text(
             text = app.title.trim().take(1).uppercase().ifEmpty { "?" },
@@ -266,5 +281,71 @@ fun AppIcon(app: GameItem, size: Dp) {
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/**
+ * Renders a circular folder icon of exact [size] containing up to four of the folder's first
+ * non-folder child app icons arranged geometrically inside.
+ */
+@Composable
+fun FolderPreviewIcon(
+    folderId: String,
+    size: Dp
+) {
+    val members = LocalFolderPreviewItems.current[folderId].orEmpty()
+        .filter { it.type != GameType.FOLDER }
+        .take(4)
+
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f))
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
+                shape = CircleShape
+            )
+            .testTag("folder_preview_$folderId"),
+        contentAlignment = Alignment.Center
+    ) {
+        if (members.isEmpty()) {
+            Icon(
+                imageVector = Icons.Default.Folder,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(size * 0.48f)
+            )
+        } else {
+            val miniSize = size * 0.30f
+            val gap = size * 0.06f
+            val topRow = members.take(2)
+            val bottomRow = members.drop(2).take(2)
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(gap, Alignment.CenterVertically)
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(gap, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    topRow.forEach { child ->
+                        AppIcon(app = child, size = miniSize)
+                    }
+                }
+                if (bottomRow.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(gap, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        bottomRow.forEach { child ->
+                            AppIcon(app = child, size = miniSize)
+                        }
+                    }
+                }
+            }
+        }
     }
 }

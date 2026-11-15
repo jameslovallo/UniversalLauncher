@@ -61,6 +61,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.AlertDialog
@@ -135,6 +136,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.imageLoader
 import com.example.data.model.GameItem
+import com.example.data.model.GameType
 import com.example.data.service.IconPackOverridesStore
 import com.example.ui.components.AddContentModal
 import com.example.ui.components.AppIconTile
@@ -143,7 +145,11 @@ import com.example.ui.components.CustomizeItemDialog
 import com.example.ui.components.EditFavoritesSheet
 import com.example.ui.components.FavoriteActionsSheet
 import com.example.ui.components.FavoritesHome
+import com.example.ui.components.FolderAppsManageSheet
+import com.example.ui.components.FolderContentsSheet
+import com.example.ui.components.FolderPickerSheet
 import com.example.ui.components.ItemContextMenuSheet
+import com.example.ui.components.LocalFolderPreviewItems
 import com.example.ui.components.LocalThemedAppIcons
 import com.example.ui.components.SettingsModal
 import com.example.ui.components.SteamGamePosterCard
@@ -187,6 +193,11 @@ fun DashboardScreen(
     val hiddenItems by viewModel.hiddenItems.collectAsStateWithLifecycle()
     val favoriteActionItem by viewModel.favoriteActionItem.collectAsStateWithLifecycle()
     val showFavoritesEditor by viewModel.showFavoritesEditor.collectAsStateWithLifecycle()
+    val foldersList by viewModel.foldersList.collectAsStateWithLifecycle()
+    val folderMembersMap by viewModel.folderMembersMap.collectAsStateWithLifecycle()
+    val openFolderId by viewModel.openFolderId.collectAsStateWithLifecycle()
+    val folderPickerTargetItem by viewModel.folderPickerTargetItem.collectAsStateWithLifecycle()
+    val manageFolderId by viewModel.manageFolderId.collectAsStateWithLifecycle()
 
     val favoritesLayout by viewModel.favoritesLayout.collectAsStateWithLifecycle()
     val steamGridDbApiKey by viewModel.steamGridDbApiKey.collectAsStateWithLifecycle()
@@ -421,6 +432,9 @@ fun DashboardScreen(
         contextMenuItem == null &&
         favoriteActionItem == null &&
         !showFavoritesEditor &&
+        openFolderId == null &&
+        folderPickerTargetItem == null &&
+        manageFolderId == null &&
         editingItem == null &&
         !showAddModal &&
         !showSettingsModal &&
@@ -463,7 +477,10 @@ fun DashboardScreen(
     val appsScrimColor = MaterialTheme.colorScheme.background
     val gamesScrimColor = MaterialTheme.colorScheme.surfaceContainerHighest
 
-    CompositionLocalProvider(LocalThemedAppIcons provides themedAppIcons) {
+    CompositionLocalProvider(
+        LocalThemedAppIcons provides themedAppIcons,
+        LocalFolderPreviewItems provides folderMembersMap
+    ) {
         Box(
             modifier = modifier
                 .fillMaxSize()
@@ -747,25 +764,46 @@ fun DashboardScreen(
                 }
             }
 
+            // Folder Contents Bottom Sheet (rendered before context/customize sheets so actions stack on top)
+            val openFolder = openFolderId?.let { id -> foldersList.firstOrNull { it.id == id } }
+            if (openFolder != null) {
+                FolderContentsSheet(
+                    folder = openFolder,
+                    apps = folderMembersMap[openFolder.id].orEmpty(),
+                    layout = favoritesLayout,
+                    focusedItemId = focusedItemId,
+                    showFocusEffects = controllerState.isConnected,
+                    onAppClick = onAppClick,
+                    onAppLongClick = onAppLongClick,
+                    onCustomizeFolder = { viewModel.openEditCustomizer(openFolder) },
+                    onManageFolderApps = { viewModel.openManageFolderApps(openFolder.id) },
+                    onDismiss = { viewModel.closeFolder() }
+                )
+            }
+
             // Context Menu Modal (Tap and Hold on any card)
             if (contextMenuItem != null) {
+                val target = contextMenuItem!!
                 ItemContextMenuSheet(
-                    item = contextMenuItem!!,
+                    item = target,
                     showNsfwPoster = steamGridDbIncludeNsfw,
                     canDelete = canDeleteContextMenuItem,
-                    onCustomize = { viewModel.openEditCustomizer(contextMenuItem!!) },
+                    onCustomize = { viewModel.openEditCustomizer(target) },
                     onMove = {
-                        if (contextMenuItem!!.isGame) {
-                            viewModel.moveItemToApps(contextMenuItem!!)
+                        if (target.isGame) {
+                            viewModel.moveItemToApps(target)
                         } else {
-                            viewModel.moveItemToGames(contextMenuItem!!)
+                            viewModel.moveItemToGames(target)
                         }
                     },
-                    onToggleFavorite = { viewModel.toggleFavorite(contextMenuItem!!) },
-                    onRemoveFromRecents = { viewModel.removeFromRecents(contextMenuItem!!) },
-                    onOpenAppInfo = { viewModel.openAppInfo(contextMenuItem!!) },
-                    onHide = { viewModel.hideItem(contextMenuItem!!) },
-                    onDelete = { viewModel.deleteItem(contextMenuItem!!) },
+                    onMoveToFolder = { viewModel.openFolderPicker(target) },
+                    onRemoveFromFolder = { viewModel.moveItemToFolder(target.id, null) },
+                    onManageFolderApps = { viewModel.openManageFolderApps(target.id) },
+                    onToggleFavorite = { viewModel.toggleFavorite(target) },
+                    onRemoveFromRecents = { viewModel.removeFromRecents(target) },
+                    onOpenAppInfo = { viewModel.openAppInfo(target) },
+                    onHide = { viewModel.hideItem(target) },
+                    onDelete = { viewModel.deleteItem(target) },
                     onDismiss = { viewModel.closeContextMenu() }
                 )
             }
@@ -777,6 +815,8 @@ fun DashboardScreen(
                     onCustomize = { viewModel.openEditCustomizer(favorite) },
                     onOpenAppInfo = { viewModel.openAppInfo(favorite) },
                     onEditFavorites = { viewModel.openFavoritesEditor() },
+                    onMoveToFolder = { viewModel.openFolderPicker(favorite) },
+                    onManageFolderApps = { viewModel.openManageFolderApps(favorite.id) },
                     onRemoveFavorite = {
                         viewModel.removeFavorite(favorite)
                         viewModel.closeFavoriteActions()
@@ -792,6 +832,40 @@ fun DashboardScreen(
                     onReorder = { viewModel.reorderFavorites(it) },
                     onRemoveFavorite = { viewModel.removeFavorite(it) },
                     onDismiss = { viewModel.closeFavoritesEditor() }
+                )
+            }
+
+            // Move-to-folder picker sheet
+            folderPickerTargetItem?.let { target ->
+                FolderPickerSheet(
+                    targetItem = target,
+                    folders = foldersList,
+                    folderMembersMap = folderMembersMap,
+                    onSelectFolder = { folderId -> viewModel.moveItemToFolder(target.id, folderId) },
+                    onCreateFolder = { title -> viewModel.createFolder(title, initialMemberId = target.id) },
+                    onRemoveFromFolder = { viewModel.moveItemToFolder(target.id, null) },
+                    onDismiss = { viewModel.closeFolderPicker() }
+                )
+            }
+
+            // Batch-manage apps inside a folder
+            val manageFolder = manageFolderId?.let { id -> foldersList.firstOrNull { it.id == id } }
+            if (manageFolder != null) {
+                val allItemsSnapshot by viewModel.allItems.collectAsStateWithLifecycle()
+                val candidateApps = remember(allItemsSnapshot) {
+                    allItemsSnapshot
+                        .filter { !it.isGame && it.type != GameType.FOLDER }
+                        .sortedBy { it.title.lowercase() }
+                }
+                val currentMembers = remember(folderMembersMap, manageFolder.id) {
+                    folderMembersMap[manageFolder.id].orEmpty().mapTo(HashSet()) { it.id }
+                }
+                FolderAppsManageSheet(
+                    folder = manageFolder,
+                    candidateApps = candidateApps,
+                    currentMemberIds = currentMembers,
+                    onSave = { selectedIds -> viewModel.setFolderMembers(manageFolder.id, selectedIds) },
+                    onDismiss = { viewModel.closeManageFolderApps() }
                 )
             }
 
@@ -854,6 +928,7 @@ fun DashboardScreen(
                     onOpenMoonlight = { viewModel.openMoonlight() },
                     onAddShortcut = { title, url, poster -> viewModel.addCustomShortcutToApps(title, url, poster) },
                     onAddGfnGame = { viewModel.addGfnGameToGames(it) },
+                    onAddLunaGame = { viewModel.addLunaGameToGames(it) },
                     onDismiss = { viewModel.closeAddModal() }
                 )
             }
@@ -1482,12 +1557,12 @@ private sealed interface AppListEntry {
     data class App(val item: GameItem) : AppListEntry
 }
 
-/** Flatten the sorted app list into letter headers and rows. */
+/** Flatten the sorted app list into letter/folder headers and rows. */
 private fun buildAppListEntries(apps: List<GameItem>): List<AppListEntry> {
     val entries = ArrayList<AppListEntry>(apps.size + 8)
     var section: String? = null
     for (app in apps) {
-        val letter = alphabetSection(app.title)
+        val letter = sectionFor(app)
         if (letter != section) {
             entries += AppListEntry.Letter(letter)
             section = letter
@@ -1520,7 +1595,7 @@ private fun AppsAlphabeticalList(
     val activeLetter = remember(entries, focusedItemId) {
         entries.filterIsInstance<AppListEntry.App>()
             .firstOrNull { it.item.id == focusedItemId }
-            ?.let { alphabetSection(it.item.title) }
+            ?.let { sectionFor(it.item) }
     }
 
     // Draw edge to edge behind the navigation bar / app-switcher drag handle. The bar
@@ -1705,11 +1780,15 @@ private fun PrefetchAppIcons(
     val context = LocalContext.current
     val density = LocalDensity.current
     val themedIcons = LocalThemedAppIcons.current
+    val folderMembers = LocalFolderPreviewItems.current
     val iconSizePx = remember(density, layout) {
         val sizeDp = if (layout == FavoritesLayout.ICONS) 58.dp else 39.dp
         with(density) { sizeDp.roundToPx().coerceAtLeast(1) }
     }
-    LaunchedEffect(entries, layout, themedIcons, iconSizePx) {
+    val miniIconSizePx = remember(iconSizePx) {
+        (iconSizePx * 0.30f).roundToInt().coerceAtLeast(1)
+    }
+    LaunchedEffect(entries, layout, themedIcons, folderMembers, iconSizePx) {
         if (entries.isEmpty()) return@LaunchedEffect
         val loader = context.imageLoader
         val enqueuedUrls = HashSet<String>()
@@ -1733,14 +1812,32 @@ private fun PrefetchAppIcons(
                 for (i in start..end) {
                     val appEntry = entries[i] as? AppListEntry.App ?: continue
                     val imageUrl = resolveAppIconUrl(appEntry.item, themedIcons)
-                    if (!imageUrl.isNullOrBlank() && enqueuedUrls.add(imageUrl)) {
-                        loader.enqueue(
-                            buildAppIconImageRequest(
-                                context = context,
-                                imageUrl = imageUrl,
-                                sizePx = iconSizePx
+                    if (!imageUrl.isNullOrBlank()) {
+                        if (enqueuedUrls.add("$iconSizePx:$imageUrl")) {
+                            loader.enqueue(
+                                buildAppIconImageRequest(
+                                    context = context,
+                                    imageUrl = imageUrl,
+                                    sizePx = iconSizePx
+                                )
                             )
-                        )
+                        }
+                    } else if (appEntry.item.type == GameType.FOLDER) {
+                        val previewChildren = folderMembers[appEntry.item.id].orEmpty()
+                            .filter { it.type != GameType.FOLDER }
+                            .take(4)
+                        for (child in previewChildren) {
+                            val childUrl = resolveAppIconUrl(child, themedIcons)
+                            if (!childUrl.isNullOrBlank() && enqueuedUrls.add("$miniIconSizePx:$childUrl")) {
+                                loader.enqueue(
+                                    buildAppIconImageRequest(
+                                        context = context,
+                                        imageUrl = childUrl,
+                                        sizePx = miniIconSizePx
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1851,22 +1948,45 @@ private fun AlphabetRail(
             ) {
                 letters.forEach { letter ->
                     val isActive = letter == highlightedLetter
-                    Text(
-                        text = letter,
-                        fontSize = 10.sp,
-                        lineHeight = 13.sp,
-                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                        color = if (isActive) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .padding(horizontal = 4.dp)
-                            .testTag("alphabet_rail_letter_$letter")
-                    )
+                    if (letter == SECTION_FOLDERS) {
+                        Box(
+                            modifier = Modifier
+                                .height(letterLineHeight)
+                                .padding(horizontal = 4.dp)
+                                .testTag("alphabet_rail_letter_folders"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Folder,
+                                contentDescription = "Folders",
+                                tint = if (isActive) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(11.dp)
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = letter,
+                            fontSize = 10.sp,
+                            lineHeight = 13.sp,
+                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isActive) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .padding(horizontal = 4.dp)
+                                .testTag("alphabet_rail_letter_$letter")
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+private const val SECTION_FOLDERS = "Folders"
+
+private fun sectionFor(item: GameItem): String =
+    if (item.type == GameType.FOLDER) SECTION_FOLDERS else alphabetSection(item.title)
 
 private fun alphabetSection(title: String): String {
     val first = title.trim().firstOrNull()?.uppercaseChar() ?: return "#"

@@ -49,7 +49,10 @@ internal object LibrarySyncCodec {
     const val FORMAT_VERSION = 2
 
     fun isSyncable(item: GameItem): Boolean = when (item.type) {
-        GameType.GEFORCE_NOW, GameType.MOONLIGHT, GameType.CUSTOM_CLOUD -> true
+        GameType.GEFORCE_NOW,
+        GameType.MOONLIGHT,
+        GameType.CUSTOM_CLOUD,
+        GameType.AMAZON_LUNA -> true
         GameType.SHORTCUT -> item.isGame
         else -> false
     }

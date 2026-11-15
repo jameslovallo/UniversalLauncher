@@ -931,12 +931,6 @@ private fun HiddenItemRow(
     onRestore: () -> Unit
 ) {
     val context = LocalContext.current
-    val themedIcons = LocalThemedAppIcons.current
-    val imageUrl = if (item.isGame) {
-        item.posterUrl ?: item.heroBannerUrl ?: item.iconUrl
-    } else {
-        resolveAppIconUrl(item, themedIcons)
-    }
 
     Row(
         modifier = Modifier
@@ -948,30 +942,35 @@ private fun HiddenItemRow(
             .testTag("hidden_item_${item.id}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            if (!imageUrl.isNullOrBlank()) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(imageUrl)
-                        .crossfade(false)
-                        .build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(38.dp).clip(CircleShape)
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.VisibilityOff,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp)
-                )
+        if (!item.isGame) {
+            AppIcon(app = item, size = 38.dp)
+        } else {
+            val imageUrl = item.posterUrl ?: item.heroBannerUrl ?: item.iconUrl
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!imageUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(imageUrl)
+                            .crossfade(false)
+                            .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(38.dp).clip(CircleShape)
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.VisibilityOff,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
 

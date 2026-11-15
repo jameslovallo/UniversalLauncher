@@ -81,6 +81,18 @@
         <package android:name="com.limelight.unofficial" />
         <package android:name="com.limelight.noirdebug" />
         <package android:name="com.limelight.root" />
+        <!-- Amazon Luna native app, PWA/WebAPK handlers, and browsers. -->
+        <package android:name="com.amazon.spiderpork" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" android:host="luna.amazon.com" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />

@@ -23,7 +23,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.History
@@ -68,6 +70,9 @@ fun ItemContextMenuSheet(
     canDelete: Boolean = true,
     onCustomize: () -> Unit,
     onMove: () -> Unit,
+    onMoveToFolder: () -> Unit = {},
+    onRemoveFromFolder: () -> Unit = {},
+    onManageFolderApps: () -> Unit = {},
     onToggleFavorite: () -> Unit,
     onRemoveFromRecents: () -> Unit,
     onOpenAppInfo: () -> Unit,
@@ -76,6 +81,7 @@ fun ItemContextMenuSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val isFolder = item.type == GameType.FOLDER
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -103,8 +109,15 @@ fun ItemContextMenuSheet(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Action 2: Move to Apps / Move to Games
-            if (item.isGame) {
+            // Folder-specific action or Move to Apps/Games for normal items
+            if (isFolder) {
+                ContextMenuItemRow(
+                    icon = Icons.Default.Apps,
+                    title = "Manage folder apps",
+                    onClick = onManageFolderApps,
+                    testTag = "context_menu_manage_folder"
+                )
+            } else if (item.isGame) {
                 ContextMenuItemRow(
                     icon = Icons.Default.Apps,
                     title = "Move to Apps",
@@ -118,9 +131,23 @@ fun ItemContextMenuSheet(
                     onClick = onMove,
                     testTag = "context_menu_move_to_games"
                 )
+                ContextMenuItemRow(
+                    icon = Icons.Default.CreateNewFolder,
+                    title = if (item.folderId != null) "Move to another folder" else "Move to folder",
+                    onClick = onMoveToFolder,
+                    testTag = "context_menu_move_to_folder"
+                )
+                if (item.folderId != null) {
+                    ContextMenuItemRow(
+                        icon = Icons.Default.DriveFileMove,
+                        title = "Remove from folder",
+                        onClick = onRemoveFromFolder,
+                        testTag = "context_menu_remove_from_folder"
+                    )
+                }
             }
 
-            // Action 3: Favorite toggle (apps only; games are ordered by recency)
+            // Action 3: Favorite toggle (apps & folders; games are ordered by recency)
             if (!item.isGame) {
                 ContextMenuItemRow(
                     icon = if (item.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -150,11 +177,12 @@ fun ItemContextMenuSheet(
             )
 
             if (canDelete) {
-                // Explicit destructive action: uninstall a native app, delete a shortcut, or
-                // remove a game tile from the library. Hidden for protected/system apps.
+                // Explicit destructive action: uninstall a native app, delete a folder/shortcut,
+                // or remove a game tile from the library. Hidden for protected/system apps.
                 val isNativeApp = item.type == GameType.INSTALLED_APP &&
                     !item.isGame && !item.packageName.isNullOrBlank()
                 val deleteLabel = when {
+                    isFolder -> "Delete folder"
                     isNativeApp -> "Uninstall app"
                     item.isGame -> "Remove from library"
                     else -> "Delete shortcut"
@@ -239,43 +267,42 @@ internal fun ContextMenuHeaderBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            val themedIcons = LocalThemedAppIcons.current
-            val previewImage = if (item.isGame) {
+            if (!item.isGame) {
+                AppIcon(app = item, size = 54.dp)
+            } else {
                 val activePoster = if (showNsfwPoster && !item.nsfwPosterUrl.isNullOrBlank()) {
                     item.nsfwPosterUrl
                 } else {
                     item.posterUrl
                 }
-                activePoster ?: item.heroBannerUrl ?: item.iconUrl
-            } else {
-                resolveAppIconUrl(item, themedIcons) ?: item.heroBannerUrl
-            }
-            Box(
-                modifier = Modifier
-                    .size(54.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-            ) {
-                if (!previewImage.isNullOrBlank()) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(previewImage)
-                            .crossfade(false)
-                            .build(),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(54.dp)
-                            .clip(CircleShape)
-                    )
-                } else {
-                    Icon(
-                        imageVector = if (item.isGame) Icons.Default.SportsEsports else Icons.Default.Apps,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(28.dp)
-                    )
+                val previewImage = activePoster ?: item.heroBannerUrl ?: item.iconUrl
+                Box(
+                    modifier = Modifier
+                        .size(54.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (!previewImage.isNullOrBlank()) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(previewImage)
+                                .crossfade(false)
+                                .build(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(54.dp)
+                                .clip(CircleShape)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.SportsEsports,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
             }
 

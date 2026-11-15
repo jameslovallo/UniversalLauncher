@@ -109,6 +109,35 @@ interface GameDao {
     @Query("UPDATE games SET isGame = :isGame WHERE id = :id")
     suspend fun setIsGame(id: String, isGame: Boolean)
 
+    @Query("UPDATE games SET folderId = :folderId WHERE id = :id")
+    suspend fun setFolderId(id: String, folderId: String?)
+
+    @Query("UPDATE games SET folderId = NULL WHERE folderId = :folderId")
+    suspend fun clearFolderAssignments(folderId: String)
+
+    @Transaction
+    suspend fun moveItemToFolder(itemId: String, folderId: String?) {
+        setFolderId(itemId, folderId)
+        if (folderId != null) {
+            setFavorite(itemId, false)
+        }
+    }
+
+    @Transaction
+    suspend fun setFolderMembers(folderId: String, memberIds: Set<String>) {
+        clearFolderAssignments(folderId)
+        memberIds.forEach { memberId ->
+            setFolderId(memberId, folderId)
+            setFavorite(memberId, false)
+        }
+    }
+
+    @Transaction
+    suspend fun deleteFolderAndUnassignMembers(folderId: String) {
+        clearFolderAssignments(folderId)
+        deleteGameById(folderId)
+    }
+
     @Query("UPDATE games SET title = :title, isCustomized = 1 WHERE id = :id")
     suspend fun updateTitle(id: String, title: String)
 

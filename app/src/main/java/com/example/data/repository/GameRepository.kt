@@ -284,6 +284,39 @@ class GameRepository(
 
     suspend fun setIsGame(id: String, isGame: Boolean) {
         gameDao.setIsGame(id, isGame)
+        if (isGame) {
+            gameDao.setFolderId(id, null)
+        }
+    }
+
+    suspend fun createFolder(title: String, initialMemberId: String? = null): GameItem {
+        val resolvedTitle = title.trim().ifBlank { "Folder" }
+        val folder = GameItem(
+            id = "folder_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(4)}",
+            title = resolvedTitle,
+            type = GameType.FOLDER,
+            isGame = false,
+            genre = "Folder",
+            publisher = "Nexus",
+            description = "App folder"
+        )
+        gameDao.insertGame(folder)
+        if (initialMemberId != null) {
+            gameDao.moveItemToFolder(initialMemberId, folder.id)
+        }
+        return folder
+    }
+
+    suspend fun moveItemToFolder(itemId: String, folderId: String?) {
+        gameDao.moveItemToFolder(itemId, folderId)
+    }
+
+    suspend fun setFolderMembers(folderId: String, memberIds: Set<String>) {
+        gameDao.setFolderMembers(folderId, memberIds)
+    }
+
+    suspend fun deleteFolder(folderId: String) {
+        gameDao.deleteFolderAndUnassignMembers(folderId)
     }
 
     suspend fun setHidden(id: String, isHidden: Boolean) {

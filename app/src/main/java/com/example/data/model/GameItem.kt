@@ -9,7 +9,9 @@ enum class GameType {
     INSTALLED_APP,
     SHORTCUT,
     CUSTOM_CLOUD,
-    MOONLIGHT
+    MOONLIGHT,
+    AMAZON_LUNA,
+    FOLDER
 }
 
 @Immutable
@@ -51,7 +53,9 @@ data class GameItem(
     // custom title/icon instead of resetting them to the package values.
     val isCustomized: Boolean = false,
     // Position within the favorites view. Lower values appear first.
-    val favoriteOrder: Int = 0
+    val favoriteOrder: Int = 0,
+    // Owning folder id when this app is grouped inside a launcher folder.
+    val folderId: String? = null
 ) {
     val displayCategory: String
         get() = when (type) {
@@ -60,5 +64,7 @@ data class GameItem(
             GameType.SHORTCUT -> "Shortcut"
             GameType.CUSTOM_CLOUD -> "Cloud Game"
             GameType.MOONLIGHT -> "Moonlight"
+            GameType.AMAZON_LUNA -> "Amazon Luna"
+            GameType.FOLDER -> "Folder"
         }
 }
