@@ -122,15 +122,20 @@ class GameRepository(
     suspend fun syncInstalledApps() {
         val installed = installedAppsManager.getInstalledApps()
         val installedIds = installed.mapTo(HashSet()) { it.id }
+        val existingApps = gameDao.getGamesByTypeNow(GameType.INSTALLED_APP)
+        val existingById = existingApps.associateBy { it.id }
+
         // A tombstone whose package is gone entirely can be dropped: if the user ever
         // reinstalls it, the app should show up in the library again from scratch.
-        gameDao.getGamesByTypeNow(GameType.INSTALLED_APP)
+        val toDeleteIds = existingApps
             .filter { it.isDeleted && it.id !in installedIds }
-            .forEach { gameDao.deleteGameById(it.id) }
+            .map { it.id }
+
+        val toUpsert = mutableListOf<GameItem>()
         for (app in installed) {
-            val existing = gameDao.getGameById(app.id)
+            val existing = existingById[app.id] ?: gameDao.getGameById(app.id)
             if (existing == null) {
-                gameDao.insertGame(app)
+                toUpsert += app
             } else if (!existing.isDeleted) {
                 // A customized item keeps its user-chosen name, icon and artwork; only the
                 // launch target is refreshed from the package.
@@ -150,8 +155,14 @@ class GameRepository(
                         iconUrl = app.iconUrl
                     )
                 }
-                gameDao.updateGame(updated)
+                if (updated != existing) {
+                    toUpsert += updated
+                }
             }
+        }
+
+        if (toUpsert.isNotEmpty() || toDeleteIds.isNotEmpty()) {
+            gameDao.syncInstalledAppChanges(toUpsert, toDeleteIds)
         }
     }
 
@@ -289,6 +300,12 @@ class GameRepository(
 
     suspend fun updateIconUrl(id: String, iconUrl: String?) {
         gameDao.updateIconUrl(id, iconUrl)
+    }
+
+    suspend fun updateItemsBatch(items: List<GameItem>) {
+        if (items.isNotEmpty()) {
+            gameDao.updateItemsInTransaction(items)
+        }
     }
 
     suspend fun updateTitleAndNsfwPoster(id: String, title: String, nsfwPosterUrl: String?) {

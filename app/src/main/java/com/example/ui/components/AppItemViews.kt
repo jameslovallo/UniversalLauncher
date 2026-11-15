@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.content.Context
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -15,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -27,9 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -44,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.size.Precision
+import coil.transform.CircleCropTransformation
 import com.example.data.model.GameItem
 
 /**
@@ -87,7 +86,13 @@ fun AppTextRow(
                     Modifier
                 }
             )
-            .onFocusChanged { if (it.isFocused) onFocus?.invoke() }
+            .then(
+                if (showFocusEffects && onFocus != null) {
+                    Modifier.onFocusChanged { if (it.isFocused) onFocus() }
+                } else {
+                    Modifier
+                }
+            )
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -138,26 +143,33 @@ fun AppIconTile(
     onFocus: (() -> Unit)? = null,
 ) {
     val focused = isFocused && showFocusEffects
-    val scaleState = animateFloatAsState(
-        targetValue = if (focused) 1.08f else 1f,
-        animationSpec = tween(150),
-        label = "app_icon_scale"
-    )
-
-    Column(
-        modifier = modifier
+    val scaleModifier = if (showFocusEffects) {
+        val scale by animateFloatAsState(
+            targetValue = if (focused) 1.08f else 1f,
+            animationSpec = tween(150),
+            label = "app_icon_scale"
+        )
+        Modifier
+            .graphicsLayer {
+                if (scale != 1f) {
+                    scaleX = scale
+                    scaleY = scale
+                }
+            }
             .then(
-                if (showFocusEffects) {
-                    Modifier.graphicsLayer {
-                        val s = scaleState.value
-                        scaleX = s
-                        scaleY = s
-                    }
+                if (onFocus != null) {
+                    Modifier.onFocusChanged { if (it.isFocused) onFocus() }
                 } else {
                     Modifier
                 }
             )
-            .onFocusChanged { if (it.isFocused) onFocus?.invoke() }
+    } else {
+        Modifier
+    }
+
+    Column(
+        modifier = modifier
+            .then(scaleModifier)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -210,6 +222,19 @@ fun resolveAppIconUrl(
     return themedUrl ?: item.iconUrl ?: item.posterUrl
 }
 
+internal fun buildAppIconImageRequest(
+    context: Context,
+    imageUrl: String,
+    sizePx: Int
+): ImageRequest = ImageRequest.Builder(context)
+    .data(imageUrl)
+    .size(sizePx, sizePx)
+    .precision(Precision.INEXACT)
+    // Bake the circular mask into the cached bitmap once during decode instead of clipping on every draw frame.
+    .transformations(CircleCropTransformation())
+    .crossfade(false)
+    .build()
+
 @Composable
 fun AppIcon(app: GameItem, size: Dp) {
     val context = LocalContext.current
@@ -225,21 +250,14 @@ fun AppIcon(app: GameItem, size: Dp) {
 
     if (!imageUrl.isNullOrBlank() && !imageFailed) {
         val request = remember(context, imageUrl, sizePx) {
-            ImageRequest.Builder(context)
-                .data(imageUrl)
-                .size(sizePx, sizePx)
-                .precision(Precision.INEXACT)
-                .crossfade(false)
-                .build()
+            buildAppIconImageRequest(context, imageUrl, sizePx)
         }
         AsyncImage(
             model = request,
             contentDescription = null,
             contentScale = ContentScale.Crop,
             onError = { imageFailed = true },
-            modifier = Modifier
-                .size(size)
-                .clip(CircleShape)
+            modifier = Modifier.size(size)
         )
     } else {
         Text(

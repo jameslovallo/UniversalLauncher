@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
@@ -56,6 +57,29 @@ interface GameDao {
 
     @Update
     suspend fun updateGame(game: GameItem)
+
+    @Query("DELETE FROM games WHERE id IN (:ids)")
+    suspend fun deleteGamesByIds(ids: List<String>)
+
+    @Transaction
+    suspend fun syncInstalledAppChanges(
+        toUpsert: List<GameItem>,
+        toDeleteIds: List<String>
+    ) {
+        if (toDeleteIds.isNotEmpty()) {
+            toDeleteIds.chunked(500).forEach { deleteGamesByIds(it) }
+        }
+        if (toUpsert.isNotEmpty()) {
+            insertGames(toUpsert)
+        }
+    }
+
+    @Transaction
+    suspend fun updateItemsInTransaction(items: List<GameItem>) {
+        if (items.isNotEmpty()) {
+            insertGames(items)
+        }
+    }
 
     @Query("UPDATE games SET isFavorite = :isFavorite WHERE id = :id")
     suspend fun setFavorite(id: String, isFavorite: Boolean)

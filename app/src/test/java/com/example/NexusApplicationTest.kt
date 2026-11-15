@@ -10,12 +10,18 @@ import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import coil.Coil
 import coil.annotation.ExperimentalCoilApi
+import coil.size.Precision
+import coil.transform.CircleCropTransformation
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
+import com.example.ui.components.AppIconTile
 import com.example.ui.components.PosterLogoOverlay
 import com.example.ui.components.SteamGamePosterCard
+import com.example.ui.components.buildAppIconImageRequest
+import com.example.ui.components.buildPosterImageRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,7 +54,18 @@ class NexusApplicationTest {
     }
 
     @Test
-    fun `SteamGamePosterCard and PosterLogoOverlay render cleanly with explicit dimensions`() {
+    fun `image requests bake circular crop for icons and exact rgb565 sizing for posters`() {
+        val context = ApplicationProvider.getApplicationContext<NexusApplication>()
+        val iconReq = buildAppIconImageRequest(context, "https://example.invalid/icon.png", 120)
+        assertTrue(iconReq.transformations.any { it is CircleCropTransformation })
+
+        val posterReq = buildPosterImageRequest(context, "https://example.invalid/poster.jpg", 300, 450)
+        assertEquals(Precision.EXACT, posterReq.precision)
+        assertTrue(posterReq.allowRgb565)
+    }
+
+    @Test
+    fun `SteamGamePosterCard and AppIconTile render cleanly in touch mode`() {
         val game = GameItem(
             id = "steam_1",
             title = "Hades",
@@ -58,21 +75,38 @@ class NexusApplicationTest {
             logoUrl = "https://example.invalid/logo.png",
             overlayLogo = true
         )
+        val appItem = GameItem(
+            id = "app_demo",
+            title = "Demo",
+            type = GameType.INSTALLED_APP,
+            isGame = false,
+            iconUrl = "https://example.invalid/icon.png"
+        )
 
         composeRule.setContent {
             Box(modifier = Modifier.size(180.dp, 270.dp)) {
                 SteamGamePosterCard(
                     game = game,
                     isFocused = false,
+                    showFocusEffects = false,
                     onClick = {},
                     onLongClick = {},
                     posterWidthPx = 360,
                     posterHeightPx = 540
                 )
+                AppIconTile(
+                    app = appItem,
+                    isFocused = false,
+                    showFocusEffects = false,
+                    testTag = "app_row_app_demo",
+                    onClick = {},
+                    onLongClick = {}
+                )
             }
         }
 
         composeRule.onNodeWithTag("game_poster_steam_1").assertIsDisplayed()
+        composeRule.onNodeWithTag("app_row_app_demo").assertIsDisplayed()
     }
 
     @Test

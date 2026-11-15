@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.content.Context
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -19,8 +20,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.SportsEsports
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -30,6 +29,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -57,6 +58,7 @@ fun SteamGamePosterCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
+    showFocusEffects: Boolean = true,
     showFocusOutline: Boolean = true,
     showNsfwPoster: Boolean = false,
     posterWidthPx: Int = 0,
@@ -64,31 +66,58 @@ fun SteamGamePosterCard(
     onFocus: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocusedByCompose by interactionSource.collectIsFocusedAsState()
-    val effectivelyFocused = isFocused || isFocusedByCompose
 
-    val scaleState = animateFloatAsState(
-        targetValue = if (effectivelyFocused) 1.05f else 1.0f,
-        animationSpec = tween(150),
-        label = "poster_scale"
-    )
+    // In touch mode (!showFocusEffects), avoid allocating per-card focus/animation coroutines.
+    val interactionSource: MutableInteractionSource?
+    val effectivelyFocused: Boolean
+    val focusScaleModifier: Modifier
+    if (showFocusEffects) {
+        val focusSource = remember { MutableInteractionSource() }
+        val isFocusedByCompose by focusSource.collectIsFocusedAsState()
+        effectivelyFocused = isFocused || isFocusedByCompose
+        val scale by animateFloatAsState(
+            targetValue = if (effectivelyFocused) 1.05f else 1.0f,
+            animationSpec = tween(150),
+            label = "poster_scale"
+        )
+        interactionSource = focusSource
+        focusScaleModifier = Modifier
+            .graphicsLayer {
+                if (scale != 1f) {
+                    scaleX = scale
+                    scaleY = scale
+                }
+            }
+            .then(
+                if (onFocus != null) {
+                    Modifier.onFocusChanged { focusState ->
+                        if (focusState.isFocused) onFocus()
+                    }
+                } else {
+                    Modifier
+                }
+            )
+    } else {
+        interactionSource = null
+        effectivelyFocused = false
+        focusScaleModifier = Modifier
+    }
+
+    val borderWidth = when {
+        effectivelyFocused && showFocusOutline -> 2.5.dp
+        showFocusOutline -> 1.dp
+        else -> 0.dp
+    }
+    val borderColor = when {
+        !showFocusOutline -> Color.Transparent
+        effectivelyFocused -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+    }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .graphicsLayer {
-                val s = scaleState.value
-                if (s != 1f) {
-                    scaleX = s
-                    scaleY = s
-                }
-            }
-            .onFocusChanged { focusState ->
-                if (focusState.isFocused) {
-                    onFocus?.invoke()
-                }
-            }
+            .then(focusScaleModifier)
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -98,118 +127,148 @@ fun SteamGamePosterCard(
             .testTag("game_poster_${game.id}"),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Steam Poster Aspect Ratio (2:3)
-        Card(
+        // Steam Poster Aspect Ratio (2:3). Lightweight Box avoids Material Card's Surface overhead
+        // during scroll and only casts a shadow when focused.
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
-                .border(
-                    width = when {
-                        effectivelyFocused && showFocusOutline -> 2.5.dp
-                        showFocusOutline -> 1.dp
-                        else -> 0.dp
-                    },
-                    color = when {
-                        !showFocusOutline -> Color.Transparent
-                        effectivelyFocused -> MaterialTheme.colorScheme.primary
-                        else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    },
-                    shape = PosterCardShape
-                ),
-            shape = PosterCardShape,
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            ),
-            // Avoid casting expensive rounded shadows on every unfocused card during scroll;
-            // the 1.dp outline already separates unfocused posters cleanly.
-            elevation = CardDefaults.cardElevation(
-                defaultElevation = if (effectivelyFocused) 8.dp else 0.dp
-            )
+                .then(
+                    if (effectivelyFocused) {
+                        Modifier.shadow(elevation = 8.dp, shape = PosterCardShape, clip = false)
+                    } else {
+                        Modifier
+                    }
+                )
+                .clip(PosterCardShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .then(
+                    if (borderWidth > 0.dp) {
+                        Modifier.border(
+                            width = borderWidth,
+                            color = borderColor,
+                            shape = PosterCardShape
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
         ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                val showingNsfwPoster = showNsfwPoster && !game.nsfwPosterUrl.isNullOrBlank()
-                val activePoster = if (showingNsfwPoster) {
-                    game.nsfwPosterUrl
-                } else {
-                    game.posterUrl
-                }
-                // The safe and adult posters carry independent logo overlays.
-                val activeLogoUrl = if (showingNsfwPoster) game.nsfwLogoUrl else game.logoUrl
-                val activeLogoOverlay = if (showingNsfwPoster) {
-                    game.overlayNsfwLogo
-                } else {
-                    game.overlayLogo
-                }
-                val imageUrl = activePoster ?: game.heroBannerUrl ?: game.iconUrl
-                // A broken or unreachable URL should fall back to the type icon rather
-                // than leaving an empty card.
-                var imageFailed by remember(imageUrl) { mutableStateOf(false) }
+            val showingNsfwPoster = showNsfwPoster && !game.nsfwPosterUrl.isNullOrBlank()
+            val activePoster = if (showingNsfwPoster) {
+                game.nsfwPosterUrl
+            } else {
+                game.posterUrl
+            }
+            // The safe and adult posters carry independent logo overlays.
+            val activeLogoUrl = if (showingNsfwPoster) game.nsfwLogoUrl else game.logoUrl
+            val activeLogoOverlay = if (showingNsfwPoster) {
+                game.overlayNsfwLogo
+            } else {
+                game.overlayLogo
+            }
+            val imageUrl = activePoster ?: game.heroBannerUrl ?: game.iconUrl
+            // A broken or unreachable URL should fall back to the type icon rather
+            // than leaving an empty card.
+            var imageFailed by remember(imageUrl) { mutableStateOf(false) }
 
-                if (!imageUrl.isNullOrBlank() && !imageFailed) {
-                    val posterRequest = remember(context, imageUrl, posterWidthPx, posterHeightPx) {
-                        ImageRequest.Builder(context)
-                            .data(imageUrl)
-                            .apply {
-                                if (posterWidthPx > 0 && posterHeightPx > 0) {
-                                    size(posterWidthPx, posterHeightPx)
-                                    precision(Precision.INEXACT)
-                                }
-                            }
-                            .crossfade(false)
-                            .build()
-                    }
-                    AsyncImage(
-                        model = posterRequest,
-                        contentDescription = "${game.title} poster",
-                        contentScale = ContentScale.Crop,
-                        onError = { imageFailed = true },
-                        modifier = Modifier.fillMaxSize()
+            if (!imageUrl.isNullOrBlank() && !imageFailed) {
+                val posterRequest = remember(context, imageUrl, posterWidthPx, posterHeightPx) {
+                    buildPosterImageRequest(
+                        context = context,
+                        imageUrl = imageUrl,
+                        posterWidthPx = posterWidthPx,
+                        posterHeightPx = posterHeightPx
                     )
-                    // Only composite the logo over real poster art, not the banner or
-                    // icon fallbacks.
-                    if (
-                        activeLogoOverlay &&
-                        !activeLogoUrl.isNullOrBlank() &&
-                        !activePoster.isNullOrBlank()
-                    ) {
-                        PosterLogoOverlay(
-                            logoUrl = activeLogoUrl,
-                            posterWidthPx = posterWidthPx,
-                            posterHeightPx = posterHeightPx
-                        )
-                    }
-                } else {
-                    // Fallback artistic card
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(
-                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-                                        MaterialTheme.colorScheme.surfaceVariant
-                                    )
+                }
+                AsyncImage(
+                    model = posterRequest,
+                    contentDescription = "${game.title} poster",
+                    contentScale = ContentScale.Crop,
+                    onError = { imageFailed = true },
+                    modifier = Modifier.fillMaxSize()
+                )
+                // Only composite the logo over real poster art, not the banner or
+                // icon fallbacks.
+                if (
+                    activeLogoOverlay &&
+                    !activeLogoUrl.isNullOrBlank() &&
+                    !activePoster.isNullOrBlank()
+                ) {
+                    PosterLogoOverlay(
+                        logoUrl = activeLogoUrl,
+                        posterWidthPx = posterWidthPx,
+                        posterHeightPx = posterHeightPx
+                    )
+                }
+            } else {
+                // Fallback artistic card
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                    MaterialTheme.colorScheme.surfaceVariant
                                 )
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = when (game.type) {
-                                GameType.GEFORCE_NOW -> Icons.Default.Cloud
-                                GameType.INSTALLED_APP -> Icons.Default.SportsEsports
-                                GameType.SHORTCUT -> Icons.Default.Link
-                                GameType.CUSTOM_CLOUD -> Icons.Default.Cloud
-                                GameType.MOONLIGHT -> Icons.Default.SportsEsports
-                            },
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(48.dp)
-                        )
-                    }
+                            )
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = when (game.type) {
+                            GameType.GEFORCE_NOW -> Icons.Default.Cloud
+                            GameType.INSTALLED_APP -> Icons.Default.SportsEsports
+                            GameType.SHORTCUT -> Icons.Default.Link
+                            GameType.CUSTOM_CLOUD -> Icons.Default.Cloud
+                            GameType.MOONLIGHT -> Icons.Default.SportsEsports
+                        },
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(48.dp)
+                    )
                 }
             }
         }
     }
+}
+
+internal fun buildPosterImageRequest(
+    context: Context,
+    imageUrl: String,
+    posterWidthPx: Int,
+    posterHeightPx: Int
+): ImageRequest = ImageRequest.Builder(context)
+    .data(imageUrl)
+    .apply {
+        if (posterWidthPx > 0 && posterHeightPx > 0) {
+            size(posterWidthPx, posterHeightPx)
+            precision(Precision.EXACT)
+        }
+    }
+    .allowRgb565(true)
+    .crossfade(false)
+    .build()
+
+internal fun buildPosterLogoImageRequest(
+    context: Context,
+    logoUrl: String,
+    posterWidthPx: Int,
+    posterHeightPx: Int
+): ImageRequest {
+    val logoMaxWidthPx = (posterWidthPx * 0.80f).roundToInt()
+    val logoMaxHeightPx = (posterHeightPx * 0.35f).roundToInt()
+    return ImageRequest.Builder(context)
+        .data(logoUrl)
+        .apply {
+            if (logoMaxWidthPx > 0 && logoMaxHeightPx > 0) {
+                size(logoMaxWidthPx, logoMaxHeightPx)
+                precision(Precision.INEXACT)
+            }
+        }
+        .crossfade(false)
+        .build()
 }
 
 @Composable
@@ -220,19 +279,13 @@ fun PosterLogoOverlay(
     posterHeightPx: Int = 0,
 ) {
     val context = LocalContext.current
-    val logoMaxWidthPx = (posterWidthPx * 0.80f).roundToInt()
-    val logoMaxHeightPx = (posterHeightPx * 0.35f).roundToInt()
-    val logoRequest = remember(context, logoUrl, logoMaxWidthPx, logoMaxHeightPx) {
-        ImageRequest.Builder(context)
-            .data(logoUrl)
-            .apply {
-                if (logoMaxWidthPx > 0 && logoMaxHeightPx > 0) {
-                    size(logoMaxWidthPx, logoMaxHeightPx)
-                    precision(Precision.INEXACT)
-                }
-            }
-            .crossfade(false)
-            .build()
+    val logoRequest = remember(context, logoUrl, posterWidthPx, posterHeightPx) {
+        buildPosterLogoImageRequest(
+            context = context,
+            logoUrl = logoUrl,
+            posterWidthPx = posterWidthPx,
+            posterHeightPx = posterHeightPx
+        )
     }
 
     Box(modifier = modifier.fillMaxSize()) {

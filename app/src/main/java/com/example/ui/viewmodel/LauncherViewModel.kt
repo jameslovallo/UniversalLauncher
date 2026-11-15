@@ -799,6 +799,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         val defaultCustomUrls = iconPackStore.getCustomUrlOverrides(null)
         val resolvedMap = LinkedHashMap<String, String>()
+        val itemsToUpdate = mutableListOf<GameItem>()
         for (item in dbNonGames) {
             val rememberedUrl = defaultCustomUrls[item.id]
             val targetUrl = rememberedUrl ?: baseIconUrlFor(item)
@@ -808,7 +809,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 else -> false
             }
             if (shouldUpdateRoom) {
-                repository.updateIconUrl(item.id, targetUrl)
+                itemsToUpdate += item.copy(iconUrl = targetUrl)
                 _editingItem.value?.takeIf { it.id == item.id }?.let { current ->
                     _editingItem.value = current.copy(iconUrl = targetUrl)
                 }
@@ -819,6 +820,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     resolvedMap[item.packageName] = rememberedUrl
                 }
             }
+        }
+        if (itemsToUpdate.isNotEmpty()) {
+            repository.updateItemsBatch(itemsToUpdate)
         }
 
         if (_selectedIconPack.value == null) {
@@ -844,6 +848,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }.getOrDefault(emptyList())
 
         val packUrlOverrides = iconPackStore.getCustomUrlOverrides(packPackage)
+        val itemsToUpdate = mutableListOf<GameItem>()
         for (item in dbNonGames) {
             iconPackStore.saveBaseIconUrlIfUnset(item.id, item.iconUrl)
             val targetUrl = packUrlOverrides[item.id] ?: baseIconUrlFor(item)
@@ -853,11 +858,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 else -> false
             }
             if (shouldUpdateRoom) {
-                repository.updateIconUrl(item.id, targetUrl)
+                itemsToUpdate += item.copy(iconUrl = targetUrl)
                 _editingItem.value?.takeIf { it.id == item.id }?.let { current ->
                     _editingItem.value = current.copy(iconUrl = targetUrl)
                 }
             }
+        }
+        if (itemsToUpdate.isNotEmpty()) {
+            repository.updateItemsBatch(itemsToUpdate)
         }
 
         val mergedById = LinkedHashMap<String, GameItem>()

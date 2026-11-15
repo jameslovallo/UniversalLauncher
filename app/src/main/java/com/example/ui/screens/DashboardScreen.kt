@@ -91,24 +91,34 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -123,6 +133,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.imageLoader
 import com.example.data.model.GameItem
 import com.example.data.service.IconPackOverridesStore
 import com.example.ui.components.AddContentModal
@@ -137,13 +148,18 @@ import com.example.ui.components.LocalThemedAppIcons
 import com.example.ui.components.SettingsModal
 import com.example.ui.components.SteamGamePosterCard
 import com.example.ui.components.TopNavBar
+import com.example.ui.components.buildAppIconImageRequest
+import com.example.ui.components.buildPosterImageRequest
+import com.example.ui.components.buildPosterLogoImageRequest
 import com.example.ui.components.hasCustomAppIconUrl
+import com.example.ui.components.resolveAppIconUrl
 import com.example.ui.viewmodel.AddModalSubView
 import com.example.ui.viewmodel.LauncherViewModel
 import com.example.ui.viewmodel.MainLibraryTab
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -248,13 +264,27 @@ fun DashboardScreen(
 
     // Filter each page by the search query. Keeping both lists separate means swiping
     // between pages shows the correct results even before the tab state catches up.
-    fun matchesQuery(item: GameItem): Boolean =
-        item.title.contains(searchQuery, ignoreCase = true) ||
-            item.genre.contains(searchQuery, ignoreCase = true)
-
-    val gamesDisplay = if (searchQuery.isBlank()) gamesList else gamesList.filter { matchesQuery(it) }
+    val gamesDisplay = remember(gamesList, searchQuery) {
+        if (searchQuery.isBlank()) {
+            gamesList
+        } else {
+            gamesList.filter { item ->
+                item.title.contains(searchQuery, ignoreCase = true) ||
+                    item.genre.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
     // The complete app list excludes favorites and games.
-    val libraryDisplay = if (searchQuery.isBlank()) libraryApps else libraryApps.filter { matchesQuery(it) }
+    val libraryDisplay = remember(libraryApps, searchQuery) {
+        if (searchQuery.isBlank()) {
+            libraryApps
+        } else {
+            libraryApps.filter { item ->
+                item.title.contains(searchQuery, ignoreCase = true) ||
+                    item.genre.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
     // Flattened letter headers + rows. LazyColumn indices include the headers, so focus and
     // letter-rail jumps use the same list.
     val appListEntries = remember(libraryDisplay) { buildAppListEntries(libraryDisplay) }
@@ -514,6 +544,7 @@ fun DashboardScreen(
                 // Main Content Area: swipe horizontally between the Games grid and Apps list.
                 HorizontalPager(
                     state = pagerState,
+                    beyondViewportPageCount = 1,
                     // On the compact landscape Games page the poster row owns horizontal
                     // drags. Disabling pager dragging here stops its overscroll from
                     // revealing the Apps page; a drag above/below the row still switches.
@@ -649,6 +680,7 @@ fun DashboardScreen(
                         ) {
                             VerticalPager(
                                 state = appsPagerState,
+                                beyondViewportPageCount = 1,
                                 flingBehavior = appsPagerFling,
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -1175,6 +1207,8 @@ private fun GamesPosterGrid(
         // belong to the row's own scrolling, even when it cannot scroll further.
         var rowBounds by remember { mutableStateOf(Rect.Zero) }
 
+        val compactVerticalScrollState = rememberScrollState()
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1187,7 +1221,10 @@ private fun GamesPosterGrid(
                         Modifier.fillMaxSize()
                     }
                 )
-                .verticalScroll(rememberScrollState())
+                .topEdgeFade(rampDistance = 8.dp) {
+                    0 to compactVerticalScrollState.value
+                }
+                .verticalScroll(compactVerticalScrollState)
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
@@ -1224,6 +1261,19 @@ private fun GamesPosterGrid(
             }
             val compactPosterHeightPx = (compactPosterWidthPx * 1.5f).roundToInt()
 
+            PrefetchPosterImages(
+                games = games,
+                showNsfwPoster = showNsfwPoster,
+                posterWidthPx = compactPosterWidthPx,
+                posterHeightPx = compactPosterHeightPx,
+                visibleRangeProvider = {
+                    val info = rowState.layoutInfo.visibleItemsInfo
+                    val first = info.firstOrNull()?.index ?: -1
+                    val last = info.lastOrNull()?.index ?: -1
+                    first to last
+                }
+            )
+
             LazyRow(
                 state = rowState,
                 flingBehavior = snapFling,
@@ -1259,6 +1309,7 @@ private fun GamesPosterGrid(
                     SteamGamePosterCard(
                         game = game,
                         isFocused = isFocused,
+                        showFocusEffects = showFocusEffects,
                         showFocusOutline = false,
                         showNsfwPoster = showNsfwPoster,
                         posterWidthPx = compactPosterWidthPx,
@@ -1297,6 +1348,19 @@ private fun GamesPosterGrid(
         val posterWidthPx = with(density) { cellWidthDp.roundToPx().coerceAtLeast(1) }
         val posterHeightPx = (posterWidthPx * 1.5f).roundToInt().coerceAtLeast(1)
 
+        PrefetchPosterImages(
+            games = games,
+            showNsfwPoster = showNsfwPoster,
+            posterWidthPx = posterWidthPx,
+            posterHeightPx = posterHeightPx,
+            visibleRangeProvider = {
+                val info = gridState.layoutInfo.visibleItemsInfo
+                val first = info.firstOrNull()?.index ?: -1
+                val last = info.lastOrNull()?.index ?: -1
+                first to last
+            }
+        )
+
         CompositionLocalProvider(LocalBringIntoViewSpec provides focusBringIntoViewSpec) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(columnCount),
@@ -1313,6 +1377,9 @@ private fun GamesPosterGrid(
                 horizontalArrangement = Arrangement.spacedBy(spacing),
                 modifier = Modifier
                     .fillMaxSize()
+                    .topEdgeFade(rampDistance = 12.dp) {
+                        gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
+                    }
                     .testTag("games_poster_grid")
             ) {
                 itemsIndexed(
@@ -1334,6 +1401,7 @@ private fun GamesPosterGrid(
                     SteamGamePosterCard(
                         game = game,
                         isFocused = game.id == focusedItemId && showFocusEffects,
+                        showFocusEffects = showFocusEffects,
                         showNsfwPoster = showNsfwPoster,
                         posterWidthPx = posterWidthPx,
                         posterHeightPx = posterHeightPx,
@@ -1347,6 +1415,62 @@ private fun GamesPosterGrid(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PrefetchPosterImages(
+    games: List<GameItem>,
+    showNsfwPoster: Boolean,
+    posterWidthPx: Int,
+    posterHeightPx: Int,
+    visibleRangeProvider: () -> Pair<Int, Int>,
+) {
+    val context = LocalContext.current
+    LaunchedEffect(games, showNsfwPoster, posterWidthPx, posterHeightPx) {
+        if (games.isEmpty()) return@LaunchedEffect
+        val loader = context.imageLoader
+        val enqueuedUrls = HashSet<String>()
+        snapshotFlow(visibleRangeProvider)
+            .distinctUntilChanged()
+            .collect { (firstVisible, lastVisible) ->
+                if (firstVisible < 0 || lastVisible < 0) return@collect
+                val start = (firstVisible - 4).coerceAtLeast(0)
+                val end = (lastVisible + 12).coerceAtMost(games.lastIndex)
+                for (i in start..end) {
+                    val game = games[i]
+                    val showingNsfw = showNsfwPoster && !game.nsfwPosterUrl.isNullOrBlank()
+                    val activePoster = if (showingNsfw) game.nsfwPosterUrl else game.posterUrl
+                    val imageUrl = activePoster ?: game.heroBannerUrl ?: game.iconUrl
+                    if (!imageUrl.isNullOrBlank() && enqueuedUrls.add(imageUrl)) {
+                        loader.enqueue(
+                            buildPosterImageRequest(
+                                context = context,
+                                imageUrl = imageUrl,
+                                posterWidthPx = posterWidthPx,
+                                posterHeightPx = posterHeightPx
+                            )
+                        )
+                    }
+                    val activeLogoOverlay = if (showingNsfw) game.overlayNsfwLogo else game.overlayLogo
+                    val activeLogoUrl = if (showingNsfw) game.nsfwLogoUrl else game.logoUrl
+                    if (
+                        activeLogoOverlay &&
+                        !activeLogoUrl.isNullOrBlank() &&
+                        !activePoster.isNullOrBlank() &&
+                        enqueuedUrls.add("logo:$activeLogoUrl")
+                    ) {
+                        loader.enqueue(
+                            buildPosterLogoImageRequest(
+                                context = context,
+                                logoUrl = activeLogoUrl,
+                                posterWidthPx = posterWidthPx,
+                                posterHeightPx = posterHeightPx
+                            )
+                        )
+                    }
+                }
+            }
     }
 }
 
@@ -1404,6 +1528,13 @@ private fun AppsAlphabeticalList(
     // under the handle while the final items still scroll fully into view.
     val navigationBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
+    PrefetchAppIcons(
+        entries = entries,
+        layout = layout,
+        listState = listState,
+        gridState = gridState
+    )
+
     Row(
         modifier = Modifier.fillMaxSize()
     ) {
@@ -1432,6 +1563,9 @@ private fun AppsAlphabeticalList(
                     horizontalArrangement = Arrangement.spacedBy(0.dp),
                     modifier = Modifier
                         .fillMaxSize()
+                        .topEdgeFade(rampDistance = 8.dp) {
+                            gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
+                        }
                         .testTag("apps_grid")
                 ) {
                     items(
@@ -1500,6 +1634,9 @@ private fun AppsAlphabeticalList(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
+                    .topEdgeFade(rampDistance = 8.dp) {
+                        listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                    }
                     .testTag("apps_list")
             ) {
                 items(
@@ -1555,6 +1692,58 @@ private fun AppsAlphabeticalList(
             activeLetter = activeLetter,
             onLetterSelected = onLetterSelected
         )
+    }
+}
+
+@Composable
+private fun PrefetchAppIcons(
+    entries: List<AppListEntry>,
+    layout: FavoritesLayout,
+    listState: LazyListState,
+    gridState: LazyGridState,
+) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val themedIcons = LocalThemedAppIcons.current
+    val iconSizePx = remember(density, layout) {
+        val sizeDp = if (layout == FavoritesLayout.ICONS) 58.dp else 39.dp
+        with(density) { sizeDp.roundToPx().coerceAtLeast(1) }
+    }
+    LaunchedEffect(entries, layout, themedIcons, iconSizePx) {
+        if (entries.isEmpty()) return@LaunchedEffect
+        val loader = context.imageLoader
+        val enqueuedUrls = HashSet<String>()
+        snapshotFlow {
+            val visible = if (layout == FavoritesLayout.ICONS) {
+                gridState.layoutInfo.visibleItemsInfo.let { info ->
+                    (info.firstOrNull()?.index ?: -1) to (info.lastOrNull()?.index ?: -1)
+                }
+            } else {
+                listState.layoutInfo.visibleItemsInfo.let { info ->
+                    (info.firstOrNull()?.index ?: -1) to (info.lastOrNull()?.index ?: -1)
+                }
+            }
+            visible
+        }
+            .distinctUntilChanged()
+            .collect { (firstVisible, lastVisible) ->
+                if (firstVisible < 0 || lastVisible < 0) return@collect
+                val start = (firstVisible - 6).coerceAtLeast(0)
+                val end = (lastVisible + 15).coerceAtMost(entries.lastIndex)
+                for (i in start..end) {
+                    val appEntry = entries[i] as? AppListEntry.App ?: continue
+                    val imageUrl = resolveAppIconUrl(appEntry.item, themedIcons)
+                    if (!imageUrl.isNullOrBlank() && enqueuedUrls.add(imageUrl)) {
+                        loader.enqueue(
+                            buildAppIconImageRequest(
+                                context = context,
+                                imageUrl = imageUrl,
+                                sizePx = iconSizePx
+                            )
+                        )
+                    }
+                }
+            }
     }
 }
 
@@ -1785,3 +1974,71 @@ private fun EmptyLibraryState(
         }
     }
 }
+
+/**
+ * Fades scrolling content smoothly to transparency along the top edge once the list or grid
+ * scrolls past its resting top padding. Only the top [fadeHeight] strip uses an offscreen
+ * layer (`saveLayer`), while the rest of the viewport draws directly to the main framebuffer
+ * with zero extra blending or allocations.
+ */
+@Composable
+internal fun Modifier.topEdgeFade(
+    fadeHeight: Dp = 24.dp,
+    rampDistance: Dp = 12.dp,
+    scrollOffsetProvider: () -> Pair<Int, Int>,
+): Modifier {
+    val density = LocalDensity.current
+    val fadePx = remember(density, fadeHeight) {
+        with(density) { fadeHeight.toPx().roundToInt().toFloat().coerceAtLeast(1f) }
+    }
+    val rampPx = remember(density, rampDistance) {
+        with(density) { rampDistance.toPx().coerceAtLeast(1f) }
+    }
+    val layerPaint = remember { Paint() }
+    val fadeBrush = remember(fadePx) {
+        Brush.verticalGradient(
+            colors = listOf(Color.Black, Color.Transparent),
+            startY = 0f,
+            endY = fadePx
+        )
+    }
+    return this.drawWithContent {
+        val (firstIndex, firstOffset) = scrollOffsetProvider()
+        val fadeStrength = if (firstIndex > 0) {
+            1f
+        } else {
+            (firstOffset / rampPx).coerceIn(0f, 1f)
+        }
+        if (fadeStrength <= 0f || size.height <= fadePx || size.width <= 0f) {
+            drawContent()
+            return@drawWithContent
+        }
+
+        // Everything below the top strip draws directly without an offscreen buffer.
+        clipRect(top = fadePx) {
+            this@drawWithContent.drawContent()
+        }
+
+        // Isolate only the top fadePx strip for DstOut alpha masking.
+        clipRect(top = 0f, bottom = fadePx) {
+            val canvas = drawContext.canvas
+            canvas.saveLayer(
+                bounds = Rect(0f, 0f, size.width, fadePx),
+                paint = layerPaint
+            )
+            try {
+                this@drawWithContent.drawContent()
+                drawRect(
+                    brush = fadeBrush,
+                    topLeft = Offset.Zero,
+                    size = Size(size.width, fadePx),
+                    alpha = fadeStrength,
+                    blendMode = BlendMode.DstOut
+                )
+            } finally {
+                canvas.restore()
+            }
+        }
+    }
+}
+
