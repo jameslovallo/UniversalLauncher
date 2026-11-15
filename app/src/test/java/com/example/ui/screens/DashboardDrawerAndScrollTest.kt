@@ -276,44 +276,4 @@ class DashboardDrawerAndScrollTest {
         assertEquals(0, state.gamesRowState.firstVisibleItemIndex)
         assertEquals(0, state.gamesRowState.firstVisibleItemScrollOffset)
     }
-
-    @Test
-    fun `topEdgeFade renders at rest and during scroll without triggering recompositions`() {
-        lateinit var listState: LazyListState
-        lateinit var scope: CoroutineScope
-        var compositionCount = 0
-
-        composeRule.setContent {
-            compositionCount++
-            listState = rememberLazyListState()
-            scope = rememberCoroutineScope()
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .topEdgeFade(rampDistance = 8.dp) {
-                        listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
-                    }
-            ) {
-                items(40) { index ->
-                    Text(
-                        text = "Item $index",
-                        modifier = Modifier.height(64.dp)
-                    )
-                }
-            }
-        }
-        composeRule.waitForIdle()
-        val baselineCompositions = compositionCount
-
-        composeRule.runOnIdle {
-            scope.launch {
-                listState.scrollToItem(5, scrollOffset = 24)
-            }
-        }
-        composeRule.waitForIdle()
-
-        assertEquals(5, listState.firstVisibleItemIndex)
-        assertEquals(baselineCompositions, compositionCount)
-    }
 }

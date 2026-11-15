@@ -99,20 +99,12 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Paint
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInParent
@@ -1282,8 +1274,6 @@ private fun GamesPosterGrid(
         // belong to the row's own scrolling, even when it cannot scroll further.
         var rowBounds by remember { mutableStateOf(Rect.Zero) }
 
-        val compactVerticalScrollState = rememberScrollState()
-
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1296,10 +1286,7 @@ private fun GamesPosterGrid(
                         Modifier.fillMaxSize()
                     }
                 )
-                .topEdgeFade(rampDistance = 8.dp) {
-                    0 to compactVerticalScrollState.value
-                }
-                .verticalScroll(compactVerticalScrollState)
+                .verticalScroll(rememberScrollState())
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
@@ -1452,9 +1439,6 @@ private fun GamesPosterGrid(
                 horizontalArrangement = Arrangement.spacedBy(spacing),
                 modifier = Modifier
                     .fillMaxSize()
-                    .topEdgeFade(rampDistance = 12.dp) {
-                        gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
-                    }
                     .testTag("games_poster_grid")
             ) {
                 itemsIndexed(
@@ -1638,9 +1622,6 @@ private fun AppsAlphabeticalList(
                     horizontalArrangement = Arrangement.spacedBy(0.dp),
                     modifier = Modifier
                         .fillMaxSize()
-                        .topEdgeFade(rampDistance = 8.dp) {
-                            gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
-                        }
                         .testTag("apps_grid")
                 ) {
                     items(
@@ -1709,9 +1690,6 @@ private fun AppsAlphabeticalList(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .topEdgeFade(rampDistance = 8.dp) {
-                        listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
-                    }
                     .testTag("apps_list")
             ) {
                 items(
@@ -2090,73 +2068,6 @@ private fun EmptyLibraryState(
                 Icon(Icons.Default.Add, contentDescription = null)
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Add Content")
-            }
-        }
-    }
-}
-
-/**
- * Fades scrolling content smoothly to transparency along the top edge once the list or grid
- * scrolls past its resting top padding. Only the top [fadeHeight] strip uses an offscreen
- * layer (`saveLayer`), while the rest of the viewport draws directly to the main framebuffer
- * with zero extra blending or allocations.
- */
-@Composable
-internal fun Modifier.topEdgeFade(
-    fadeHeight: Dp = 24.dp,
-    rampDistance: Dp = 12.dp,
-    scrollOffsetProvider: () -> Pair<Int, Int>,
-): Modifier {
-    val density = LocalDensity.current
-    val fadePx = remember(density, fadeHeight) {
-        with(density) { fadeHeight.toPx().roundToInt().toFloat().coerceAtLeast(1f) }
-    }
-    val rampPx = remember(density, rampDistance) {
-        with(density) { rampDistance.toPx().coerceAtLeast(1f) }
-    }
-    val layerPaint = remember { Paint() }
-    val fadeBrush = remember(fadePx) {
-        Brush.verticalGradient(
-            colors = listOf(Color.Black, Color.Transparent),
-            startY = 0f,
-            endY = fadePx
-        )
-    }
-    return this.drawWithContent {
-        val (firstIndex, firstOffset) = scrollOffsetProvider()
-        val fadeStrength = if (firstIndex > 0) {
-            1f
-        } else {
-            (firstOffset / rampPx).coerceIn(0f, 1f)
-        }
-        if (fadeStrength <= 0f || size.height <= fadePx || size.width <= 0f) {
-            drawContent()
-            return@drawWithContent
-        }
-
-        // Everything below the top strip draws directly without an offscreen buffer.
-        clipRect(top = fadePx) {
-            this@drawWithContent.drawContent()
-        }
-
-        // Isolate only the top fadePx strip for DstOut alpha masking.
-        clipRect(top = 0f, bottom = fadePx) {
-            val canvas = drawContext.canvas
-            canvas.saveLayer(
-                bounds = Rect(0f, 0f, size.width, fadePx),
-                paint = layerPaint
-            )
-            try {
-                this@drawWithContent.drawContent()
-                drawRect(
-                    brush = fadeBrush,
-                    topLeft = Offset.Zero,
-                    size = Size(size.width, fadePx),
-                    alpha = fadeStrength,
-                    blendMode = BlendMode.DstOut
-                )
-            } finally {
-                canvas.restore()
             }
         }
     }

@@ -75,7 +75,7 @@ class LauncherViewModelIconThemeMemoryTest {
     }
 
     @Test
-    fun `default theme remembers customized app icons independently across icon pack switches`(): Unit = runBlocking {
+    fun `default theme keeps custom icons across pack switches`(): Unit = runBlocking {
         val spotify = GameItem(
             id = "app_com.spotify.music",
             title = "Spotify",

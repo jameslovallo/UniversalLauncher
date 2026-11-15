@@ -137,7 +137,7 @@ class IconPackOverridesStore(private val prefs: SharedPreferences) {
      * custom image so resetting or switching themes can restore it.
      */
     fun saveBaseIconUrlIfUnset(itemId: String, url: String?) {
-        if (itemId.isBlank() || url.isNullOrBlank() || !url.contains("/shortcuts/")) return
+        if (itemId.isBlank() || url.isNullOrBlank() || !isShortcutIconUrl(url)) return
         val root = readJson(KEY_BASE_SHORTCUT_ICONS)
         if (root.has(itemId)) return
         root.put(itemId, url)
@@ -192,6 +192,15 @@ class IconPackOverridesStore(private val prefs: SharedPreferences) {
     private fun readJson(prefKey: String): JSONObject {
         val raw = prefs.getString(prefKey, null) ?: return JSONObject()
         return runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
+    }
+
+    /**
+     * Shortcut icons live in a `/shortcuts/` folder. Windows file URIs percent-encode the
+     * separator (`%5C`) and may use backslashes, so decode and normalize before matching.
+     */
+    private fun isShortcutIconUrl(url: String): Boolean {
+        val decoded = runCatching { Uri.decode(url) }.getOrDefault(url)
+        return decoded.replace('\\', '/').contains("/shortcuts/")
     }
 
     private fun isReadableLocalIconUrl(url: String): Boolean {
