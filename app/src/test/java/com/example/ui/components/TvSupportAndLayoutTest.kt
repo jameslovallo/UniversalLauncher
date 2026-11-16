@@ -822,4 +822,93 @@ class TvSupportAndLayoutTest {
             )
         )
     }
+
+    @Test
+    fun `empty TV FavoritesHome stacks clock above date row without overlap and opens app list on Down`() {
+        var navigatedDown by mutableIntStateOf(0)
+        val initialRequester = FocusRequester()
+
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.size(width = 960.dp, height = 476.dp)) {
+                    FavoritesHome(
+                        favorites = emptyList(),
+                        focusedItemId = null,
+                        layout = FavoritesLayout.TV_CARDS,
+                        showFocusEffects = true,
+                        weatherEnabled = true,
+                        weather = WeatherInfo(
+                            temperatureC = 4.5,
+                            weatherCode = 2,
+                            locationLabel = "Seattle"
+                        ),
+                        temperatureUnit = TemperatureUnit.FAHRENHEIT,
+                        firstItemFocusRequester = initialRequester,
+                        onLaunchFavorite = {},
+                        onLongPressFavorite = {},
+                        onOpenClock = {},
+                        onOpenCalendar = {},
+                        onOpenWeather = {},
+                        onPullDown = {},
+                        onNavigateDownToAppList = { navigatedDown++ }
+                    )
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        val clockBounds = composeRule.onNodeWithTag("favorites_clock").assertIsDisplayed().getUnclippedBoundsInRoot()
+        val dateRowBounds = composeRule.onNodeWithTag("favorites_date_row").assertIsDisplayed().getUnclippedBoundsInRoot()
+        composeRule.onNodeWithTag("favorites_weather").assertIsDisplayed()
+
+        // Clock must sit completely above date + weather row with no vertical overlap.
+        assertTrue(
+            "Expected clock bottom (${clockBounds.bottom}) <= dateRow top (${dateRowBounds.top})",
+            clockBounds.bottom <= dateRowBounds.top
+        )
+
+        // Empty-state initial focus lands on date row so pressing Down immediately opens all apps.
+        composeRule.runOnIdle { initialRequester.requestFocus() }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorites_date_row").assertIsFocused()
+        composeRule.onNodeWithTag("favorites_date_row").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        assertEquals(1, navigatedDown)
+    }
+
+    @Test
+    fun `TV FavoritesHome with over 15 items opens app list when pressing Down on third visible row`() {
+        val favorites = (0 until 18).map { i -> sampleApp("fav_$i", "App $i", isFavorite = true) }
+        var navigatedDown by mutableIntStateOf(0)
+
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.size(width = 960.dp, height = 476.dp)) {
+                    FavoritesHome(
+                        favorites = favorites,
+                        focusedItemId = "fav_10",
+                        layout = FavoritesLayout.TV_CARDS,
+                        showFocusEffects = true,
+                        onLaunchFavorite = {},
+                        onLongPressFavorite = {},
+                        onOpenClock = {},
+                        onOpenCalendar = {},
+                        onPullDown = {},
+                        onNavigateDownToAppList = { navigatedDown++ }
+                    )
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_fav_10").performSemanticsAction(SemanticsActions.RequestFocus)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_fav_10").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        assertEquals(1, navigatedDown)
+    }
 }

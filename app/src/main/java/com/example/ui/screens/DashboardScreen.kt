@@ -394,7 +394,7 @@ fun DashboardScreen(
 
     // Move remote/controller focus to the first item of the new Apps context once both pagers
     // have settled on Apps, while leaving open modals untouched.
-    var focusedAppsContext by remember { mutableStateOf(Int.MIN_VALUE) }
+    var focusedAppsKey by remember { mutableStateOf<Pair<Int, String?>?>(null) }
     LaunchedEffect(
         currentTab,
         pagerState.settledPage,
@@ -408,7 +408,7 @@ fun DashboardScreen(
         appListEntries.firstOrNull { it is AppListEntry.App },
     ) {
         if (!showFocusEffects || currentTab != MainLibraryTab.APPS || !noOverlayOpen) {
-            focusedAppsContext = Int.MIN_VALUE
+            focusedAppsKey = null
             return@LaunchedEffect
         }
         // Wait until both pagers have settled so focus changes never trigger BringIntoView
@@ -422,18 +422,25 @@ fun DashboardScreen(
         }
 
         val context = appsPagerState.currentPage
-        if (context == focusedAppsContext) return@LaunchedEffect
-
         if (context == 0) {
-            val firstFavorite = favoriteApps.firstOrNull() ?: return@LaunchedEffect
-            focusedAppsContext = context
-            viewModel.setFocusedItem(firstFavorite.id)
+            val firstFavorite = favoriteApps.firstOrNull()
+            val targetKey = 0 to firstFavorite?.id
+            if (targetKey == focusedAppsKey) return@LaunchedEffect
+            focusedAppsKey = targetKey
+            if (firstFavorite != null) {
+                viewModel.setFocusedItem(firstFavorite.id)
+            } else {
+                viewModel.clearFocus()
+            }
+            withFrameNanos { }
             runCatching { favoritesFirstFocusRequester.requestFocus() }
         } else {
             val firstAppIndex = appListEntries.indexOfFirst { it is AppListEntry.App }
             val firstApp = appListEntries.getOrNull(firstAppIndex) as? AppListEntry.App
                 ?: return@LaunchedEffect
-            focusedAppsContext = context
+            val targetKey = 1 to firstApp.item.id
+            if (targetKey == focusedAppsKey) return@LaunchedEffect
+            focusedAppsKey = targetKey
             viewModel.setFocusedItem(firstApp.item.id)
             // The first row may not be composed if the drawer was left scrolled down.
             val useGrid = effectiveFavoritesLayout != FavoritesLayout.TEXT
@@ -449,6 +456,7 @@ fun DashboardScreen(
                     runCatching { appsListState.scrollToItem(0) }
                 }
             }
+            withFrameNanos { }
             runCatching { appsListFirstFocusRequester.requestFocus() }
         }
     }

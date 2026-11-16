@@ -202,34 +202,41 @@ fun FavoritesHome(
             horizontalAlignment = contentAlignment
         ) {
             if (showClockAndDate) {
-                val emptyDownMod = if (favorites.isEmpty() && onNavigateDownToAppList != null) {
-                    Modifier.onPreviewKeyEvent { event ->
-                        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
-                            onNavigateDownToAppList()
-                            true
-                        } else {
-                            false
-                        }
-                    }
+                val emptyDateMod = if (favorites.isEmpty()) {
+                    Modifier
+                        .then(firstItemFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+                        .then(
+                            if (onNavigateDownToAppList != null) {
+                                Modifier.onPreviewKeyEvent { event ->
+                                    if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+                                        onNavigateDownToAppList()
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                            } else {
+                                Modifier
+                            }
+                        )
                 } else {
                     Modifier
                 }
 
-                Box(modifier = emptyDownMod) {
-                    FavoritesClockAndDate(
-                        isTextLayout = isTextLayout,
-                        isTvLayout = isTvLayout,
-                        showFocusEffects = showFocusEffects,
-                        textAlign = textAlign,
-                        textRowInset = textRowInset,
-                        weatherEnabled = weatherEnabled,
-                        weather = weather,
-                        temperatureUnit = temperatureUnit,
-                        onOpenClock = onOpenClock,
-                        onOpenCalendar = onOpenCalendar,
-                        onOpenWeather = onOpenWeather
-                    )
-                }
+                FavoritesClockAndDate(
+                    isTextLayout = isTextLayout,
+                    isTvLayout = isTvLayout,
+                    showFocusEffects = showFocusEffects,
+                    textAlign = textAlign,
+                    textRowInset = textRowInset,
+                    weatherEnabled = weatherEnabled,
+                    weather = weather,
+                    temperatureUnit = temperatureUnit,
+                    onOpenClock = onOpenClock,
+                    onOpenCalendar = onOpenCalendar,
+                    onOpenWeather = onOpenWeather,
+                    dateRowModifier = emptyDateMod
+                )
 
                 Spacer(modifier = Modifier.height(if (isTvLayout) 22.dp else 34.dp))
             }
@@ -281,9 +288,10 @@ fun FavoritesHome(
                 val cardWidth = minOf(fiveColCardWidth, maxCardWidthFromHeight)
                 val cardHeight = cardWidth * (9f / 16f)
 
+                val visibleCount = minOf(favorites.size, TV_FAVORITES_MAX_COLUMNS * TV_FAVORITES_MAX_ROWS)
                 val gridWidth = cardWidth * columns + hSpacing * (columns - 1) + gridPadding * 2
                 val gridHeight = cardHeight * visibleRows + vSpacing * (visibleRows - 1) + gridPadding * 2
-                val lastRowStartIndex = ((favorites.size - 1) / columns) * columns
+                val lastRowStartIndex = ((visibleCount - 1) / columns) * columns
 
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(columns),
@@ -498,6 +506,7 @@ private fun FavoritesClockAndDate(
     onOpenCalendar: () -> Unit,
     onOpenWeather: () -> Unit,
     clockModifier: Modifier = Modifier,
+    dateRowModifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -556,7 +565,7 @@ private fun FavoritesClockAndDate(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (isTextLayout) Arrangement.Start else Arrangement.Center,
-        modifier = clockModifier
+        modifier = dateRowModifier
             .clip(RoundedCornerShape(12.dp))
             .then(
                 if (dateFocused) {
