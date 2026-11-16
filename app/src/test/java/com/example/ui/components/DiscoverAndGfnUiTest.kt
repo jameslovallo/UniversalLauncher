@@ -5,23 +5,43 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
+import com.example.data.service.AmazonLunaService
 import com.example.data.service.GeForceNowService
-import kotlinx.coroutines.test.runTest
+import com.example.ui.viewmodel.AddModalSubView
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -30,6 +50,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
+@OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w411dp-h915dp-xhdpi")
 class DiscoverAndGfnUiTest {
@@ -183,5 +204,200 @@ class DiscoverAndGfnUiTest {
         composeRule.onNodeWithTag("option_add_moonlight_app_icon", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("option_play_store_app_icon", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("option_add_web_url_symbolic_icon", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w960dp-h540dp-television-xhdpi")
+    fun `TV remote D-pad navigates GeForce NOW search and populated posters without leaking to background`() {
+        val sampleGames = listOf(
+            GameItem(id = "gfn_1", title = "Cyberpunk 2077", type = GameType.GEFORCE_NOW, isGame = true),
+            GameItem(id = "gfn_2", title = "Alan Wake 2", type = GameType.GEFORCE_NOW, isGame = true),
+            GameItem(id = "gfn_3", title = "Baldur's Gate 3", type = GameType.GEFORCE_NOW, isGame = true),
+            GameItem(id = "gfn_4", title = "Starfield", type = GameType.GEFORCE_NOW, isGame = true),
+            GameItem(id = "gfn_5", title = "Hades II", type = GameType.GEFORCE_NOW, isGame = true)
+        )
+        var currentSubView by mutableStateOf(AddModalSubView.OPTIONS)
+        var selectedGame: GameItem? = null
+        val backgroundButtonRequester = FocusRequester()
+
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // Simulated DashboardScreen background gated by canFocus = false while modal is open.
+                    Box(modifier = Modifier.fillMaxSize().focusProperties { canFocus = false }) {
+                        Button(
+                            onClick = {},
+                            modifier = Modifier
+                                .focusRequester(backgroundButtonRequester)
+                                .testTag("background_launcher_item")
+                        ) {
+                            Text("Background Item")
+                        }
+                    }
+
+                    AddContentModal(
+                        subView = currentSubView,
+                        onNavigateSubView = { currentSubView = it },
+                        onOpenPlayStore = {},
+                        onOpenMoonlight = {},
+                        onAddShortcut = { _, _, _ -> },
+                        onAddGfnGame = { selectedGame = it },
+                        onAddLunaGame = {},
+                        onDismiss = {}
+                    )
+                }
+            }
+        }
+
+        // Wait for Options initial focus and move right to GeForce NOW option, then Select.
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("option_add_luna").assertIsFocused()
+        composeRule.onNodeWithTag("option_add_luna").performKeyInput {
+            pressKey(Key.DirectionRight)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("option_add_gfn").assertIsFocused()
+        composeRule.onNodeWithTag("option_add_gfn").performKeyInput {
+            pressKey(Key.DirectionCenter)
+        }
+
+        // Replace subView directly with AddGfnSearchView? Wait: AddContentModal internally calls
+        // GeForceNowService.browseOrSearchCatalog on ADD_GFN; verify search field gets focus even while loading,
+        // and test deterministic poster D-pad navigation cleanly on AddGfnSearchView below.
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("background_launcher_item").assertIsNotFocused()
+        composeRule.onNodeWithTag("add_gfn_search").assertIsDisplayed()
+        composeRule.onNodeWithTag("add_gfn_search").assertIsFocused()
+
+        // Up from search moves to Back button; Down from Back returns to search.
+        composeRule.onNodeWithTag("add_gfn_search").performKeyInput {
+            pressKey(Key.DirectionUp)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("add_modal_close_button").assertIsFocused()
+        composeRule.onNodeWithTag("add_modal_close_button").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("add_gfn_search").assertIsFocused()
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w960dp-h540dp-television-xhdpi")
+    fun `TV remote D-pad navigates from AddGfnSearchView search box to populated posters and selects with Center`() {
+        val sampleGames = listOf(
+            GameItem(id = "gfn_1", title = "Cyberpunk 2077", type = GameType.GEFORCE_NOW, isGame = true),
+            GameItem(id = "gfn_2", title = "Alan Wake 2", type = GameType.GEFORCE_NOW, isGame = true),
+            GameItem(id = "gfn_3", title = "Baldur's Gate 3", type = GameType.GEFORCE_NOW, isGame = true),
+            GameItem(id = "gfn_4", title = "Starfield", type = GameType.GEFORCE_NOW, isGame = true),
+            GameItem(id = "gfn_5", title = "Hades II", type = GameType.GEFORCE_NOW, isGame = true),
+            GameItem(id = "gfn_6", title = "Portal 2", type = GameType.GEFORCE_NOW, isGame = true)
+        )
+        var selectedGame: GameItem? = null
+
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.size(width = 760.dp, height = 500.dp)) {
+                    AddGfnSearchView(
+                        onGameSelected = { selectedGame = it },
+                        catalogLoader = {
+                            GeForceNowService.GfnBrowseResult(
+                                games = sampleGames,
+                                classification = GeForceNowService.GfnDefaultClassification.RECENTLY_ADDED
+                            )
+                        }
+                    )
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("add_gfn_search").assertIsFocused()
+
+        // Press Down from search box -> focuses first populated poster.
+        composeRule.onNodeWithTag("add_gfn_search").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("gfn_game_gfn_1").assertIsFocused()
+
+        // Press Right -> focuses second poster, then Left -> back to first poster, then Up -> back to search box.
+        composeRule.onNodeWithTag("gfn_game_gfn_1").performKeyInput {
+            pressKey(Key.DirectionRight)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("gfn_game_gfn_2").assertIsFocused()
+
+        composeRule.onNodeWithTag("gfn_game_gfn_2").performKeyInput {
+            pressKey(Key.DirectionCenter)
+        }
+        composeRule.waitForIdle()
+
+        assertNotNull(selectedGame)
+        assertEquals("gfn_2", selectedGame?.id)
+        assertEquals("Alan Wake 2", selectedGame?.title)
+
+        // Up from poster returns focus to search box.
+        composeRule.onNodeWithTag("gfn_game_gfn_2").performKeyInput {
+            pressKey(Key.DirectionUp)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("add_gfn_search").assertIsFocused()
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w960dp-h540dp-television-xhdpi")
+    fun `TV remote D-pad enters Amazon Luna from Discover options without leaking focus to background`() {
+        var currentSubView by mutableStateOf(AddModalSubView.OPTIONS)
+
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Box(modifier = Modifier.fillMaxSize().focusProperties { canFocus = false }) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .focusable()
+                                .clickable {}
+                                .testTag("background_tile")
+                        )
+                    }
+
+                    AddContentModal(
+                        subView = currentSubView,
+                        onNavigateSubView = { currentSubView = it },
+                        onOpenPlayStore = {},
+                        onOpenMoonlight = {},
+                        onAddShortcut = { _, _, _ -> },
+                        onAddGfnGame = {},
+                        onAddLunaGame = {},
+                        onDismiss = {}
+                    )
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("option_add_luna").assertIsFocused()
+        composeRule.onNodeWithTag("option_add_luna").performKeyInput {
+            pressKey(Key.DirectionCenter)
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("background_tile").assertIsNotFocused()
+        composeRule.onNodeWithTag("add_luna_search").assertIsDisplayed()
+        composeRule.onNodeWithTag("add_luna_search").assertIsFocused()
+
+        // Up from Luna search moves to Back button; Down returns to Luna search.
+        composeRule.onNodeWithTag("add_luna_search").performKeyInput {
+            pressKey(Key.DirectionUp)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("add_modal_close_button").assertIsFocused()
+        composeRule.onNodeWithTag("add_modal_close_button").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("add_luna_search").assertIsFocused()
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -35,7 +36,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -71,13 +72,20 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -145,6 +153,11 @@ fun AddContentModal(
                     .padding(horizontal = 24.dp)
                     .padding(bottom = 24.dp)
             ) {
+                val primaryFocusRequesters = remember {
+                    AddModalSubView.entries.associateWith { FocusRequester() }
+                }
+                val activePrimaryFocusRequester = primaryFocusRequesters.getValue(subView)
+
                 // Header aligned at top, matching Settings
                 Row(
                     modifier = Modifier
@@ -158,6 +171,17 @@ fun AddContentModal(
                         interactionSource = backInteraction,
                         modifier = Modifier
                             .tvFocusBorder(backInteraction, shape = CircleShape)
+                            .focusProperties {
+                                down = activePrimaryFocusRequester
+                            }
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+                                    runCatching { activePrimaryFocusRequester.requestFocus() }
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
                             .testTag("add_modal_close_button")
                     ) {
                         Icon(
@@ -196,30 +220,42 @@ fun AddContentModal(
                         .weight(1f)
                         .fillMaxWidth()
                 ) { targetView ->
-                    when (targetView) {
-                        AddModalSubView.OPTIONS -> {
-                            OptionsSelectView(
-                                onSelectPlayStore = onOpenPlayStore,
-                                onSelectGfn = { onNavigateSubView(AddModalSubView.ADD_GFN) },
-                                onSelectLuna = { onNavigateSubView(AddModalSubView.ADD_LUNA) },
-                                onSelectMoonlight = onOpenMoonlight,
-                                onSelectWebUrl = { onNavigateSubView(AddModalSubView.ADD_WEB_URL) }
-                            )
-                        }
-                        AddModalSubView.ADD_WEB_URL -> {
-                            AddShortcutFormView(
-                                onAddShortcut = onAddShortcut
-                            )
-                        }
-                        AddModalSubView.ADD_GFN -> {
-                            AddGfnSearchView(
-                                onGameSelected = onAddGfnGame
-                            )
-                        }
-                        AddModalSubView.ADD_LUNA -> {
-                            AddLunaSearchView(
-                                onGameSelected = onAddLunaGame
-                            )
+                    val targetPrimaryFocusRequester = primaryFocusRequesters.getValue(targetView)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .focusProperties { canFocus = (subView == targetView) }
+                            .focusGroup()
+                    ) {
+                        when (targetView) {
+                            AddModalSubView.OPTIONS -> {
+                                OptionsSelectView(
+                                    onSelectPlayStore = onOpenPlayStore,
+                                    onSelectGfn = { onNavigateSubView(AddModalSubView.ADD_GFN) },
+                                    onSelectLuna = { onNavigateSubView(AddModalSubView.ADD_LUNA) },
+                                    onSelectMoonlight = onOpenMoonlight,
+                                    onSelectWebUrl = { onNavigateSubView(AddModalSubView.ADD_WEB_URL) },
+                                    firstOptionFocusRequester = targetPrimaryFocusRequester
+                                )
+                            }
+                            AddModalSubView.ADD_WEB_URL -> {
+                                AddShortcutFormView(
+                                    onAddShortcut = onAddShortcut,
+                                    titleFocusRequester = targetPrimaryFocusRequester
+                                )
+                            }
+                            AddModalSubView.ADD_GFN -> {
+                                AddGfnSearchView(
+                                    onGameSelected = onAddGfnGame,
+                                    searchFocusRequester = targetPrimaryFocusRequester
+                                )
+                            }
+                            AddModalSubView.ADD_LUNA -> {
+                                AddLunaSearchView(
+                                    onGameSelected = onAddLunaGame,
+                                    searchFocusRequester = targetPrimaryFocusRequester
+                                )
+                            }
                         }
                     }
                 }
@@ -299,6 +335,7 @@ internal fun OptionsSelectView(
     onSelectLuna: () -> Unit,
     onSelectMoonlight: () -> Unit,
     onSelectWebUrl: () -> Unit,
+    firstOptionFocusRequester: FocusRequester = remember { FocusRequester() },
     iconResolver: suspend (Context, Map<String, String>) -> Map<String, String> = { ctx, themed ->
         resolveDiscoverOptionIcons(ctx, themed)
     }
@@ -345,9 +382,8 @@ internal fun OptionsSelectView(
         )
     )
 
-    val firstOptionFocusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) {
-        delay(80)
+        withFrameNanos { }
         runCatching { firstOptionFocusRequester.requestFocus() }
     }
 
@@ -507,13 +543,39 @@ private fun OptionCard(
 
 @Composable
 private fun AddShortcutFormView(
-    onAddShortcut: (title: String, url: String, posterUrl: String?) -> Unit
+    onAddShortcut: (title: String, url: String, posterUrl: String?) -> Unit,
+    titleFocusRequester: FocusRequester = remember { FocusRequester() }
 ) {
     var title by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("https://") }
     var posterUrl by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        runCatching { titleFocusRequester.requestFocus() }
+    }
+
+    val fieldDpadNavigation = Modifier.onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown) {
+            when (event.key) {
+                Key.DirectionDown -> {
+                    keyboardController?.hide()
+                    focusManager.moveFocus(FocusDirection.Down)
+                    true
+                }
+                Key.DirectionUp -> {
+                    keyboardController?.hide()
+                    focusManager.moveFocus(FocusDirection.Up)
+                    true
+                }
+                else -> false
+            }
+        } else {
+            false
+        }
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val viewportHeight = maxHeight
@@ -535,7 +597,11 @@ private fun AddShortcutFormView(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-                    modifier = Modifier.fillMaxWidth().testTag("add_shortcut_title")
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(titleFocusRequester)
+                        .then(fieldDpadNavigation)
+                        .testTag("add_shortcut_title")
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -547,7 +613,10 @@ private fun AddShortcutFormView(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-                    modifier = Modifier.fillMaxWidth().testTag("add_shortcut_url")
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(fieldDpadNavigation)
+                        .testTag("add_shortcut_url")
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -559,7 +628,10 @@ private fun AddShortcutFormView(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
-                    modifier = Modifier.fillMaxWidth().testTag("add_shortcut_poster")
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(fieldDpadNavigation)
+                        .testTag("add_shortcut_poster")
                 )
 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -586,6 +658,7 @@ private fun AddShortcutFormView(
 @Composable
 internal fun AddGfnSearchView(
     onGameSelected: (GameItem) -> Unit,
+    searchFocusRequester: FocusRequester = remember { FocusRequester() },
     catalogLoader: suspend (String) -> GeForceNowService.GfnBrowseResult = { query ->
         GeForceNowService.browseOrSearchCatalog(query)
     }
@@ -596,6 +669,15 @@ internal fun AddGfnSearchView(
         mutableStateOf(GeForceNowService.GfnDefaultClassification.RECENTLY_ADDED)
     }
     var isLoading by remember { mutableStateOf(true) }
+
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val firstPosterFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        runCatching { searchFocusRequester.requestFocus() }
+    }
 
     LaunchedEffect(searchQuery) {
         // Debounce so typing doesn't trigger a burst of catalog/artwork requests.
@@ -609,6 +691,14 @@ internal fun AddGfnSearchView(
         isLoading = false
     }
 
+    val moveFromSearchDown = {
+        keyboardController?.hide()
+        if (!isLoading && gfnTitles.isNotEmpty()) {
+            val moved = runCatching { firstPosterFocusRequester.requestFocus() }.isSuccess
+            if (!moved) focusManager.moveFocus(FocusDirection.Down)
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         OutlinedTextField(
             value = searchQuery,
@@ -617,13 +707,57 @@ internal fun AddGfnSearchView(
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
                 if (searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { searchQuery = "" }) {
+                    val clearInteraction = remember { MutableInteractionSource() }
+                    IconButton(
+                        onClick = { searchQuery = "" },
+                        interactionSource = clearInteraction,
+                        modifier = Modifier
+                            .tvFocusBorder(clearInteraction, shape = CircleShape)
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+                                    moveFromSearchDown()
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                    ) {
                         Icon(Icons.Default.Clear, contentDescription = "Clear")
                     }
                 }
             },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().testTag("add_gfn_search")
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { moveFromSearchDown() }),
+            modifier = Modifier
+                .fillMaxWidth()
+                .focusRequester(searchFocusRequester)
+                .focusProperties {
+                    down = if (!isLoading && gfnTitles.isNotEmpty()) {
+                        firstPosterFocusRequester
+                    } else {
+                        FocusRequester.Default
+                    }
+                }
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown) {
+                        when (event.key) {
+                            Key.DirectionDown -> {
+                                moveFromSearchDown()
+                                true
+                            }
+                            Key.DirectionUp -> {
+                                keyboardController?.hide()
+                                focusManager.moveFocus(FocusDirection.Up)
+                                true
+                            }
+                            else -> false
+                        }
+                    } else {
+                        false
+                    }
+                }
+                .testTag("add_gfn_search")
         )
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -699,11 +833,15 @@ internal fun AddGfnSearchView(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize().testTag("gfn_poster_grid")
             ) {
-                items(gfnTitles, key = { it.id }) { gfnGame ->
+                itemsIndexed(gfnTitles, key = { _, it -> it.id }) { index, gfnGame ->
                     val itemInteraction = remember { MutableInteractionSource() }
                     val itemFocused by itemInteraction.collectIsFocusedAsState()
                     Column(
                         modifier = Modifier
+                            .then(
+                                if (index == 0) Modifier.focusRequester(firstPosterFocusRequester)
+                                else Modifier
+                            )
                             .clip(RoundedCornerShape(14.dp))
                             .then(
                                 if (itemFocused) {
@@ -771,6 +909,7 @@ internal fun AddGfnSearchView(
 @Composable
 internal fun AddLunaSearchView(
     onGameSelected: (GameItem) -> Unit,
+    searchFocusRequester: FocusRequester = remember { FocusRequester() },
     catalogLoader: suspend (String) -> Result<List<GameItem>> = { query ->
         AmazonLunaService.searchCatalog(query)
     },
@@ -783,6 +922,16 @@ internal fun AddLunaSearchView(
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var reloadTrigger by remember { mutableIntStateOf(0) }
+
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val firstPosterFocusRequester = remember { FocusRequester() }
+    val retryFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        runCatching { searchFocusRequester.requestFocus() }
+    }
 
     LaunchedEffect(searchQuery, reloadTrigger) {
         isLoading = true
@@ -801,6 +950,21 @@ internal fun AddLunaSearchView(
         isLoading = false
     }
 
+    val moveFromSearchDown = {
+        keyboardController?.hide()
+        when {
+            !isLoading && errorMessage != null -> {
+                val moved = runCatching { retryFocusRequester.requestFocus() }.isSuccess
+                if (!moved) focusManager.moveFocus(FocusDirection.Down)
+            }
+            !isLoading && lunaTitles.isNotEmpty() -> {
+                val moved = runCatching { firstPosterFocusRequester.requestFocus() }.isSuccess
+                if (!moved) focusManager.moveFocus(FocusDirection.Down)
+            }
+            else -> Unit
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         OutlinedTextField(
             value = searchQuery,
@@ -809,14 +973,56 @@ internal fun AddLunaSearchView(
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
                 if (searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { searchQuery = "" }) {
+                    val clearInteraction = remember { MutableInteractionSource() }
+                    IconButton(
+                        onClick = { searchQuery = "" },
+                        interactionSource = clearInteraction,
+                        modifier = Modifier
+                            .tvFocusBorder(clearInteraction, shape = CircleShape)
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+                                    moveFromSearchDown()
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                    ) {
                         Icon(Icons.Default.Clear, contentDescription = "Clear")
                     }
                 }
             },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { moveFromSearchDown() }),
             modifier = Modifier
                 .fillMaxWidth()
+                .focusRequester(searchFocusRequester)
+                .focusProperties {
+                    down = when {
+                        !isLoading && errorMessage != null -> retryFocusRequester
+                        !isLoading && lunaTitles.isNotEmpty() -> firstPosterFocusRequester
+                        else -> FocusRequester.Default
+                    }
+                }
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown) {
+                        when (event.key) {
+                            Key.DirectionDown -> {
+                                moveFromSearchDown()
+                                true
+                            }
+                            Key.DirectionUp -> {
+                                keyboardController?.hide()
+                                focusManager.moveFocus(FocusDirection.Up)
+                                true
+                            }
+                            else -> false
+                        }
+                    } else {
+                        false
+                    }
+                }
                 .testTag("add_luna_search")
         )
 
@@ -873,9 +1079,14 @@ internal fun AddLunaSearchView(
                     textAlign = TextAlign.Center
                 )
                 Spacer(modifier = Modifier.height(12.dp))
+                val retryInteraction = remember { MutableInteractionSource() }
                 OutlinedButton(
                     onClick = { reloadTrigger += 1 },
-                    modifier = Modifier.testTag("luna_retry_button")
+                    interactionSource = retryInteraction,
+                    modifier = Modifier
+                        .focusRequester(retryFocusRequester)
+                        .tvFocusBorder(retryInteraction, shape = CircleShape)
+                        .testTag("luna_retry_button")
                 ) {
                     Icon(Icons.Default.Refresh, contentDescription = null)
                     Spacer(modifier = Modifier.width(6.dp))
@@ -926,11 +1137,16 @@ internal fun AddLunaSearchView(
                     .fillMaxSize()
                     .testTag("luna_poster_grid")
             ) {
-                items(lunaTitles, key = { it.id }) { lunaGame ->
+                itemsIndexed(lunaTitles, key = { _, it -> it.id }) { index, lunaGame ->
                     LunaPosterOptionItem(
                         game = lunaGame,
                         posterResolver = posterResolver,
-                        onSelect = onGameSelected
+                        onSelect = onGameSelected,
+                        modifier = if (index == 0) {
+                            Modifier.focusRequester(firstPosterFocusRequester)
+                        } else {
+                            Modifier
+                        }
                     )
                 }
             }
@@ -942,7 +1158,8 @@ internal fun AddLunaSearchView(
 private fun LunaPosterOptionItem(
     game: GameItem,
     posterResolver: suspend (GameItem) -> String?,
-    onSelect: (GameItem) -> Unit
+    onSelect: (GameItem) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var resolvedPoster by remember(game.id, game.posterUrl) { mutableStateOf(game.posterUrl) }
     var imageFailed by remember(resolvedPoster) { mutableStateOf(false) }
@@ -960,7 +1177,7 @@ private fun LunaPosterOptionItem(
     val itemFocused by itemInteraction.collectIsFocusedAsState()
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(14.dp))
             .then(
                 if (itemFocused) {

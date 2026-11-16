@@ -530,6 +530,9 @@ fun DashboardScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .focusProperties {
+                        canFocus = noOverlayOpen
+                    }
                     .statusBarsPadding()
                     // In the compact landscape game row the cutout inset is handled inside
                     // the row, so the row can draw the previous poster underneath the camera.
