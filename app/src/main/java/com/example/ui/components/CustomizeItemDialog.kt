@@ -257,7 +257,6 @@ fun CustomizeItemDialog(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val closeFocusRequester = remember { FocusRequester() }
     LaunchedEffect(item.id) {
-        delay(80)
         runCatching { closeFocusRequester.requestFocus() }
     }
 
@@ -273,6 +272,7 @@ fun CustomizeItemDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.88f)
+                .consumeOrphanedSelectKeyEvents()
                 .padding(20.dp)
         ) {
             // Header

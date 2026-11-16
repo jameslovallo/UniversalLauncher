@@ -1,22 +1,33 @@
 package com.example.ui.components
 
+import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInfo
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.net.Uri
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -25,14 +36,19 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
+import com.example.R
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
+import com.example.data.service.AppIconStore
 import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherInfo
 import com.example.ui.screens.AppsAlphabeticalList
@@ -41,14 +57,19 @@ import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
 import com.example.ui.theme.resolveEffectiveFavoritesLayout
 import com.example.ui.viewmodel.MainLibraryTab
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
+import java.io.File
 import kotlin.math.abs
 
 @OptIn(ExperimentalTestApi::class)
@@ -553,5 +574,252 @@ class TvSupportAndLayoutTest {
         }
         composeRule.waitForIdle()
         assertTrue(downTriggered)
+    }
+
+    @Test
+    fun `holding Select to open menu consumes release so first menu item is not auto-activated`() {
+        val app = sampleApp("app_menu", "Media App")
+        var showMenu by mutableStateOf(false)
+        var firstMenuClicks by mutableIntStateOf(0)
+        var sheetMoveClicks by mutableIntStateOf(0)
+        val cardRequester = FocusRequester()
+        val menuFirstItemRequester = FocusRequester()
+
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.size(600.dp, 500.dp)) {
+                    Box(modifier = Modifier.size(180.dp, 102.dp)) {
+                        AppTvCard(
+                            app = app,
+                            isFocused = !showMenu,
+                            showFocusEffects = true,
+                            testTag = "hold_select_card",
+                            onClick = {},
+                            onLongClick = { showMenu = true },
+                            modifier = Modifier.focusRequester(cardRequester)
+                        )
+                    }
+                    if (showMenu) {
+                        LaunchedEffect(Unit) {
+                            menuFirstItemRequester.requestFocus()
+                        }
+                        Column(modifier = Modifier.consumeOrphanedSelectKeyEvents()) {
+                            Box(
+                                modifier = Modifier
+                                    .focusRequester(menuFirstItemRequester)
+                                    .focusable()
+                                    .clickable { firstMenuClicks++ }
+                                    .testTag("guarded_menu_first_item")
+                            ) {
+                                Text("Move to Games")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { cardRequester.requestFocus() }
+        composeRule.waitForIdle()
+
+        // Hold Select on card until long-press opens the guarded menu and shifts focus to the first item.
+        composeRule.onNodeWithTag("hold_select_card").performKeyInput {
+            keyDown(Key.DirectionCenter)
+        }
+        composeRule.mainClock.advanceTimeBy(700)
+        composeRule.waitForIdle()
+        assertTrue(showMenu)
+        composeRule.onNodeWithTag("guarded_menu_first_item").assertIsFocused()
+
+        // Releasing the still-held Select key on the newly focused menu must NOT fire its click.
+        composeRule.onNodeWithTag("guarded_menu_first_item").performKeyInput {
+            keyUp(Key.DirectionCenter)
+        }
+        composeRule.waitForIdle()
+        assertEquals(0, firstMenuClicks)
+
+        // A subsequent fresh Select press inside the menu DOES trigger the action.
+        composeRule.onNodeWithTag("guarded_menu_first_item").performKeyInput {
+            pressKey(Key.DirectionCenter)
+        }
+        composeRule.waitForIdle()
+        assertEquals(1, firstMenuClicks)
+    }
+
+    @Test
+    fun `ItemContextMenuSheet immediately focuses first action and activates on fresh Select press`() {
+        val app = sampleApp("app_menu_sheet", "Media App")
+        var sheetMoveClicks by mutableIntStateOf(0)
+
+        composeRule.setContent {
+            MaterialTheme {
+                ItemContextMenuSheet(
+                    item = app,
+                    onCustomize = {},
+                    onMove = { sheetMoveClicks++ },
+                    onToggleFavorite = {},
+                    onRemoveFromRecents = {},
+                    onOpenAppInfo = {},
+                    onHide = {},
+                    onDelete = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("context_menu_move_to_games").assertIsFocused()
+        composeRule.onNodeWithTag("context_menu_move_to_games").performKeyInput {
+            pressKey(Key.DirectionCenter)
+        }
+        composeRule.waitForIdle()
+        assertEquals(1, sheetMoveClicks)
+    }
+
+    @Test
+    fun `AppTvCard renders full-bleed banner when heroBannerUrl is set and falls back when null or custom`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val bannerFile = File(context.filesDir, "test_tv_banner.png")
+        val bmp = Bitmap.createBitmap(16, 9, Bitmap.Config.ARGB_8888)
+        bannerFile.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        bmp.recycle()
+        val bannerUri = Uri.fromFile(bannerFile).toString()
+
+        val withBanner = GameItem(
+            id = "with_banner",
+            title = "Banner App",
+            type = GameType.INSTALLED_APP,
+            isGame = false,
+            packageName = "com.example.banner",
+            iconUrl = "file:///data/user/0/com.example/files/app_icons/com.example.banner-1.png",
+            heroBannerUrl = bannerUri
+        )
+        val withoutBanner = GameItem(
+            id = "without_banner",
+            title = "No Banner App",
+            type = GameType.INSTALLED_APP,
+            isGame = false,
+            packageName = "com.example.nobanner",
+            iconUrl = null,
+            heroBannerUrl = null
+        )
+        val customIconWithBanner = GameItem(
+            id = "custom_icon_app",
+            title = "Custom Icon App",
+            type = GameType.INSTALLED_APP,
+            isGame = false,
+            packageName = "com.example.custom",
+            iconUrl = "https://example.invalid/custom_override.png",
+            heroBannerUrl = bannerUri
+        )
+
+        composeRule.setContent {
+            MaterialTheme {
+                Column(modifier = Modifier.size(300.dp, 540.dp)) {
+                    Box(modifier = Modifier.size(200.dp, 113.dp)) {
+                        AppTvCard(
+                            app = withBanner,
+                            isFocused = false,
+                            showFocusEffects = true,
+                            testTag = "card_with_banner",
+                            onClick = {},
+                            onLongClick = {}
+                        )
+                    }
+                    Box(modifier = Modifier.size(200.dp, 113.dp)) {
+                        AppTvCard(
+                            app = withoutBanner,
+                            isFocused = false,
+                            showFocusEffects = true,
+                            testTag = "card_without_banner",
+                            onClick = {},
+                            onLongClick = {}
+                        )
+                    }
+                    Box(modifier = Modifier.size(200.dp, 113.dp)) {
+                        AppTvCard(
+                            app = customIconWithBanner,
+                            isFocused = false,
+                            showFocusEffects = true,
+                            testTag = "card_custom_icon",
+                            onClick = {},
+                            onLongClick = {}
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        val bannerNode = composeRule.onNodeWithTag("tv_card_banner_with_banner", useUnmergedTree = true)
+        runCatching { bannerNode.assertIsDisplayed() }.getOrElse { err ->
+            throw AssertionError(
+                "${err.message}\nTree:\n${composeRule.onRoot(useUnmergedTree = true).printToString()}",
+                err
+            )
+        }
+        composeRule.onNodeWithText("Banner App", useUnmergedTree = true).assertDoesNotExist()
+
+        composeRule.onNodeWithTag("tv_card_banner_without_banner", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithText("No Banner App", useUnmergedTree = true).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("tv_card_banner_custom_icon", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Custom Icon App", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `AppIconStore resolves TV banners without falling back to square app icons`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val shadowPm = Shadows.shadowOf(context.packageManager)
+
+        // Package A: Self package declares android:banner="@drawable/tv_banner" in AndroidManifest.
+        val bannerPkg = context.packageName
+        val bannerClass = "com.example.MainActivity"
+
+        val resolvedBannerDrawable = AppIconStore.resolveTvBannerDrawable(
+            packageManager = context.packageManager,
+            packageName = bannerPkg,
+            preferredActivityName = bannerClass
+        )
+        assertNotNull(resolvedBannerDrawable)
+
+        val cachedBannerUrl = AppIconStore.bannerUrl(
+            context = context,
+            packageName = bannerPkg,
+            versionStamp = 42L,
+            preferredActivityName = bannerClass
+        )
+        assertNotNull(cachedBannerUrl)
+        assertTrue(cachedBannerUrl!!.contains("/app_banners/"))
+        val cachedBannerFile = File(Uri.parse(cachedBannerUrl).path!!)
+        assertTrue(cachedBannerFile.exists() && cachedBannerFile.length() > 0L)
+
+        // Package B: Standard app with only a square icon and no banner -> returns null.
+        val noBannerPkg = "com.example.squareonly"
+        val noBannerPackageInfo = PackageInfo().apply {
+            packageName = noBannerPkg
+            applicationInfo = ApplicationInfo().apply {
+                packageName = noBannerPkg
+                icon = R.mipmap.ic_launcher_round
+                banner = 0
+            }
+        }
+        shadowPm.installPackage(noBannerPackageInfo)
+
+        assertNull(
+            AppIconStore.resolveTvBannerDrawable(
+                packageManager = context.packageManager,
+                packageName = noBannerPkg,
+                preferredActivityName = "$noBannerPkg.MainActivity"
+            )
+        )
+        assertNull(
+            AppIconStore.bannerUrl(
+                context = context,
+                packageName = noBannerPkg,
+                versionStamp = 7L,
+                preferredActivityName = "$noBannerPkg.MainActivity"
+            )
+        )
     }
 }

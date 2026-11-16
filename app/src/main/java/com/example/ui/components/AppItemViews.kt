@@ -312,29 +312,66 @@ fun AppTvCard(
                 onLongClick = onLongClick,
                 hasIndicationParam = focusSource != null
             )
-            .padding(horizontal = 10.dp, vertical = 6.dp)
             .testTag(testTag),
         contentAlignment = Alignment.Center
     ) {
-        val iconSize = minOf(44.dp, maxHeight * 0.44f).coerceAtLeast(24.dp)
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            AppIcon(app = app, size = iconSize)
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = app.title,
-                fontSize = 13.sp,
-                fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
-                color = if (focused) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
+        val themedIcons = LocalThemedAppIcons.current
+        val hasCustomIcon = hasCustomAppIconUrl(app.iconUrl) ||
+            (!app.isGame && (
+                themedIcons.containsKey(app.id) ||
+                    app.packageName?.let { themedIcons.containsKey(it) } == true
+                ))
+        val bannerUrl = if (!hasCustomIcon) {
+            app.heroBannerUrl?.takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
+        var bannerFailed by remember(bannerUrl) { mutableStateOf(false) }
+
+        if (!bannerUrl.isNullOrBlank() && !bannerFailed) {
+            val context = LocalContext.current
+            val density = LocalDensity.current
+            val widthPx = remember(density, maxWidth) {
+                with(density) { maxWidth.roundToPx().coerceAtLeast(1) }
+            }
+            val heightPx = remember(density, maxHeight) {
+                with(density) { maxHeight.roundToPx().coerceAtLeast(1) }
+            }
+            val bannerRequest = remember(context, bannerUrl, widthPx, heightPx) {
+                buildAppBannerImageRequest(context, bannerUrl, widthPx, heightPx)
+            }
+            AsyncImage(
+                model = bannerRequest,
+                contentDescription = app.title,
+                contentScale = ContentScale.Crop,
+                onError = { bannerFailed = true },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("tv_card_banner_${app.id}")
             )
+        } else {
+            val iconSize = minOf(44.dp, maxHeight * 0.44f).coerceAtLeast(24.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                AppIcon(app = app, size = iconSize)
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = app.title,
+                    fontSize = 13.sp,
+                    fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
+                    color = if (focused) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 }
@@ -364,6 +401,22 @@ fun resolveAppIconUrl(
     }
     return themedUrl ?: item.iconUrl ?: item.posterUrl
 }
+
+internal fun buildAppBannerImageRequest(
+    context: Context,
+    bannerUrl: String,
+    widthPx: Int,
+    heightPx: Int
+): ImageRequest = ImageRequest.Builder(context)
+    .data(bannerUrl)
+    .apply {
+        if (widthPx > 0 && heightPx > 0) {
+            size(widthPx, heightPx)
+            precision(Precision.INEXACT)
+        }
+    }
+    .crossfade(false)
+    .build()
 
 internal fun buildAppIconImageRequest(
     context: Context,

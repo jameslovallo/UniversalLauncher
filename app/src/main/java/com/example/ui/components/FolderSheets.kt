@@ -56,6 +56,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -94,10 +95,6 @@ fun FolderContentsSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val initialFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(folder.id, apps.isEmpty()) {
-        delay(80)
-        runCatching { initialFocusRequester.requestFocus() }
-    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -107,10 +104,15 @@ fun FolderContentsSheet(
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
+        LaunchedEffect(folder.id, apps.isEmpty()) {
+            withFrameNanos { }
+            runCatching { initialFocusRequester.requestFocus() }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 560.dp)
+                .consumeOrphanedSelectKeyEvents()
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp)
                 .testTag("folder_contents_sheet_${folder.id}")
@@ -358,10 +360,6 @@ fun FolderPickerSheet(
     val isTv = isTelevisionMode()
     var newFolderName by remember { mutableStateOf("") }
     val initialFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(targetItem.id) {
-        delay(80)
-        runCatching { initialFocusRequester.requestFocus() }
-    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -371,9 +369,14 @@ fun FolderPickerSheet(
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
+        LaunchedEffect(targetItem.id) {
+            withFrameNanos { }
+            runCatching { initialFocusRequester.requestFocus() }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .consumeOrphanedSelectKeyEvents()
                 .navigationBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 8.dp)
         ) {
@@ -541,10 +544,6 @@ fun FolderAppsManageSheet(
         else candidateApps.filter { it.title.contains(trimmed, ignoreCase = true) }
     }
     val initialFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(folder.id) {
-        delay(80)
-        runCatching { initialFocusRequester.requestFocus() }
-    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -554,10 +553,15 @@ fun FolderAppsManageSheet(
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
+        LaunchedEffect(folder.id) {
+            withFrameNanos { }
+            runCatching { initialFocusRequester.requestFocus() }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.85f)
+                .consumeOrphanedSelectKeyEvents()
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp)
         ) {

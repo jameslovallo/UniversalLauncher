@@ -48,6 +48,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,7 +67,6 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
-import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,10 +90,6 @@ fun ItemContextMenuSheet(
     val isTv = isTelevisionMode()
     val isFolder = item.type == GameType.FOLDER
     val firstActionFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(item.id) {
-        delay(80)
-        runCatching { firstActionFocusRequester.requestFocus() }
-    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -103,9 +99,14 @@ fun ItemContextMenuSheet(
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
+        LaunchedEffect(item.id) {
+            withFrameNanos { }
+            runCatching { firstActionFocusRequester.requestFocus() }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .consumeOrphanedSelectKeyEvents()
                 .navigationBarsPadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 8.dp)

@@ -22,7 +22,10 @@ import java.io.File
  */
 object AppIconStore {
     private const val DIR = "app_icons"
+    private const val BANNERS_DIR = "app_banners"
     private const val ICON_SIZE_PX = 192
+    private const val BANNER_WIDTH_PX = 480
+    private const val BANNER_HEIGHT_PX = 270
 
     suspend fun iconUrl(
         context: Context,
@@ -54,6 +57,76 @@ object AppIconStore {
 
             Uri.fromFile(file).toString()
         }.getOrNull()
+    }
+
+    /**
+     * Resolves and caches a 16:9 Android TV banner PNG for [packageName] when the package
+     * declares a Leanback/activity/application banner. Returns null when the app has no TV
+     * banner (does not fall back to the square app icon).
+     */
+    suspend fun bannerUrl(
+        context: Context,
+        packageName: String,
+        versionStamp: Long,
+        preferredActivityName: String? = null
+    ): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val dir = File(context.filesDir, BANNERS_DIR).apply { mkdirs() }
+            val safePackage = sanitize(packageName)
+            val file = File(dir, "$safePackage-$versionStamp.png")
+
+            if (!file.exists() || file.length() == 0L) {
+                val drawable = resolveTvBannerDrawable(
+                    packageManager = context.packageManager,
+                    packageName = packageName,
+                    preferredActivityName = preferredActivityName
+                )
+                if (drawable == null) {
+                    dir.listFiles { candidate ->
+                        candidate.name.startsWith("$safePackage-")
+                    }?.forEach { it.delete() }
+                    return@runCatching null
+                }
+                val bitmap = drawable.toBitmap(
+                    BANNER_WIDTH_PX,
+                    BANNER_HEIGHT_PX,
+                    Bitmap.Config.ARGB_8888
+                )
+                file.outputStream().use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                }
+                bitmap.recycle()
+            }
+
+            dir.listFiles { candidate ->
+                candidate.name.startsWith("$safePackage-") && candidate != file
+            }?.forEach { it.delete() }
+
+            Uri.fromFile(file).toString()
+        }.getOrNull()
+    }
+
+    internal fun resolveTvBannerDrawable(
+        packageManager: android.content.pm.PackageManager,
+        packageName: String,
+        preferredActivityName: String? = null
+    ): android.graphics.drawable.Drawable? {
+        val leanbackComponent = runCatching {
+            packageManager.getLeanbackLaunchIntentForPackage(packageName)?.component
+        }.getOrNull()
+        if (leanbackComponent != null) {
+            runCatching { packageManager.getActivityBanner(leanbackComponent) }
+                .getOrNull()
+                ?.let { return it }
+        }
+        if (!preferredActivityName.isNullOrBlank()) {
+            runCatching {
+                packageManager.getActivityBanner(
+                    android.content.ComponentName(packageName, preferredActivityName)
+                )
+            }.getOrNull()?.let { return it }
+        }
+        return runCatching { packageManager.getApplicationBanner(packageName) }.getOrNull()
     }
 
     private fun sanitize(value: String): String =

@@ -80,7 +80,7 @@ fun shouldShowFocusEffects(controllerConnected: Boolean): Boolean {
 }
 
 private fun isSelectKey(key: Key): Boolean =
-    key == Key.DirectionCenter || key == Key.Enter || key == Key.NumPadEnter
+    key == Key.DirectionCenter || key == Key.Enter || key == Key.NumPadEnter || key == Key.ButtonA
 
 /**
  * Clickable + long-clickable modifier with deterministic D-pad / TV remote Select long-press
@@ -173,6 +173,40 @@ fun Modifier.tvClickableWithLongPress(
             }
         }
         .then(clickableMod)
+}
+
+/**
+ * Prevents a held Select key (used to long-press open a menu/sheet) from triggering the
+ * first focused item inside the newly opened menu via held auto-repeats or the trailing
+ * key-up release. Select key repeats and key-up events are consumed until a fresh Select
+ * key-down (`repeatCount == 0`) occurs inside this container.
+ */
+fun Modifier.consumeOrphanedSelectKeyEvents(): Modifier = composed {
+    var sawFreshSelectDown by remember { mutableStateOf(false) }
+
+    this.onPreviewKeyEvent { keyEvent ->
+        if (!isSelectKey(keyEvent.key)) return@onPreviewKeyEvent false
+        val repeatCount = keyEvent.nativeKeyEvent.repeatCount
+        when (keyEvent.type) {
+            KeyEventType.KeyDown -> {
+                if (repeatCount == 0) {
+                    sawFreshSelectDown = true
+                    false
+                } else {
+                    !sawFreshSelectDown
+                }
+            }
+            KeyEventType.KeyUp -> {
+                if (!sawFreshSelectDown) {
+                    true
+                } else {
+                    sawFreshSelectDown = false
+                    false
+                }
+            }
+            else -> false
+        }
+    }
 }
 
 /**

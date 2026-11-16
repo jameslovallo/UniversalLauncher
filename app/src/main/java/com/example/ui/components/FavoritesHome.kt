@@ -67,6 +67,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -214,20 +215,21 @@ fun FavoritesHome(
                     Modifier
                 }
 
-                FavoritesClockAndDate(
-                    isTextLayout = isTextLayout,
-                    isTvLayout = isTvLayout,
-                    showFocusEffects = showFocusEffects,
-                    textAlign = textAlign,
-                    textRowInset = textRowInset,
-                    weatherEnabled = weatherEnabled,
-                    weather = weather,
-                    temperatureUnit = temperatureUnit,
-                    onOpenClock = onOpenClock,
-                    onOpenCalendar = onOpenCalendar,
-                    onOpenWeather = onOpenWeather,
-                    clockModifier = emptyDownMod
-                )
+                Box(modifier = emptyDownMod) {
+                    FavoritesClockAndDate(
+                        isTextLayout = isTextLayout,
+                        isTvLayout = isTvLayout,
+                        showFocusEffects = showFocusEffects,
+                        textAlign = textAlign,
+                        textRowInset = textRowInset,
+                        weatherEnabled = weatherEnabled,
+                        weather = weather,
+                        temperatureUnit = temperatureUnit,
+                        onOpenClock = onOpenClock,
+                        onOpenCalendar = onOpenCalendar,
+                        onOpenWeather = onOpenWeather
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(if (isTvLayout) 22.dp else 34.dp))
             }
@@ -645,10 +647,6 @@ fun FavoriteActionsSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val isFolder = item.type == GameType.FOLDER
     val firstActionFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(item.id) {
-        delay(80)
-        runCatching { firstActionFocusRequester.requestFocus() }
-    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -657,9 +655,14 @@ fun FavoriteActionsSheet(
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
+        LaunchedEffect(item.id) {
+            withFrameNanos { }
+            runCatching { firstActionFocusRequester.requestFocus() }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .consumeOrphanedSelectKeyEvents()
                 .navigationBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 8.dp)
         ) {
@@ -731,10 +734,6 @@ fun EditFavoritesSheet(
     var dragOffset by remember { mutableFloatStateOf(0f) }
     val listState = rememberLazyListState()
     val doneFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        delay(80)
-        runCatching { doneFocusRequester.requestFocus() }
-    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -743,10 +742,15 @@ fun EditFavoritesSheet(
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
+        LaunchedEffect(Unit) {
+            withFrameNanos { }
+            runCatching { doneFocusRequester.requestFocus() }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.85f)
+                .consumeOrphanedSelectKeyEvents()
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp)
         ) {

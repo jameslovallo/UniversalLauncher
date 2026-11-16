@@ -145,14 +145,16 @@ class GameRepository(
                     existing.copy(
                         packageName = app.packageName,
                         activityName = app.activityName,
-                        iconUrl = if (keepCustomIcon) existing.iconUrl else app.iconUrl
+                        iconUrl = if (keepCustomIcon) existing.iconUrl else app.iconUrl,
+                        heroBannerUrl = existing.heroBannerUrl ?: app.heroBannerUrl
                     )
                 } else {
                     existing.copy(
                         title = app.title,
                         packageName = app.packageName,
                         activityName = app.activityName,
-                        iconUrl = app.iconUrl
+                        iconUrl = app.iconUrl,
+                        heroBannerUrl = app.heroBannerUrl
                     )
                 }
                 if (updated != existing) {

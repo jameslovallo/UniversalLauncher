@@ -94,6 +94,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -154,6 +155,7 @@ import com.example.ui.components.SettingsModal
 import com.example.ui.components.SteamGamePosterCard
 import com.example.ui.components.TV_FAVORITES_MAX_COLUMNS
 import com.example.ui.components.TopNavBar
+import com.example.ui.components.buildAppBannerImageRequest
 import com.example.ui.components.buildAppIconImageRequest
 import com.example.ui.components.buildPosterImageRequest
 import com.example.ui.components.buildPosterLogoImageRequest
@@ -340,7 +342,9 @@ fun DashboardScreen(
                 showSearchBar = false
             }
             currentTab == MainLibraryTab.APPS && appsPagerState.currentPage != 0 -> {
-                scope.launch { appsPagerState.animateScrollToPage(0) }
+                if (appsPagerState.targetPage != 0) {
+                    scope.launch { appsPagerState.animateScrollToPage(0) }
+                }
             }
             currentTab == MainLibraryTab.GAMES -> {
                 viewModel.setTab(MainLibraryTab.APPS)
@@ -388,11 +392,13 @@ fun DashboardScreen(
         !showSettingsModal &&
         weatherAppChooser == null
 
-    // Move remote/controller focus to the first item of the new Apps context when switching
-    // between Favorites (page 0) and the App List (page 1), while leaving open modals untouched.
+    // Move remote/controller focus to the first item of the new Apps context once both pagers
+    // have settled on Apps, while leaving open modals untouched.
     var focusedAppsContext by remember { mutableStateOf(Int.MIN_VALUE) }
     LaunchedEffect(
         currentTab,
+        pagerState.settledPage,
+        pagerState.isScrollInProgress,
         appsPagerState.currentPage,
         appsPagerState.isScrollInProgress,
         showFocusEffects,
@@ -405,9 +411,15 @@ fun DashboardScreen(
             focusedAppsContext = Int.MIN_VALUE
             return@LaunchedEffect
         }
-        // Wait until the vertical pager has settled so the focus request is not lost
-        // while the old page is still on screen.
-        if (appsPagerState.isScrollInProgress) return@LaunchedEffect
+        // Wait until both pagers have settled so focus changes never trigger BringIntoView
+        // inside an animating pager and cancel the transition mid-flight.
+        if (pagerState.isScrollInProgress ||
+            pagerState.settledPage != 0 ||
+            appsPagerState.isScrollInProgress ||
+            abs(appsPagerState.currentPageOffsetFraction) > 0.01f
+        ) {
+            return@LaunchedEffect
+        }
 
         val context = appsPagerState.currentPage
         if (context == focusedAppsContext) return@LaunchedEffect
@@ -416,7 +428,6 @@ fun DashboardScreen(
             val firstFavorite = favoriteApps.firstOrNull() ?: return@LaunchedEffect
             focusedAppsContext = context
             viewModel.setFocusedItem(firstFavorite.id)
-            delay(60)
             runCatching { favoritesFirstFocusRequester.requestFocus() }
         } else {
             val firstAppIndex = appListEntries.indexOfFirst { it is AppListEntry.App }
@@ -438,7 +449,6 @@ fun DashboardScreen(
                     runCatching { appsListState.scrollToItem(0) }
                 }
             }
-            delay(60)
             runCatching { appsListFirstFocusRequester.requestFocus() }
         }
     }
@@ -446,6 +456,7 @@ fun DashboardScreen(
     val allowInitialGamesFocus = showFocusEffects &&
         currentTab == MainLibraryTab.GAMES &&
         !pagerState.isScrollInProgress &&
+        abs(pagerState.currentPageOffsetFraction) < 0.01f &&
         !showSearchBar &&
         searchQuery.isBlank() &&
         noOverlayOpen
@@ -587,11 +598,16 @@ fun DashboardScreen(
                         // Confine left/previous navigation so D-pad Left cannot jump to Apps,
                         // while allowing Up from row 0 to reach the top navigation bar.
                         val pullToRefreshState = rememberPullToRefreshState()
+                        val gamesCanFocus = if (pagerState.isScrollInProgress) {
+                            pagerState.settledPage == 1
+                        } else {
+                            pagerState.currentPage == 1
+                        }
                         BoxWithConstraints(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .focusProperties {
-                                    canFocus = (pagerState.currentPage == 1)
+                                    canFocus = gamesCanFocus
                                 }
                                 .focusGroup()
                                 .focusProperties {
@@ -686,11 +702,16 @@ fun DashboardScreen(
                     } else {
                         // Apps View: a full-height favorites home. Swiping up or pressing Down
                         // reveals the complete app list, which excludes favorites and games.
+                        val appsTabCanFocus = if (pagerState.isScrollInProgress) {
+                            pagerState.settledPage == 0
+                        } else {
+                            pagerState.currentPage == 0
+                        }
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .focusProperties {
-                                    canFocus = (pagerState.currentPage == 0)
+                                    canFocus = appsTabCanFocus
                                 }
                                 .then(
                                     if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
@@ -715,11 +736,16 @@ fun DashboardScreen(
                                     .testTag("apps_vertical_pager")
                             ) { appsPage ->
                                 if (appsPage == 0) {
+                                    val favoritesCanFocus = appsTabCanFocus && if (appsPagerState.isScrollInProgress) {
+                                        appsPagerState.settledPage == 0
+                                    } else {
+                                        appsPagerState.currentPage == 0
+                                    }
                                     Box(
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .focusProperties {
-                                                canFocus = (appsPagerState.currentPage == 0)
+                                                canFocus = favoritesCanFocus
                                             }
                                     ) {
                                         FavoritesHome(
@@ -743,24 +769,33 @@ fun DashboardScreen(
                                             onOpenWeather = { viewModel.openWeatherApp() },
                                             onPullDown = { viewModel.expandNotificationShade() },
                                             onNavigateDownToAppList = {
-                                                scope.launch { appsPagerState.animateScrollToPage(1) }
+                                                if (appsPagerState.targetPage != 1) {
+                                                    scope.launch { appsPagerState.animateScrollToPage(1) }
+                                                }
                                             },
                                             onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
                                         )
                                     }
                                 } else {
+                                    val appDrawerCanFocus = appsTabCanFocus && if (appsPagerState.isScrollInProgress) {
+                                        appsPagerState.settledPage == 1
+                                    } else {
+                                        appsPagerState.currentPage == 1
+                                    }
                                     Box(
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .focusProperties {
-                                                canFocus = (appsPagerState.currentPage == 1)
+                                                canFocus = appDrawerCanFocus
                                             }
                                     ) {
                                         if (libraryDisplay.isEmpty()) {
                                             EmptyAppDrawerState(
                                                 hasFavorites = favoriteApps.isNotEmpty(),
                                                 onNavigateUpToFavorites = {
-                                                    scope.launch { appsPagerState.animateScrollToPage(0) }
+                                                    if (appsPagerState.targetPage != 0) {
+                                                        scope.launch { appsPagerState.animateScrollToPage(0) }
+                                                    }
                                                 }
                                             )
                                         } else {
@@ -776,7 +811,9 @@ fun DashboardScreen(
                                                 onAppLongClick = onAppLongClick,
                                                 onAppFocus = onAppFocus,
                                                 onNavigateUpToFavorites = {
-                                                    scope.launch { appsPagerState.animateScrollToPage(0) }
+                                                    if (appsPagerState.targetPage != 0) {
+                                                        scope.launch { appsPagerState.animateScrollToPage(0) }
+                                                    }
                                                 },
                                                 onLetterSelected = { letter ->
                                                     val index = appListEntries.indexOfFirst {
@@ -1124,23 +1161,53 @@ internal fun BindLibraryPagerAndScrollEffects(
         }
     }
 
-    LaunchedEffect(pagerState.currentPage) {
-        val tab = if (pagerState.currentPage == 0) MainLibraryTab.APPS else MainLibraryTab.GAMES
-        onTabFromPager(tab)
+    // Update the selected tab from horizontal swipes only once the pager settles so a
+    // half-completed drag or bounce never triggers a competing animateScrollToPage.
+    LaunchedEffect(pagerState.settledPage, pagerState.isScrollInProgress) {
+        if (!pagerState.isScrollInProgress) {
+            val settledTab = if (pagerState.settledPage == 0) MainLibraryTab.APPS else MainLibraryTab.GAMES
+            onTabFromPager(settledTab)
+        }
     }
 
-    // Close the app drawer whenever switching to/from Games (by tap or horizontal swipe).
-    LaunchedEffect(pagerState.settledPage) {
-        if (pagerState.settledPage == 1 && appsPagerState.currentPage != 0) {
+    // Recovery guard: if an external interrupt or fast cancellation leaves either pager
+    // non-idle between pages, settle cleanly once scrolling stops.
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.isScrollInProgress to pagerState.currentPageOffsetFraction }
+            .collect { (scrolling, offset) ->
+                if (!scrolling && abs(offset) > 0.005f) {
+                    withFrameNanos { }
+                    if (!pagerState.isScrollInProgress && abs(pagerState.currentPageOffsetFraction) > 0.005f) {
+                        pagerState.animateScrollToPage(pagerState.currentPage)
+                    }
+                }
+            }
+    }
+    LaunchedEffect(appsPagerState) {
+        snapshotFlow { appsPagerState.isScrollInProgress to appsPagerState.currentPageOffsetFraction }
+            .collect { (scrolling, offset) ->
+                if (!scrolling && abs(offset) > 0.005f) {
+                    withFrameNanos { }
+                    if (!appsPagerState.isScrollInProgress && abs(appsPagerState.currentPageOffsetFraction) > 0.005f) {
+                        appsPagerState.animateScrollToPage(appsPagerState.currentPage)
+                    }
+                }
+            }
+    }
+
+    // Close the app drawer whenever switching to Games (once settled offscreen).
+    LaunchedEffect(pagerState.settledPage, pagerState.isScrollInProgress) {
+        if (!pagerState.isScrollInProgress &&
+            pagerState.settledPage == 1 &&
+            appsPagerState.currentPage != 0
+        ) {
             appsPagerState.scrollToPage(0)
         }
     }
 
     LaunchedEffect(currentTab) {
         val target = if (currentTab == MainLibraryTab.GAMES) 1 else 0
-        // Close the app drawer immediately before sliding back to Apps, or close it right away
-        // when switching tabs so switching between Apps and Games never leaves the drawer open.
-        if (appsPagerState.currentPage != 0) {
+        if (target == 0 && appsPagerState.currentPage != 0) {
             appsPagerState.scrollToPage(0)
         }
         if (target == 1) {
@@ -1151,17 +1218,20 @@ internal fun BindLibraryPagerAndScrollEffects(
                 gamesRowState.scrollToItem(0)
             }
         }
-        if (pagerState.currentPage != target) {
+        if (pagerState.currentPage != target || abs(pagerState.currentPageOffsetFraction) > 0.005f) {
             pagerState.animateScrollToPage(target)
         }
     }
 
     // Selecting the Apps tab always returns to the favorites home, even if the vertical
-    // pager was left on the complete app list. Jump rather than animate so the favorites
-    // page is present on the first frame of the transition.
+    // pager was left on the complete app list.
     LaunchedEffect(appsHomeReset) {
         if (appsHomeReset > 0 && appsPagerState.currentPage != 0) {
-            appsPagerState.scrollToPage(0)
+            if (pagerState.settledPage == 0 && !pagerState.isScrollInProgress) {
+                appsPagerState.animateScrollToPage(0)
+            } else {
+                appsPagerState.scrollToPage(0)
+            }
         }
     }
 }
@@ -1259,8 +1329,10 @@ private fun GamesPosterGrid(
             runCatching { gridState.scrollToItem(0) }
         }
         repeat(3) {
+            if (!hasGridFocus) {
+                runCatching { firstItemFocusRequester.requestFocus() }
+            }
             delay(80)
-            runCatching { firstItemFocusRequester.requestFocus() }
         }
     }
 
@@ -1966,7 +2038,33 @@ private fun PrefetchAppIcons(
                 val end = (lastVisible + 15).coerceAtMost(entries.lastIndex)
                 for (i in start..end) {
                     val appEntry = entries[i] as? AppListEntry.App ?: continue
-                    val imageUrl = resolveAppIconUrl(appEntry.item, themedIcons)
+                    val appItem = appEntry.item
+                    val hasCustomIcon = hasCustomAppIconUrl(appItem.iconUrl) ||
+                        (!appItem.isGame && (
+                            themedIcons.containsKey(appItem.id) ||
+                                appItem.packageName?.let { themedIcons.containsKey(it) } == true
+                            ))
+                    val tvBanner = if (layout == FavoritesLayout.TV_CARDS && !hasCustomIcon) {
+                        appItem.heroBannerUrl?.takeIf { it.isNotBlank() }
+                    } else {
+                        null
+                    }
+                    if (tvBanner != null) {
+                        val bannerW = (iconSizePx * 4).coerceAtLeast(320)
+                        val bannerH = (bannerW * 9) / 16
+                        if (enqueuedUrls.add("banner:$tvBanner")) {
+                            loader.enqueue(
+                                buildAppBannerImageRequest(
+                                    context = context,
+                                    bannerUrl = tvBanner,
+                                    widthPx = bannerW,
+                                    heightPx = bannerH
+                                )
+                            )
+                        }
+                        continue
+                    }
+                    val imageUrl = resolveAppIconUrl(appItem, themedIcons)
                     if (!imageUrl.isNullOrBlank()) {
                         if (enqueuedUrls.add("$iconSizePx:$imageUrl")) {
                             loader.enqueue(
@@ -1977,8 +2075,8 @@ private fun PrefetchAppIcons(
                                 )
                             )
                         }
-                    } else if (appEntry.item.type == GameType.FOLDER) {
-                        val previewChildren = folderMembers[appEntry.item.id].orEmpty()
+                    } else if (appItem.type == GameType.FOLDER) {
+                        val previewChildren = folderMembers[appItem.id].orEmpty()
                             .filter { it.type != GameType.FOLDER }
                             .take(4)
                         for (child in previewChildren) {

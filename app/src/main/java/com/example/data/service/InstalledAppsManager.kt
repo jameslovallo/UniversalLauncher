@@ -19,6 +19,7 @@ import android.view.accessibility.AccessibilityManager
 import com.example.HomeOverrideService
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
+import com.example.ui.components.isTelevisionConfiguration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -31,7 +32,7 @@ data class WeatherApp(
 class InstalledAppsManager(private val context: Context) {
     private val packageManager: PackageManager = context.packageManager
 
-    private fun queryLauncherActivities(): List<ResolveInfo> {
+    private fun queryLauncherActivities(preferLeanback: Boolean = false): List<ResolveInfo> {
         val launcherIntent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
@@ -41,11 +42,13 @@ class InstalledAppsManager(private val context: Context) {
         val standard = queryIntentActivitiesCompat(launcherIntent)
         val leanback = queryIntentActivitiesCompat(leanbackIntent)
         val byPackage = LinkedHashMap<String, ResolveInfo>(standard.size + leanback.size)
-        for (info in standard) {
+        val primary = if (preferLeanback) leanback else standard
+        val secondary = if (preferLeanback) standard else leanback
+        for (info in primary) {
             val pkg = info.activityInfo?.packageName ?: continue
             byPackage.putIfAbsent(pkg, info)
         }
-        for (info in leanback) {
+        for (info in secondary) {
             val pkg = info.activityInfo?.packageName ?: continue
             byPackage.putIfAbsent(pkg, info)
         }
@@ -67,7 +70,8 @@ class InstalledAppsManager(private val context: Context) {
      * Query all launchable apps on the device.
      */
     suspend fun getInstalledApps(): List<GameItem> = withContext(Dispatchers.IO) {
-        val resolveInfos = queryLauncherActivities()
+        val preferLeanback = isTelevisionConfiguration(context.resources.configuration, context)
+        val resolveInfos = queryLauncherActivities(preferLeanback = preferLeanback)
         val myPackageName = context.packageName
 
         resolveInfos.filter { it.activityInfo.packageName != myPackageName }.map { resolveInfo ->
@@ -82,10 +86,10 @@ class InstalledAppsManager(private val context: Context) {
                 (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME) != 0
             }
 
-            // Render the app icon to a cached PNG. The package resource URI cannot be
-            // decoded by Coil for adaptive icons, which left tiles blank.
+            // Render the app icon (and 16:9 TV banner when declared) to cached PNGs.
             val versionStamp = packageVersionStamp(pkg)
             val iconUri = AppIconStore.iconUrl(context, pkg, versionStamp)
+            val bannerUri = AppIconStore.bannerUrl(context, pkg, versionStamp, activityName)
 
             GameItem(
                 id = "app_$pkg",
@@ -94,6 +98,7 @@ class InstalledAppsManager(private val context: Context) {
                 isGame = isGameApp,
                 packageName = pkg,
                 activityName = activityName,
+                heroBannerUrl = bannerUri,
                 iconUrl = iconUri,
                 genre = if (isGameApp) "Installed Game" else "Installed Application",
                 publisher = pkg,
@@ -140,8 +145,14 @@ class InstalledAppsManager(private val context: Context) {
      * Leanback launcher intents.
      */
     fun launchApp(packageName: String): Boolean = try {
-        val intent = packageManager.getLaunchIntentForPackage(packageName)
-            ?: packageManager.getLeanbackLaunchIntentForPackage(packageName)
+        val preferLeanback = isTelevisionConfiguration(context.resources.configuration, context)
+        val intent = if (preferLeanback) {
+            packageManager.getLeanbackLaunchIntentForPackage(packageName)
+                ?: packageManager.getLaunchIntentForPackage(packageName)
+        } else {
+            packageManager.getLaunchIntentForPackage(packageName)
+                ?: packageManager.getLeanbackLaunchIntentForPackage(packageName)
+        }
         if (intent != null) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
