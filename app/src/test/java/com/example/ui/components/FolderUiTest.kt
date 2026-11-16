@@ -145,5 +145,14 @@ class FolderUiTest {
         composeRule.onNodeWithTag("folder_contents_grid").assertIsDisplayed()
         composeRule.onNodeWithTag("folder_app_row_app_discord").assertIsDisplayed()
         composeRule.onNodeWithTag("folder_app_row_app_signal").assertIsDisplayed()
+
+        layoutState = FavoritesLayout.TV_CARDS
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("folder_contents_grid").assertIsDisplayed()
+        composeRule.onNodeWithTag("folder_app_row_app_discord").assertIsDisplayed()
+        composeRule.onNodeWithTag("folder_app_row_app_signal").assertIsDisplayed()
+        val cardBounds = composeRule.onNodeWithTag("folder_app_row_app_discord").fetchSemanticsNode().boundsInRoot
+        val ratio = cardBounds.width / cardBounds.height
+        org.junit.Assert.assertTrue("Expected 16:9 card in folder TV mode, got ratio $ratio", ratio in 1.6f..1.95f)
     }
 }

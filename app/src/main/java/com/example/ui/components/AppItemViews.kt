@@ -6,13 +6,17 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -34,7 +38,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -84,7 +90,9 @@ fun AppTextRow(
     modifier: Modifier = Modifier,
     onFocus: (() -> Unit)? = null,
 ) {
-    val focused = isFocused && showFocusEffects
+    val focusSource = if (showFocusEffects) remember { MutableInteractionSource() } else null
+    val isFocusedByCompose = if (focusSource != null) focusSource.collectIsFocusedAsState().value else false
+    val focused = showFocusEffects && (isFocused || isFocusedByCompose)
     val rowShape = remember { RoundedCornerShape(21.dp) }
 
     Row(
@@ -106,9 +114,12 @@ fun AppTextRow(
                     Modifier
                 }
             )
-            .combinedClickable(
+            .tvClickableWithLongPress(
+                interactionSource = focusSource,
+                indication = null,
                 onClick = onClick,
-                onLongClick = onLongClick
+                onLongClick = onLongClick,
+                hasIndicationParam = focusSource != null
             )
             .padding(contentPadding)
             .testTag(testTag),
@@ -155,14 +166,20 @@ fun AppIconTile(
     modifier: Modifier = Modifier,
     onFocus: (() -> Unit)? = null,
 ) {
-    val focused = isFocused && showFocusEffects
-    val scaleModifier = if (showFocusEffects) {
+    val interactionSource: MutableInteractionSource?
+    val focused: Boolean
+    val scaleModifier: Modifier
+    if (showFocusEffects) {
+        val focusSource = remember { MutableInteractionSource() }
+        val isFocusedByCompose by focusSource.collectIsFocusedAsState()
+        focused = isFocused || isFocusedByCompose
         val scale by animateFloatAsState(
             targetValue = if (focused) 1.08f else 1f,
             animationSpec = tween(150),
             label = "app_icon_scale"
         )
-        Modifier
+        interactionSource = focusSource
+        scaleModifier = Modifier
             .graphicsLayer {
                 if (scale != 1f) {
                     scaleX = scale
@@ -177,15 +194,20 @@ fun AppIconTile(
                 }
             )
     } else {
-        Modifier
+        interactionSource = null
+        focused = false
+        scaleModifier = Modifier
     }
 
     Column(
         modifier = modifier
             .then(scaleModifier)
-            .combinedClickable(
+            .tvClickableWithLongPress(
+                interactionSource = interactionSource,
+                indication = null,
                 onClick = onClick,
-                onLongClick = onLongClick
+                onLongClick = onLongClick,
+                hasIndicationParam = interactionSource != null
             )
             .padding(contentPadding)
             .testTag(testTag),
@@ -206,6 +228,114 @@ fun AppIconTile(
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+private val TvCardShape = RoundedCornerShape(16.dp)
+
+/**
+ * Shared 16:9 Android TV app card used identically across TV favorites, the complete app list,
+ * and folder contents. Supports D-pad focus highlights and long-press Select context menus.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun AppTvCard(
+    app: GameItem,
+    isFocused: Boolean,
+    showFocusEffects: Boolean,
+    testTag: String,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    onFocus: (() -> Unit)? = null,
+) {
+    val focusSource = if (showFocusEffects) remember { MutableInteractionSource() } else null
+    val isFocusedByCompose = if (focusSource != null) focusSource.collectIsFocusedAsState().value else false
+    val focused = showFocusEffects && (isFocused || isFocusedByCompose)
+    val scale by animateFloatAsState(
+        targetValue = if (focused) 1.05f else 1.0f,
+        animationSpec = tween(150),
+        label = "tv_app_card_scale"
+    )
+
+    val borderColor = if (focused) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+    }
+    val topBackdrop = if (focused) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.88f)
+    }
+    val bottomBackdrop = if (focused) {
+        MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.96f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f)
+    }
+
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .aspectRatio(16f / 9f)
+            .graphicsLayer {
+                if (scale != 1f) {
+                    scaleX = scale
+                    scaleY = scale
+                }
+            }
+            .then(
+                if (focused) {
+                    Modifier.shadow(elevation = 8.dp, shape = TvCardShape, clip = false)
+                } else {
+                    Modifier
+                }
+            )
+            .clip(TvCardShape)
+            .background(Brush.verticalGradient(listOf(topBackdrop, bottomBackdrop)))
+            .border(
+                width = if (focused) 2.5.dp else 1.dp,
+                color = borderColor,
+                shape = TvCardShape
+            )
+            .then(
+                if (onFocus != null) {
+                    Modifier.onFocusChanged { if (it.isFocused) onFocus() }
+                } else {
+                    Modifier
+                }
+            )
+            .tvClickableWithLongPress(
+                interactionSource = focusSource,
+                indication = null,
+                onClick = onClick,
+                onLongClick = onLongClick,
+                hasIndicationParam = focusSource != null
+            )
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .testTag(testTag),
+        contentAlignment = Alignment.Center
+    ) {
+        val iconSize = minOf(44.dp, maxHeight * 0.44f).coerceAtLeast(24.dp)
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            AppIcon(app = app, size = iconSize)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = app.title,
+                fontSize = 13.sp,
+                fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
+                color = if (focused) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
     }
 }
 

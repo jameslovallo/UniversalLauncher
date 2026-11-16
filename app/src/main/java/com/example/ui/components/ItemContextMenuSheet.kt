@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,11 +45,14 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -61,6 +66,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,11 +87,18 @@ fun ItemContextMenuSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val isTv = isTelevisionMode()
     val isFolder = item.type == GameType.FOLDER
+    val firstActionFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(item.id) {
+        delay(80)
+        runCatching { firstActionFocusRequester.requestFocus() }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        sheetMaxWidth = if (isTv) 680.dp else BottomSheetDefaults.SheetMaxWidth,
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
@@ -115,21 +128,24 @@ fun ItemContextMenuSheet(
                     icon = Icons.Default.Apps,
                     title = "Manage folder apps",
                     onClick = onManageFolderApps,
-                    testTag = "context_menu_manage_folder"
+                    testTag = "context_menu_manage_folder",
+                    modifier = Modifier.focusRequester(firstActionFocusRequester)
                 )
             } else if (item.isGame) {
                 ContextMenuItemRow(
                     icon = Icons.Default.Apps,
                     title = "Move to Apps",
                     onClick = onMove,
-                    testTag = "context_menu_move_to_apps"
+                    testTag = "context_menu_move_to_apps",
+                    modifier = Modifier.focusRequester(firstActionFocusRequester)
                 )
             } else {
                 ContextMenuItemRow(
                     icon = Icons.Default.SportsEsports,
                     title = "Move to Games",
                     onClick = onMove,
-                    testTag = "context_menu_move_to_games"
+                    testTag = "context_menu_move_to_games",
+                    modifier = Modifier.focusRequester(firstActionFocusRequester)
                 )
                 ContextMenuItemRow(
                     icon = Icons.Default.CreateNewFolder,
@@ -257,6 +273,13 @@ internal fun ContextMenuHeaderBar(
                 .height(54.dp)
                 .clip(CircleShape)
                 .background(headerBackground)
+                .then(
+                    if (headerFocused) {
+                        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                    } else {
+                        Modifier
+                    }
+                )
                 .clickable(
                     interactionSource = headerInteractionSource,
                     indication = null,
@@ -345,13 +368,26 @@ private fun ContextMenuItemRow(
     title: String,
     onClick: () -> Unit,
     testTag: String,
+    modifier: Modifier = Modifier,
     isDestructive: Boolean = false
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val shape = RoundedCornerShape(12.dp)
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable { onClick() }
+            .clip(shape)
+            .then(
+                if (isFocused) {
+                    Modifier
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
+                        .border(2.dp, MaterialTheme.colorScheme.primary, shape)
+                } else {
+                    Modifier
+                }
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
             .padding(horizontal = 12.dp, vertical = 12.dp)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically

@@ -118,11 +118,12 @@ fun SteamGamePosterCard(
         modifier = modifier
             .fillMaxWidth()
             .then(focusScaleModifier)
-            .combinedClickable(
+            .tvClickableWithLongPress(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick,
-                onLongClick = onLongClick
+                onLongClick = onLongClick,
+                hasIndicationParam = interactionSource != null
             )
             .testTag("game_poster_${game.id}"),
         horizontalAlignment = Alignment.CenterHorizontally

@@ -11,6 +11,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +44,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -67,6 +70,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -247,10 +253,18 @@ fun CustomizeItemDialog(
         }
     }
 
+    val isTv = isTelevisionMode()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val closeFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(item.id) {
+        delay(80)
+        runCatching { closeFocusRequester.requestFocus() }
+    }
+
     ModalBottomSheet(
         onDismissRequest = commitTitleAndDismiss,
         sheetState = sheetState,
+        sheetMaxWidth = if (isTv) 760.dp else BottomSheetDefaults.SheetMaxWidth,
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
@@ -297,9 +311,14 @@ fun CustomizeItemDialog(
                     }
                 }
 
+                val closeInteraction = remember { MutableInteractionSource() }
                 IconButton(
                     onClick = commitTitleAndDismiss,
-                    modifier = Modifier.testTag("customize_close_button")
+                    interactionSource = closeInteraction,
+                    modifier = Modifier
+                        .focusRequester(closeFocusRequester)
+                        .tvFocusBorder(closeInteraction, shape = CircleShape)
+                        .testTag("customize_close_button")
                 ) {
                     Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
                 }
@@ -325,12 +344,14 @@ fun CustomizeItemDialog(
 
             if (item.isGame) {
                 Spacer(modifier = Modifier.height(6.dp))
+                val overlayRowInteraction = remember { MutableInteractionSource() }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable {
+                        .tvFocusBorder(overlayRowInteraction, shape = RoundedCornerShape(12.dp))
+                        .clickable(interactionSource = overlayRowInteraction, indication = null) {
                             onSetOverlayLogo(item.id, title, isNsfwSlot, !activeOverlay)
                         }
                         .padding(horizontal = 4.dp)
@@ -342,7 +363,9 @@ fun CustomizeItemDialog(
                         onCheckedChange = { checked ->
                             onSetOverlayLogo(item.id, title, isNsfwSlot, checked)
                         },
-                        modifier = Modifier.testTag("customize_overlay_logo_checkbox")
+                        modifier = Modifier
+                            .focusProperties { canFocus = false }
+                            .testTag("customize_overlay_logo_checkbox")
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
@@ -749,6 +772,8 @@ private fun IconPackOptionCard(
         isLoading = false
     }
 
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -756,12 +781,12 @@ private fun IconPackOptionCard(
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
             .border(
-                width = if (isSelected) 2.5.dp else 1.dp,
-                color = if (isSelected) MaterialTheme.colorScheme.primary
+                width = if (isFocused || isSelected) 2.5.dp else 1.dp,
+                color = if (isFocused || isSelected) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.outlineVariant,
                 shape = RoundedCornerShape(12.dp)
             )
-            .clickable(onClick = onClick)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
             .padding(10.dp)
             .testTag("icon_pack_icon_${icon.drawableName}"),
         contentAlignment = Alignment.Center
@@ -813,21 +838,23 @@ private fun PosterOptionCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
     Box(
         modifier = modifier
             .fillMaxWidth()
             .aspectRatio(2f / 3f)
             .clip(RoundedCornerShape(10.dp))
             .border(
-                width = if (isSelected) 2.5.dp else 1.dp,
-                color = if (isSelected) {
+                width = if (isFocused || isSelected) 2.5.dp else 1.dp,
+                color = if (isFocused || isSelected) {
                     MaterialTheme.colorScheme.primary
                 } else {
                     MaterialTheme.colorScheme.outlineVariant
                 },
                 shape = RoundedCornerShape(10.dp)
             )
-            .clickable(onClick = onClick)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
     ) {
         AsyncImage(
             model = imageUrl,

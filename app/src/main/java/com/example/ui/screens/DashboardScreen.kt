@@ -14,6 +14,7 @@ import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -106,6 +107,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -133,6 +139,7 @@ import com.example.data.service.IconPackOverridesStore
 import com.example.ui.components.AddContentModal
 import com.example.ui.components.AppIconTile
 import com.example.ui.components.AppTextRow
+import com.example.ui.components.AppTvCard
 import com.example.ui.components.CustomizeItemDialog
 import com.example.ui.components.EditFavoritesSheet
 import com.example.ui.components.FavoriteActionsSheet
@@ -145,17 +152,22 @@ import com.example.ui.components.LocalFolderPreviewItems
 import com.example.ui.components.LocalThemedAppIcons
 import com.example.ui.components.SettingsModal
 import com.example.ui.components.SteamGamePosterCard
+import com.example.ui.components.TV_FAVORITES_MAX_COLUMNS
 import com.example.ui.components.TopNavBar
 import com.example.ui.components.buildAppIconImageRequest
 import com.example.ui.components.buildPosterImageRequest
 import com.example.ui.components.buildPosterLogoImageRequest
 import com.example.ui.components.hasCustomAppIconUrl
+import com.example.ui.components.isTelevisionMode
 import com.example.ui.components.resolveAppIconUrl
+import com.example.ui.components.shouldShowFocusEffects
+import com.example.ui.components.tvFocusBorder
 import com.example.ui.viewmodel.AddModalSubView
 import com.example.ui.viewmodel.LauncherViewModel
 import com.example.ui.viewmodel.MainLibraryTab
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
+import com.example.ui.theme.resolveEffectiveFavoritesLayout
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -245,10 +257,15 @@ fun DashboardScreen(
         viewModel.refreshWeatherApps()
     }
 
-    // Phones held sideways get a compact horizontal poster row instead of a grid.
+    // Phones held sideways get a compact horizontal poster row instead of a grid; TVs keep
+    // centered clock/weather/16:9 cards and always use TV_CARDS layout exclusively.
     val configuration = LocalConfiguration.current
+    val isTelevision = isTelevisionMode()
+    val effectiveFavoritesLayout = resolveEffectiveFavoritesLayout(favoritesLayout, isTelevision)
+    val showFocusEffects = shouldShowFocusEffects(controllerState.isConnected)
     val isCompactLandscape =
-        configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+        !isTelevision &&
+            configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
             configuration.screenHeightDp < 480
 
     var showSearchBar by remember { mutableStateOf(false) }
@@ -346,11 +363,11 @@ fun DashboardScreen(
         }
     )
 
-    // With no controller, the Games tab starts with nothing focused. A connected
-    // controller focuses the first game so an active element is visibly highlighted.
-    LaunchedEffect(controllerState.isConnected, currentTab) {
+    // With no controller/TV focus input, the Games tab starts with nothing focused.
+    // On TV or with an active controller, focus the first game so an active element is highlighted.
+    LaunchedEffect(showFocusEffects, currentTab) {
         if (currentTab == MainLibraryTab.GAMES) {
-            if (controllerState.isConnected) {
+            if (showFocusEffects) {
                 if (focusedItemId == null || gamesList.none { it.id == focusedItemId }) {
                     gamesList.firstOrNull()?.let { viewModel.setFocusedItem(it.id) }
                 }
@@ -360,19 +377,31 @@ fun DashboardScreen(
         }
     }
 
-    // Move controller focus to the first item of the new context. Without this, focus
-    // search keeps the old spatial position and lands on whatever item happens to be
-    // below the previously selected element.
+    val noOverlayOpen = contextMenuItem == null &&
+        favoriteActionItem == null &&
+        !showFavoritesEditor &&
+        openFolderId == null &&
+        folderPickerTargetItem == null &&
+        manageFolderId == null &&
+        editingItem == null &&
+        !showAddModal &&
+        !showSettingsModal &&
+        weatherAppChooser == null
+
+    // Move remote/controller focus to the first item of the new Apps context when switching
+    // between Favorites (page 0) and the App List (page 1), while leaving open modals untouched.
     var focusedAppsContext by remember { mutableStateOf(Int.MIN_VALUE) }
     LaunchedEffect(
         currentTab,
         appsPagerState.currentPage,
         appsPagerState.isScrollInProgress,
-        controllerState.isConnected,
+        showFocusEffects,
+        noOverlayOpen,
+        effectiveFavoritesLayout,
         favoriteApps.firstOrNull()?.id,
         appListEntries.firstOrNull { it is AppListEntry.App },
     ) {
-        if (!controllerState.isConnected || currentTab != MainLibraryTab.APPS) {
+        if (!showFocusEffects || currentTab != MainLibraryTab.APPS || !noOverlayOpen) {
             focusedAppsContext = Int.MIN_VALUE
             return@LaunchedEffect
         }
@@ -396,13 +425,14 @@ fun DashboardScreen(
             focusedAppsContext = context
             viewModel.setFocusedItem(firstApp.item.id)
             // The first row may not be composed if the drawer was left scrolled down.
-            val firstRowVisible = if (favoritesLayout == FavoritesLayout.ICONS) {
+            val useGrid = effectiveFavoritesLayout != FavoritesLayout.TEXT
+            val firstRowVisible = if (useGrid) {
                 appsGridState.layoutInfo.visibleItemsInfo.any { it.index == firstAppIndex }
             } else {
                 appsListState.layoutInfo.visibleItemsInfo.any { it.index == firstAppIndex }
             }
             if (!firstRowVisible) {
-                if (favoritesLayout == FavoritesLayout.ICONS) {
+                if (useGrid) {
                     runCatching { appsGridState.scrollToItem(0) }
                 } else {
                     runCatching { appsListState.scrollToItem(0) }
@@ -413,24 +443,12 @@ fun DashboardScreen(
         }
     }
 
-    // While a controller is connected and the Games tab is showing, the poster grid owns
-    // focus. The top bar must not keep it, and overlays (search, dialogs, sheets) are
-    // exempt so they can take focus normally.
-    val holdGameGridFocus = controllerState.isConnected &&
+    val allowInitialGamesFocus = showFocusEffects &&
         currentTab == MainLibraryTab.GAMES &&
         !pagerState.isScrollInProgress &&
         !showSearchBar &&
         searchQuery.isBlank() &&
-        contextMenuItem == null &&
-        favoriteActionItem == null &&
-        !showFavoritesEditor &&
-        openFolderId == null &&
-        folderPickerTargetItem == null &&
-        manageFolderId == null &&
-        editingItem == null &&
-        !showAddModal &&
-        !showSettingsModal &&
-        weatherAppChooser == null
+        noOverlayOpen
 
     val disablePagerSwipeInCompactGames by remember(isCompactLandscape, gamesDisplay.isEmpty()) {
         derivedStateOf {
@@ -511,6 +529,7 @@ fun DashboardScreen(
                     weatherEnabled = weatherEnabled,
                     weather = weatherInfo,
                     temperatureUnit = temperatureUnit,
+                    showFocusEffects = showFocusEffects,
                     onOpenCalendar = { viewModel.openCalendarApp() },
                     onOpenWeather = { viewModel.openWeatherApp() },
                     onTabSelected = { viewModel.setTab(it) },
@@ -565,21 +584,20 @@ fun DashboardScreen(
                 ) { page ->
                     if (page == 1) {
                         // Games View: Steam poster aspect ratio (2:3) with pull-to-refresh.
-                        // Confine directional focus navigation within the Games view so D-pad /
-                        // left stick left cannot escape to page 0 (Apps view).
+                        // Confine left/previous navigation so D-pad Left cannot jump to Apps,
+                        // while allowing Up from row 0 to reach the top navigation bar.
                         val pullToRefreshState = rememberPullToRefreshState()
                         BoxWithConstraints(
                             modifier = Modifier
                                 .fillMaxSize()
+                                .focusProperties {
+                                    canFocus = (pagerState.currentPage == 1)
+                                }
                                 .focusGroup()
                                 .focusProperties {
                                     exit = { direction ->
-                                        // Never let controller navigation escape into the top
-                                        // bar. Up on the first row stays on that row, and
-                                        // Left/Previous cannot jump to the Apps page.
                                         if (
                                             direction == FocusDirection.Left ||
-                                            direction == FocusDirection.Up ||
                                             direction == FocusDirection.Previous
                                         ) {
                                             FocusRequester.Cancel
@@ -634,14 +652,14 @@ fun DashboardScreen(
                                     GamesPosterGrid(
                                         games = gamesDisplay,
                                         focusedItemId = focusedItemId,
-                                        showFocusEffects = controllerState.isConnected,
+                                        showFocusEffects = showFocusEffects,
                                         showNsfwPoster = steamGridDbIncludeNsfw,
                                         isGamesTabOpen = currentTab == MainLibraryTab.GAMES &&
                                             pagerState.currentPage == 1 &&
                                             !pagerState.isScrollInProgress,
                                         isGamesPage = currentTab == MainLibraryTab.GAMES,
-                                        controllerConnected = controllerState.isConnected,
-                                        holdFocus = holdGameGridFocus,
+                                        controllerConnected = showFocusEffects,
+                                        holdFocus = allowInitialGamesFocus,
                                         gridState = gridState,
                                         rowState = gamesRowState,
                                         compactLandscape = isCompactLandscape,
@@ -666,13 +684,14 @@ fun DashboardScreen(
                             )
                         }
                     } else {
-                        // Apps View: a full-height favorites home. Swiping up reveals the
-                        // complete app list, which excludes favorites and games.
-                        // Confine directional focus navigation so D-pad / stick right cannot
-                        // escape to page 1 (Games view).
+                        // Apps View: a full-height favorites home. Swiping up or pressing Down
+                        // reveals the complete app list, which excludes favorites and games.
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
+                                .focusProperties {
+                                    canFocus = (pagerState.currentPage == 0)
+                                }
                                 .then(
                                     if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
                                 )
@@ -694,60 +713,87 @@ fun DashboardScreen(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .testTag("apps_vertical_pager")
-                            ) { page ->
-                                if (page == 0) {
-                                    FavoritesHome(
-                                        favorites = favoriteApps,
-                                        focusedItemId = focusedItemId,
-                                        layout = favoritesLayout,
-                                        showFocusEffects = controllerState.isConnected,
-                                        weatherEnabled = weatherEnabled,
-                                        weather = weatherInfo,
-                                        temperatureUnit = temperatureUnit,
-                                        firstItemFocusRequester = favoritesFirstFocusRequester,
-                                        onLaunchFavorite = { app ->
-                                            viewModel.setFocusedItem(app.id)
-                                            viewModel.launchItem(app)
-                                        },
-                                        onLongPressFavorite = { app ->
-                                            viewModel.openFavoriteActions(app)
-                                        },
-                                        onOpenClock = { viewModel.openClockApp() },
-                                        onOpenCalendar = { viewModel.openCalendarApp() },
-                                        onOpenWeather = { viewModel.openWeatherApp() },
-                                        onPullDown = { viewModel.expandNotificationShade() },
-                                        onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
-                                    )
-                                } else {
-                                    if (libraryDisplay.isEmpty()) {
-                                        EmptyAppDrawerState(hasFavorites = favoriteApps.isNotEmpty())
-                                    } else {
-                                        AppsAlphabeticalList(
-                                            entries = appListEntries,
+                            ) { appsPage ->
+                                if (appsPage == 0) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .focusProperties {
+                                                canFocus = (appsPagerState.currentPage == 0)
+                                            }
+                                    ) {
+                                        FavoritesHome(
+                                            favorites = favoriteApps,
                                             focusedItemId = focusedItemId,
-                                            layout = favoritesLayout,
-                                            showFocusEffects = controllerState.isConnected,
-                                            listState = appsListState,
-                                            gridState = appsGridState,
-                                            firstItemFocusRequester = appsListFirstFocusRequester,
-                                            onAppClick = onAppClick,
-                                            onAppLongClick = onAppLongClick,
-                                            onAppFocus = onAppFocus,
-                                            onLetterSelected = { letter ->
-                                                val index = appListEntries.indexOfFirst {
-                                                    it is AppListEntry.Letter && it.letter == letter
+                                            layout = effectiveFavoritesLayout,
+                                            showFocusEffects = showFocusEffects,
+                                            weatherEnabled = weatherEnabled,
+                                            weather = weatherInfo,
+                                            temperatureUnit = temperatureUnit,
+                                            firstItemFocusRequester = favoritesFirstFocusRequester,
+                                            onLaunchFavorite = { app ->
+                                                viewModel.setFocusedItem(app.id)
+                                                viewModel.launchItem(app)
+                                            },
+                                            onLongPressFavorite = { app ->
+                                                viewModel.openFavoriteActions(app)
+                                            },
+                                            onOpenClock = { viewModel.openClockApp() },
+                                            onOpenCalendar = { viewModel.openCalendarApp() },
+                                            onOpenWeather = { viewModel.openWeatherApp() },
+                                            onPullDown = { viewModel.expandNotificationShade() },
+                                            onNavigateDownToAppList = {
+                                                scope.launch { appsPagerState.animateScrollToPage(1) }
+                                            },
+                                            onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
+                                        )
+                                    }
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .focusProperties {
+                                                canFocus = (appsPagerState.currentPage == 1)
+                                            }
+                                    ) {
+                                        if (libraryDisplay.isEmpty()) {
+                                            EmptyAppDrawerState(
+                                                hasFavorites = favoriteApps.isNotEmpty(),
+                                                onNavigateUpToFavorites = {
+                                                    scope.launch { appsPagerState.animateScrollToPage(0) }
                                                 }
-                                                if (index >= 0) {
-                                                    scope.launch {
-                                                        if (favoritesLayout == FavoritesLayout.ICONS) {
-                                                            appsGridState.scrollToItem(index)
-                                                        } else {
-                                                            appsListState.scrollToItem(index)
+                                            )
+                                        } else {
+                                            AppsAlphabeticalList(
+                                                entries = appListEntries,
+                                                focusedItemId = focusedItemId,
+                                                layout = effectiveFavoritesLayout,
+                                                showFocusEffects = showFocusEffects,
+                                                listState = appsListState,
+                                                gridState = appsGridState,
+                                                firstItemFocusRequester = appsListFirstFocusRequester,
+                                                onAppClick = onAppClick,
+                                                onAppLongClick = onAppLongClick,
+                                                onAppFocus = onAppFocus,
+                                                onNavigateUpToFavorites = {
+                                                    scope.launch { appsPagerState.animateScrollToPage(0) }
+                                                },
+                                                onLetterSelected = { letter ->
+                                                    val index = appListEntries.indexOfFirst {
+                                                        it is AppListEntry.Letter && it.letter == letter
+                                                    }
+                                                    if (index >= 0) {
+                                                        scope.launch {
+                                                            if (effectiveFavoritesLayout != FavoritesLayout.TEXT) {
+                                                                appsGridState.scrollToItem(index)
+                                                            } else {
+                                                                appsListState.scrollToItem(index)
+                                                            }
                                                         }
                                                     }
                                                 }
-                                            }
-                                        )
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -762,11 +808,12 @@ fun DashboardScreen(
                 FolderContentsSheet(
                     folder = openFolder,
                     apps = folderMembersMap[openFolder.id].orEmpty(),
-                    layout = favoritesLayout,
+                    layout = effectiveFavoritesLayout,
                     focusedItemId = focusedItemId,
-                    showFocusEffects = controllerState.isConnected,
+                    showFocusEffects = showFocusEffects,
                     onAppClick = onAppClick,
                     onAppLongClick = onAppLongClick,
+                    onAppFocus = onAppFocus,
                     onCustomizeFolder = { viewModel.openEditCustomizer(openFolder) },
                     onManageFolderApps = { viewModel.openManageFolderApps(openFolder.id) },
                     onDismiss = { viewModel.closeFolder() }
@@ -973,7 +1020,8 @@ fun DashboardScreen(
                     onChooseSyncFolder = { viewModel.chooseSyncFolder(it) },
                     onSyncLibraryNow = { viewModel.syncLibraryNow() },
                     onDisconnectLibrarySync = { viewModel.disconnectLibrarySync() },
-                    onDismiss = { viewModel.closeSettingsModal() }
+                    onDismiss = { viewModel.closeSettingsModal() },
+                    isTelevision = isTelevision
                 )
             }
 
@@ -986,11 +1034,15 @@ fun DashboardScreen(
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             apps.forEach { app ->
+                                val interactionSource = remember { MutableInteractionSource() }
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(10.dp))
-                                        .clickable { viewModel.chooseWeatherApp(app.packageName) }
+                                        .tvFocusBorder(interactionSource, shape = RoundedCornerShape(10.dp))
+                                        .clickable(interactionSource = interactionSource, indication = null) {
+                                            viewModel.chooseWeatherApp(app.packageName)
+                                        }
                                         .padding(horizontal = 8.dp, vertical = 12.dp)
                                         .testTag("weather_chooser_${app.packageName}"),
                                     verticalAlignment = Alignment.CenterVertically
@@ -1223,36 +1275,6 @@ private fun GamesPosterGrid(
         }
         // In the grid, the custom BringIntoViewSpec above already keeps the focused
         // poster clear of the app-switcher bar as part of the focus scroll animation.
-    }
-
-    // The Games grid owns focus while a controller is connected. Initial composition can
-    // park focus on the top bar (its buttons are focusable), so pull it back to the
-    // poster that had it, or to the first poster on a fresh entry.
-    LaunchedEffect(holdFocus, hasGridFocus, focusedItemId, games) {
-        if (!holdFocus || hasGridFocus || games.isEmpty()) return@LaunchedEffect
-        delay(60)
-        // A focus move between posters can briefly report no focus; re-check before
-        // pulling focus back so normal navigation is never interrupted.
-        if (hasGridFocus) return@LaunchedEffect
-        val targetId = focusedItemId?.takeIf { id -> games.any { it.id == id } }
-            ?: games.first().id
-        val targetIndex = games.indexOfFirst { it.id == targetId }
-        if (targetIndex < 0) return@LaunchedEffect
-        if (compactLandscape) {
-            runCatching { rowState.scrollToItem(targetIndex) }
-        } else {
-            runCatching { gridState.scrollToItem(targetIndex) }
-        }
-        val requester = if (targetId == games.first().id) {
-            firstItemFocusRequester
-        } else {
-            focusedItemFocusRequester
-        }
-        repeat(3) {
-            runCatching { requester.requestFocus() }
-            delay(80)
-            if (hasGridFocus) return@LaunchedEffect
-        }
     }
 
     if (compactLandscape) {
@@ -1534,7 +1556,7 @@ private fun PrefetchPosterImages(
 }
 
 @Immutable
-private sealed interface AppListEntry {
+internal sealed interface AppListEntry {
     @Immutable
     data class Letter(val letter: String) : AppListEntry
     @Immutable
@@ -1542,7 +1564,7 @@ private sealed interface AppListEntry {
 }
 
 /** Flatten the sorted app list into letter/folder headers and rows. */
-private fun buildAppListEntries(apps: List<GameItem>): List<AppListEntry> {
+internal fun buildAppListEntries(apps: List<GameItem>): List<AppListEntry> {
     val entries = ArrayList<AppListEntry>(apps.size + 8)
     var section: String? = null
     for (app in apps) {
@@ -1557,7 +1579,7 @@ private fun buildAppListEntries(apps: List<GameItem>): List<AppListEntry> {
 }
 
 @Composable
-private fun AppsAlphabeticalList(
+internal fun AppsAlphabeticalList(
     entries: List<AppListEntry>,
     focusedItemId: String?,
     layout: FavoritesLayout,
@@ -1569,6 +1591,7 @@ private fun AppsAlphabeticalList(
     onAppLongClick: (GameItem) -> Unit,
     onLetterSelected: (String) -> Unit,
     onAppFocus: (GameItem) -> Unit = {},
+    onNavigateUpToFavorites: (() -> Unit)? = null,
 ) {
     val letters = remember(entries) {
         entries.filterIsInstance<AppListEntry.Letter>().map { it.letter }
@@ -1597,7 +1620,106 @@ private fun AppsAlphabeticalList(
     Row(
         modifier = Modifier.fillMaxSize()
     ) {
-        if (layout == FavoritesLayout.ICONS) {
+        if (layout == FavoritesLayout.TV_CARDS) {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            ) {
+                val availableWidth = maxWidth - 24.dp
+                val spacing = 14.dp
+                val minCardWidth = 156.dp
+                val columns = minOf(
+                    TV_FAVORITES_MAX_COLUMNS,
+                    maxOf(3, ((availableWidth + spacing) / (minCardWidth + spacing)).toInt())
+                )
+                val firstRowIds = remember(entries, columns) {
+                    firstSectionTopRowIds(entries, columns)
+                }
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(columns),
+                    state = gridState,
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 8.dp,
+                        top = 8.dp,
+                        bottom = 20.dp + navigationBarInset
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(spacing),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("apps_tv_grid")
+                ) {
+                    items(
+                        items = entries,
+                        key = { entry ->
+                            when (entry) {
+                                is AppListEntry.Letter -> "section_${entry.letter}"
+                                is AppListEntry.App -> entry.item.id
+                            }
+                        },
+                        span = { entry ->
+                            when (entry) {
+                                is AppListEntry.Letter -> GridItemSpan(maxLineSpan)
+                                is AppListEntry.App -> GridItemSpan(1)
+                            }
+                        },
+                        contentType = { entry ->
+                            when (entry) {
+                                is AppListEntry.Letter -> "letter"
+                                is AppListEntry.App -> "app_tv_card"
+                            }
+                        }
+                    ) { entry ->
+                        when (entry) {
+                            is AppListEntry.Letter -> AppLetterHeader(letter = entry.letter)
+                            is AppListEntry.App -> {
+                                val app = entry.item
+                                val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
+                                val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
+                                val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
+                                val upToFavoritesMod = if (app.id in firstRowIds && onNavigateUpToFavorites != null) {
+                                    Modifier.onPreviewKeyEvent { keyEvent ->
+                                        if (keyEvent.type == KeyEventType.KeyDown &&
+                                            keyEvent.key == Key.DirectionUp
+                                        ) {
+                                            onNavigateUpToFavorites()
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                } else {
+                                    Modifier
+                                }
+                                AppTvCard(
+                                    app = app,
+                                    isFocused = app.id == focusedItemId,
+                                    showFocusEffects = showFocusEffects,
+                                    testTag = "app_row_${app.id}",
+                                    onClick = handleClick,
+                                    onLongClick = handleLongClick,
+                                    onFocus = handleFocus,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .then(
+                                            if (app.id == firstAppId) {
+                                                firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                    ?: Modifier
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
+                                        .then(upToFavoritesMod)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (layout == FavoritesLayout.ICONS) {
             BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
@@ -1606,6 +1728,9 @@ private fun AppsAlphabeticalList(
                 val availableWidth = maxWidth - 12.dp
                 val tileMinSize = 78.dp
                 val columns = maxOf(3, (availableWidth / tileMinSize).toInt())
+                val firstRowIds = remember(entries, columns) {
+                    firstSectionTopRowIds(entries, columns)
+                }
 
                 // Icon grid drawer: cells are packed edge to edge; gaps live inside each
                 // tile's clickable content padding so the whole cell is an easy touch target.
@@ -1652,6 +1777,20 @@ private fun AppsAlphabeticalList(
                                 val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
                                 val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
                                 val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
+                                val upToFavoritesMod = if (app.id in firstRowIds && onNavigateUpToFavorites != null) {
+                                    Modifier.onPreviewKeyEvent { keyEvent ->
+                                        if (keyEvent.type == KeyEventType.KeyDown &&
+                                            keyEvent.key == Key.DirectionUp
+                                        ) {
+                                            onNavigateUpToFavorites()
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                } else {
+                                    Modifier
+                                }
                                 AppIconTile(
                                     app = app,
                                     isFocused = app.id == focusedItemId,
@@ -1671,6 +1810,7 @@ private fun AppsAlphabeticalList(
                                                 Modifier
                                             }
                                         )
+                                        .then(upToFavoritesMod)
                                 )
                             }
                         }
@@ -1678,6 +1818,9 @@ private fun AppsAlphabeticalList(
                 }
             }
         } else {
+            val firstRowIds = remember(entries) {
+                firstSectionTopRowIds(entries, columns = 1)
+            }
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(
@@ -1714,6 +1857,20 @@ private fun AppsAlphabeticalList(
                             val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
                             val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
                             val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
+                            val upToFavoritesMod = if (app.id in firstRowIds && onNavigateUpToFavorites != null) {
+                                Modifier.onPreviewKeyEvent { keyEvent ->
+                                    if (keyEvent.type == KeyEventType.KeyDown &&
+                                        keyEvent.key == Key.DirectionUp
+                                    ) {
+                                        onNavigateUpToFavorites()
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                            } else {
+                                Modifier
+                            }
                             AppTextRow(
                                 app = app,
                                 isFocused = app.id == focusedItemId,
@@ -1733,6 +1890,7 @@ private fun AppsAlphabeticalList(
                                             Modifier
                                         }
                                     )
+                                    .then(upToFavoritesMod)
                             )
                         }
                     }
@@ -1748,6 +1906,21 @@ private fun AppsAlphabeticalList(
     }
 }
 
+private fun firstSectionTopRowIds(entries: List<AppListEntry>, columns: Int): Set<String> {
+    val firstAppIdx = entries.indexOfFirst { it is AppListEntry.App }
+    if (firstAppIdx < 0) return emptySet()
+    val ids = HashSet<String>(columns)
+    for (i in firstAppIdx until entries.size) {
+        val entry = entries[i]
+        if (entry is AppListEntry.Letter) break
+        if (entry is AppListEntry.App) {
+            ids += entry.item.id
+            if (ids.size >= columns) break
+        }
+    }
+    return ids
+}
+
 @Composable
 private fun PrefetchAppIcons(
     entries: List<AppListEntry>,
@@ -1760,7 +1933,11 @@ private fun PrefetchAppIcons(
     val themedIcons = LocalThemedAppIcons.current
     val folderMembers = LocalFolderPreviewItems.current
     val iconSizePx = remember(density, layout) {
-        val sizeDp = if (layout == FavoritesLayout.ICONS) 58.dp else 39.dp
+        val sizeDp = when (layout) {
+            FavoritesLayout.TEXT -> 39.dp
+            FavoritesLayout.ICONS -> 58.dp
+            FavoritesLayout.TV_CARDS -> 44.dp
+        }
         with(density) { sizeDp.roundToPx().coerceAtLeast(1) }
     }
     val miniIconSizePx = remember(iconSizePx) {
@@ -1771,7 +1948,7 @@ private fun PrefetchAppIcons(
         val loader = context.imageLoader
         val enqueuedUrls = HashSet<String>()
         snapshotFlow {
-            val visible = if (layout == FavoritesLayout.ICONS) {
+            val visible = if (layout != FavoritesLayout.TEXT) {
                 gridState.layoutInfo.visibleItemsInfo.let { info ->
                     (info.firstOrNull()?.index ?: -1) to (info.lastOrNull()?.index ?: -1)
                 }
@@ -1827,7 +2004,8 @@ private fun AppLetterHeader(letter: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 6.dp, top = 12.dp, bottom = 4.dp),
+            .padding(start = 6.dp, top = 12.dp, bottom = 4.dp)
+            .testTag("app_letter_header_$letter"),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -1972,11 +2150,26 @@ private fun alphabetSection(title: String): String {
 }
 
 @Composable
-private fun EmptyAppDrawerState(hasFavorites: Boolean) {
+private fun EmptyAppDrawerState(
+    hasFavorites: Boolean,
+    onNavigateUpToFavorites: (() -> Unit)? = null
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .navigationBarsPadding()
+            .onPreviewKeyEvent { keyEvent ->
+                if (hasFavorites &&
+                    onNavigateUpToFavorites != null &&
+                    keyEvent.type == KeyEventType.KeyDown &&
+                    keyEvent.key == Key.DirectionUp
+                ) {
+                    onNavigateUpToFavorites()
+                    true
+                } else {
+                    false
+                }
+            }
             .padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1997,12 +2190,22 @@ private fun EmptyAppDrawerState(hasFavorites: Boolean) {
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = if (hasFavorites) "Swipe down to return to your favorites."
+            text = if (hasFavorites) "Swipe down or press Back to return to your favorites."
             else "Resync installed apps from Settings.",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
+        if (hasFavorites && onNavigateUpToFavorites != null) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                onClick = onNavigateUpToFavorites,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.testTag("empty_app_drawer_back_button")
+            ) {
+                Text("Back to Favorites")
+            }
+        }
     }
 }
 

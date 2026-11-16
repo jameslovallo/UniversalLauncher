@@ -35,16 +35,33 @@ class InstalledAppsManager(private val context: Context) {
         val launcherIntent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val leanbackIntent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
+        }
+        val standard = queryIntentActivitiesCompat(launcherIntent)
+        val leanback = queryIntentActivitiesCompat(leanbackIntent)
+        val byPackage = LinkedHashMap<String, ResolveInfo>(standard.size + leanback.size)
+        for (info in standard) {
+            val pkg = info.activityInfo?.packageName ?: continue
+            byPackage.putIfAbsent(pkg, info)
+        }
+        for (info in leanback) {
+            val pkg = info.activityInfo?.packageName ?: continue
+            byPackage.putIfAbsent(pkg, info)
+        }
+        return byPackage.values.toList()
+    }
+
+    private fun queryIntentActivitiesCompat(intent: Intent): List<ResolveInfo> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             packageManager.queryIntentActivities(
-                launcherIntent,
+                intent,
                 PackageManager.ResolveInfoFlags.of(0L)
             )
         } else {
             @Suppress("DEPRECATION")
-            packageManager.queryIntentActivities(launcherIntent, 0)
+            packageManager.queryIntentActivities(intent, 0)
         }
-    }
 
     /**
      * Query all launchable apps on the device.
@@ -119,10 +136,12 @@ class InstalledAppsManager(private val context: Context) {
     }
 
     /**
-     * Launch an installed app by package name.
+     * Launch an installed app by package name, supporting both standard and Android TV
+     * Leanback launcher intents.
      */
     fun launchApp(packageName: String): Boolean = try {
         val intent = packageManager.getLaunchIntentForPackage(packageName)
+            ?: packageManager.getLeanbackLaunchIntentForPackage(packageName)
         if (intent != null) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)

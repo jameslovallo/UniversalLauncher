@@ -1,7 +1,12 @@
 package com.example.ui.components
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -26,7 +32,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,17 +60,31 @@ fun TopNavBar(
     weatherEnabled: Boolean = false,
     weather: WeatherInfo? = null,
     temperatureUnit: TemperatureUnit = TemperatureUnit.defaultForLocale(),
+    showFocusEffects: Boolean = false,
     onOpenCalendar: () -> Unit = {},
     onOpenWeather: () -> Unit = {},
     onTabSelected: (MainLibraryTab) -> Unit,
     onOpenAddModal: () -> Unit,
     onOpenSettings: () -> Unit,
+    onNavigateDown: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
             .height(64.dp)
+            .focusGroup()
+            .onPreviewKeyEvent { keyEvent ->
+                if (onNavigateDown != null &&
+                    keyEvent.type == KeyEventType.KeyDown &&
+                    keyEvent.key == Key.DirectionDown
+                ) {
+                    onNavigateDown()
+                    true
+                } else {
+                    false
+                }
+            }
             .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -71,6 +96,7 @@ fun TopNavBar(
                 weatherEnabled = weatherEnabled,
                 weather = weather,
                 temperatureUnit = temperatureUnit,
+                showFocusEffects = showFocusEffects,
                 onOpenCalendar = onOpenCalendar,
                 onOpenWeather = onOpenWeather,
                 modifier = Modifier.weight(1f)
@@ -79,9 +105,9 @@ fun TopNavBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AddButton(onOpenAddModal)
-                NavTabs(currentTab, onTabSelected)
-                SettingsButton(onOpenSettings)
+                AddButton(onOpenAddModal, showFocusEffects)
+                NavTabs(currentTab, showFocusEffects, onTabSelected)
+                SettingsButton(onOpenSettings, showFocusEffects)
             }
         } else if (alignEnd) {
             // Compact landscape without the date/weather header: keep all controls
@@ -91,30 +117,47 @@ fun TopNavBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AddButton(onOpenAddModal)
-                NavTabs(currentTab, onTabSelected)
-                SettingsButton(onOpenSettings)
+                AddButton(onOpenAddModal, showFocusEffects)
+                NavTabs(currentTab, showFocusEffects, onTabSelected)
+                SettingsButton(onOpenSettings, showFocusEffects)
             }
         } else {
-            AddButton(onOpenAddModal)
-            NavTabs(currentTab, onTabSelected)
-            SettingsButton(onOpenSettings)
+            AddButton(onOpenAddModal, showFocusEffects)
+            NavTabs(currentTab, showFocusEffects, onTabSelected)
+            SettingsButton(onOpenSettings, showFocusEffects)
         }
     }
 }
 
 @Composable
-private fun AddButton(onClick: () -> Unit) {
+private fun AddButton(
+    onClick: () -> Unit,
+    showFocusEffects: Boolean
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val focused = isFocused && showFocusEffects
     IconButton(
         onClick = onClick,
+        interactionSource = interactionSource,
         modifier = Modifier
-            .size(44.dp)
+            .size(48.dp)
+            .clip(CircleShape)
+            .then(
+                if (focused) {
+                    Modifier
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f))
+                        .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                } else {
+                    Modifier
+                }
+            )
             .testTag("topbar_add_button")
     ) {
         Icon(
             imageVector = Icons.Default.Add,
             contentDescription = "Add app, shortcut, or GeForce NOW game",
-            tint = MaterialTheme.colorScheme.onSurface,
+            tint = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.size(24.dp)
         )
     }
@@ -123,6 +166,7 @@ private fun AddButton(onClick: () -> Unit) {
 @Composable
 private fun NavTabs(
     currentTab: MainLibraryTab,
+    showFocusEffects: Boolean,
     onTabSelected: (MainLibraryTab) -> Unit
 ) {
     // Center: plain text tabs, Apps first, active label bold. No background or counts.
@@ -130,15 +174,17 @@ private fun NavTabs(
         TabLabel(
             label = "Apps",
             isSelected = currentTab == MainLibraryTab.APPS,
+            showFocusEffects = showFocusEffects,
             onClick = { onTabSelected(MainLibraryTab.APPS) },
             testTag = "tab_apps"
         )
 
-        Spacer(modifier = Modifier.width(28.dp))
+        Spacer(modifier = Modifier.width(24.dp))
 
         TabLabel(
             label = "Games",
             isSelected = currentTab == MainLibraryTab.GAMES,
+            showFocusEffects = showFocusEffects,
             onClick = { onTabSelected(MainLibraryTab.GAMES) },
             testTag = "tab_games"
         )
@@ -146,17 +192,34 @@ private fun NavTabs(
 }
 
 @Composable
-private fun SettingsButton(onClick: () -> Unit) {
+private fun SettingsButton(
+    onClick: () -> Unit,
+    showFocusEffects: Boolean
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val focused = isFocused && showFocusEffects
     IconButton(
         onClick = onClick,
+        interactionSource = interactionSource,
         modifier = Modifier
-            .size(44.dp)
+            .size(48.dp)
+            .clip(CircleShape)
+            .then(
+                if (focused) {
+                    Modifier
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f))
+                        .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                } else {
+                    Modifier
+                }
+            )
             .testTag("topbar_settings_button")
     ) {
         Icon(
             imageVector = PageInfoIcon,
             contentDescription = "Open Settings",
-            tint = MaterialTheme.colorScheme.onSurface,
+            tint = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.size(24.dp)
         )
     }
@@ -172,6 +235,7 @@ private fun DateWeatherHeader(
     weatherEnabled: Boolean,
     weather: WeatherInfo?,
     temperatureUnit: TemperatureUnit,
+    showFocusEffects: Boolean,
     onOpenCalendar: () -> Unit,
     onOpenWeather: () -> Unit,
     modifier: Modifier = Modifier
@@ -185,41 +249,73 @@ private fun DateWeatherHeader(
     }
 
     val dateFormatter = remember { SimpleDateFormat("EEEE, MMMM d", Locale.getDefault()) }
+    val dateInteraction = remember { MutableInteractionSource() }
+    val dateFocused by dateInteraction.collectIsFocusedAsState()
+    val weatherInteraction = remember { MutableInteractionSource() }
+    val weatherFocused by weatherInteraction.collectIsFocusedAsState()
 
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        val highlightDate = dateFocused && showFocusEffects
         Text(
             text = dateFormatter.format(Date(now)),
             fontSize = 18.sp,
             fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = if (highlightDate) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
-                .focusProperties { canFocus = false }
-                .clip(RoundedCornerShape(8.dp))
-                .clickable { onOpenCalendar() }
-                .padding(horizontal = 4.dp, vertical = 4.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .then(
+                    if (highlightDate) {
+                        Modifier
+                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f))
+                            .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp))
+                    } else {
+                        Modifier
+                    }
+                )
+                .clickable(
+                    interactionSource = dateInteraction,
+                    indication = null,
+                    onClick = onOpenCalendar
+                )
+                .padding(horizontal = 8.dp, vertical = 4.dp)
                 .testTag("topbar_date")
         )
 
         if (weatherEnabled && weather != null) {
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            val highlightWeather = weatherFocused && showFocusEffects
             Row(
                 modifier = Modifier
-                    .focusProperties { canFocus = false }
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable { onOpenWeather() }
-                    .padding(horizontal = 4.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .then(
+                        if (highlightWeather) {
+                            Modifier
+                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f))
+                                .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp))
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .clickable(
+                        interactionSource = weatherInteraction,
+                        indication = null,
+                        onClick = onOpenWeather
+                    )
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
                     .testTag("topbar_weather"),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = weatherIcon(weather.weatherCode),
                     contentDescription = weatherDescription(weather.weatherCode),
-                    tint = MaterialTheme.colorScheme.onSurface,
+                    tint = if (highlightWeather) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(4.dp))
@@ -227,7 +323,8 @@ private fun DateWeatherHeader(
                     text = weather.temperatureDisplay(temperatureUnit, showUnit = false),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = if (highlightWeather) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1
                 )
             }
@@ -239,25 +336,47 @@ private fun DateWeatherHeader(
 private fun TabLabel(
     label: String,
     isSelected: Boolean,
+    showFocusEffects: Boolean,
     onClick: () -> Unit,
     testTag: String
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val focused = isFocused && showFocusEffects
     val textColor by animateColorAsState(
-        targetValue = if (isSelected) MaterialTheme.colorScheme.onSurface
-        else MaterialTheme.colorScheme.onSurfaceVariant,
+        targetValue = when {
+            focused -> MaterialTheme.colorScheme.primary
+            isSelected -> MaterialTheme.colorScheme.onSurface
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        },
         label = "tab_text"
     )
+    val pillShape = RoundedCornerShape(12.dp)
 
     Text(
         text = label,
         fontSize = 18.sp,
-        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+        fontWeight = if (isSelected || focused) FontWeight.Bold else FontWeight.Medium,
         color = textColor,
         modifier = Modifier
-            .focusProperties { canFocus = false }
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 4.dp, vertical = 6.dp)
+            .clip(pillShape)
+            .background(
+                if (focused) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                else Color.Transparent
+            )
+            .then(
+                if (focused) {
+                    Modifier.border(2.dp, MaterialTheme.colorScheme.primary, pillShape)
+                } else {
+                    Modifier
+                }
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
+            .padding(horizontal = 10.dp, vertical = 6.dp)
             .testTag(testTag)
     )
 }

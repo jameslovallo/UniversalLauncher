@@ -12,6 +12,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +28,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
@@ -69,6 +73,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,13 +81,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -100,6 +114,7 @@ import com.example.data.service.WeatherLocationMode
 import com.example.data.service.temperatureDisplay
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -146,11 +161,17 @@ fun SettingsModal(
     onChooseSyncFolder: (Uri) -> Unit,
     onSyncLibraryNow: () -> Unit,
     onDisconnectLibrarySync: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    isTelevision: Boolean = isTelevisionMode()
 ) {
     var apiKeyInput by remember { mutableStateOf(steamGridDbApiKey ?: "") }
     var zipInput by remember(weatherZip) { mutableStateOf(weatherZip) }
     val context = LocalContext.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val backFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        runCatching { backFocusRequester.requestFocus() }
+    }
 
     // These settings depend on external system state, so re-read them whenever the screen
     // comes back to the foreground (for example after the accessibility settings screen).
@@ -216,9 +237,14 @@ fun SettingsModal(
                         .padding(top = 16.dp, bottom = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val backInteraction = remember { MutableInteractionSource() }
                     IconButton(
                         onClick = onDismiss,
-                        modifier = Modifier.testTag("settings_close_button")
+                        interactionSource = backInteraction,
+                        modifier = Modifier
+                            .focusRequester(backFocusRequester)
+                            .tvFocusBorder(backInteraction, shape = CircleShape)
+                            .testTag("settings_close_button")
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -238,23 +264,25 @@ fun SettingsModal(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-            SettingsSection(title = "Favorites Layout") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FavoritesLayout.values().forEach { layoutOption ->
-                        FavoritesLayoutCard(
-                            layout = layoutOption,
-                            isSelected = favoritesLayout == layoutOption,
-                            onSelect = { onSelectFavoritesLayout(layoutOption) },
-                            modifier = Modifier.weight(1f)
-                        )
+            if (!isTelevision) {
+                SettingsSection(title = "Favorites Layout") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FavoritesLayout.mobileOptions().forEach { layoutOption ->
+                            FavoritesLayoutCard(
+                                layout = layoutOption,
+                                isSelected = favoritesLayout == layoutOption,
+                                onSelect = { onSelectFavoritesLayout(layoutOption) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             SettingsSection(title = "Color") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -326,6 +354,7 @@ fun SettingsModal(
                 var lastOpacityStep by remember {
                     mutableStateOf((appsBackgroundOpacity * 10f).roundToInt())
                 }
+                val sliderInteraction = remember { MutableInteractionSource() }
                 Slider(
                     value = appsBackgroundOpacity,
                     onValueChange = { value ->
@@ -338,7 +367,30 @@ fun SettingsModal(
                     },
                     valueRange = 0f..1f,
                     steps = 9,
-                    modifier = Modifier.fillMaxWidth().testTag("apps_opacity_slider")
+                    interactionSource = sliderInteraction,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .tvFocusBorder(sliderInteraction, shape = RoundedCornerShape(12.dp))
+                        .onPreviewKeyEvent { keyEvent ->
+                            if (keyEvent.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            val currentStep = (appsBackgroundOpacity * 10f).roundToInt().coerceIn(0, 10)
+                            when (keyEvent.key) {
+                                Key.DirectionLeft -> {
+                                    val nextStep = (currentStep - 1).coerceAtLeast(0)
+                                    lastOpacityStep = nextStep
+                                    onSetAppsBackgroundOpacity(nextStep / 10f)
+                                    true
+                                }
+                                Key.DirectionRight -> {
+                                    val nextStep = (currentStep + 1).coerceAtMost(10)
+                                    lastOpacityStep = nextStep
+                                    onSetAppsBackgroundOpacity(nextStep / 10f)
+                                    true
+                                }
+                                else -> false
+                            }
+                        }
+                        .testTag("apps_opacity_slider")
                 )
                 Text(
                     text = "${(appsBackgroundOpacity * 100f).roundToInt()}%",
@@ -431,6 +483,13 @@ fun SettingsModal(
                             onValueChange = { zipInput = it },
                             label = { Text("ZIP or postal code") },
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(
+                                onDone = {
+                                    onWeatherZipChange(zipInput.trim())
+                                    keyboardController?.hide()
+                                }
+                            ),
                             modifier = Modifier.fillMaxWidth().testTag("weather_zip_input")
                         )
                         Spacer(modifier = Modifier.height(8.dp))
@@ -725,6 +784,8 @@ fun SettingsModal(
                         null
                     },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
                     modifier = Modifier.fillMaxWidth().testTag("steamgriddb_key_input")
                 )
 
@@ -854,6 +915,8 @@ private fun IconPackRow(
     testTag: String
 ) {
     val context = LocalContext.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -863,12 +926,12 @@ private fun IconPackRow(
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
             )
             .border(
-                width = if (isSelected) 2.dp else 0.dp,
-                color = if (isSelected) MaterialTheme.colorScheme.primary
+                width = if (isFocused || isSelected) 2.dp else 0.dp,
+                color = if (isFocused || isSelected) MaterialTheme.colorScheme.primary
                 else androidx.compose.ui.graphics.Color.Transparent,
                 shape = RoundedCornerShape(14.dp)
             )
-            .clickable(onClick = onClick)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically
@@ -931,13 +994,22 @@ private fun HiddenItemRow(
     onRestore: () -> Unit
 ) {
     val context = LocalContext.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-            .clickable(onClick = onOpen)
+            .then(
+                if (isFocused) {
+                    Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(14.dp))
+                } else {
+                    Modifier
+                }
+            )
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onOpen)
             .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
             .testTag("hidden_item_${item.id}"),
         verticalAlignment = Alignment.CenterVertically
@@ -1008,8 +1080,11 @@ private fun ThemeStyleCard(
     } else {
         MaterialTheme.colorScheme.primary
     }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
     Card(
         onClick = onSelect,
+        interactionSource = interactionSource,
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer
             else MaterialTheme.colorScheme.surfaceVariant
@@ -1017,8 +1092,8 @@ private fun ThemeStyleCard(
         shape = RoundedCornerShape(14.dp),
         modifier = modifier
             .border(
-                width = if (isSelected) 2.dp else 0.dp,
-                color = if (isSelected) MaterialTheme.colorScheme.primary
+                width = if (isFocused || isSelected) 2.5.dp else 0.dp,
+                color = if (isFocused || isSelected) MaterialTheme.colorScheme.primary
                 else androidx.compose.ui.graphics.Color.Transparent,
                 shape = RoundedCornerShape(14.dp)
             )
@@ -1068,14 +1143,18 @@ private fun FavoritesLayoutCard(
     val icon = when (layout) {
         FavoritesLayout.TEXT -> Icons.AutoMirrored.Filled.FormatListBulleted
         FavoritesLayout.ICONS -> Icons.Default.GridView
+        FavoritesLayout.TV_CARDS -> Icons.Default.GridView
     }
     val contentColor = if (isSelected) {
         MaterialTheme.colorScheme.onPrimaryContainer
     } else {
         MaterialTheme.colorScheme.onSurface
     }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
     Card(
         onClick = onSelect,
+        interactionSource = interactionSource,
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer
             else MaterialTheme.colorScheme.surfaceVariant
@@ -1083,8 +1162,8 @@ private fun FavoritesLayoutCard(
         shape = RoundedCornerShape(14.dp),
         modifier = modifier
             .border(
-                width = if (isSelected) 2.dp else 0.dp,
-                color = if (isSelected) MaterialTheme.colorScheme.primary
+                width = if (isFocused || isSelected) 2.5.dp else 0.dp,
+                color = if (isFocused || isSelected) MaterialTheme.colorScheme.primary
                 else androidx.compose.ui.graphics.Color.Transparent,
                 shape = RoundedCornerShape(14.dp)
             )

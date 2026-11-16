@@ -10,7 +10,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -34,7 +37,10 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -68,12 +74,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -140,9 +152,13 @@ fun AddContentModal(
                         .padding(top = 16.dp, bottom = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val backInteraction = remember { MutableInteractionSource() }
                     IconButton(
                         onClick = handleBack,
-                        modifier = Modifier.testTag("add_modal_close_button")
+                        interactionSource = backInteraction,
+                        modifier = Modifier
+                            .tvFocusBorder(backInteraction, shape = CircleShape)
+                            .testTag("add_modal_close_button")
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -329,6 +345,12 @@ internal fun OptionsSelectView(
         )
     )
 
+    val firstOptionFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { firstOptionFocusRequester.requestFocus() }
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isTwoColumns = maxWidth > maxHeight || maxWidth >= 520.dp
         val viewportHeight = maxHeight
@@ -347,19 +369,27 @@ internal fun OptionsSelectView(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 if (isTwoColumns) {
-                    options.chunked(2).forEach { rowItems ->
+                    options.chunked(2).forEachIndexed { rowIndex, rowItems ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
-                            rowItems.forEach { option ->
+                            rowItems.forEachIndexed { colIndex, option ->
                                 OptionCard(
                                     icon = option.icon,
                                     appIconUrl = resolvedIcons[option.testTag],
                                     title = option.title,
                                     onClick = option.onClick,
                                     testTag = option.testTag,
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .then(
+                                            if (rowIndex == 0 && colIndex == 0) {
+                                                Modifier.focusRequester(firstOptionFocusRequester)
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
                                 )
                             }
                             if (rowItems.size == 1) {
@@ -368,14 +398,16 @@ internal fun OptionsSelectView(
                         }
                     }
                 } else {
-                    options.forEach { option ->
+                    options.forEachIndexed { index, option ->
                         OptionCard(
                             icon = option.icon,
                             appIconUrl = resolvedIcons[option.testTag],
                             title = option.title,
                             onClick = option.onClick,
                             testTag = option.testTag,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(if (index == 0) Modifier.focusRequester(firstOptionFocusRequester) else Modifier)
                         )
                     }
                 }
@@ -399,14 +431,20 @@ private fun OptionCard(
     val sizePx = remember(density) { with(density) { 54.dp.roundToPx().coerceAtLeast(1) } }
     var imageFailed by remember(appIconUrl) { mutableStateOf(false) }
 
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
     Card(
         onClick = onClick,
+        interactionSource = interactionSource,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer
+            containerColor = if (isFocused) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+            else MaterialTheme.colorScheme.surfaceContainer
         ),
         border = BorderStroke(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+            width = if (isFocused) 2.5.dp else 1.dp,
+            color = if (isFocused) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
         ),
         shape = shape,
         modifier = modifier.testTag(testTag)
@@ -474,6 +512,8 @@ private fun AddShortcutFormView(
     var title by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("https://") }
     var posterUrl by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val viewportHeight = maxHeight
@@ -493,6 +533,8 @@ private fun AddShortcutFormView(
                     onValueChange = { title = it },
                     label = { Text("Shortcut Name") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
                     modifier = Modifier.fillMaxWidth().testTag("add_shortcut_title")
                 )
 
@@ -503,6 +545,8 @@ private fun AddShortcutFormView(
                     onValueChange = { url = it },
                     label = { Text("Web URL or Deep Link") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
                     modifier = Modifier.fillMaxWidth().testTag("add_shortcut_url")
                 )
 
@@ -513,6 +557,8 @@ private fun AddShortcutFormView(
                     onValueChange = { posterUrl = it },
                     label = { Text("Poster Box Art URL (optional)") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
                     modifier = Modifier.fillMaxWidth().testTag("add_shortcut_poster")
                 )
 
@@ -654,10 +700,23 @@ internal fun AddGfnSearchView(
                 modifier = Modifier.fillMaxSize().testTag("gfn_poster_grid")
             ) {
                 items(gfnTitles, key = { it.id }) { gfnGame ->
+                    val itemInteraction = remember { MutableInteractionSource() }
+                    val itemFocused by itemInteraction.collectIsFocusedAsState()
                     Column(
                         modifier = Modifier
                             .clip(RoundedCornerShape(14.dp))
-                            .clickable { onGameSelected(gfnGame) }
+                            .then(
+                                if (itemFocused) {
+                                    Modifier
+                                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
+                                        .border(2.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(14.dp))
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .clickable(interactionSource = itemInteraction, indication = null) {
+                                onGameSelected(gfnGame)
+                            }
                             .padding(4.dp)
                             .testTag("gfn_game_${gfnGame.id}"),
                         horizontalAlignment = Alignment.CenterHorizontally
@@ -897,10 +956,22 @@ private fun LunaPosterOptionItem(
         }
     }
 
+    val itemInteraction = remember { MutableInteractionSource() }
+    val itemFocused by itemInteraction.collectIsFocusedAsState()
+
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(14.dp))
-            .clickable {
+            .then(
+                if (itemFocused) {
+                    Modifier
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
+                        .border(2.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(14.dp))
+                } else {
+                    Modifier
+                }
+            )
+            .clickable(interactionSource = itemInteraction, indication = null) {
                 val chosen = if (!resolvedPoster.isNullOrBlank()) {
                     game.copy(posterUrl = resolvedPoster)
                 } else {

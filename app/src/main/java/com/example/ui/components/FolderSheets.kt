@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -20,9 +21,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -32,6 +37,7 @@ import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -45,6 +51,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,17 +59,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.GameItem
 import com.example.ui.theme.FavoritesLayout
+import kotlinx.coroutines.delay
 
 /**
- * Bottom sheet presenting a folder's apps identically to the app drawer (`AppTextRow` in TEXT
- * mode, `AppIconTile` grid in ICONS mode), without alphabetical section headers.
+ * Bottom sheet presenting a folder's apps identically to the favorites and app drawer
+ * (`AppTextRow` in TEXT mode, `AppIconTile` grid in ICONS mode, `AppTvCard` 16:9 grid in
+ * TV_CARDS mode), without alphabetical section headers.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,13 +89,20 @@ fun FolderContentsSheet(
     onAppLongClick: (GameItem) -> Unit,
     onCustomizeFolder: () -> Unit,
     onManageFolderApps: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onAppFocus: (GameItem) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val initialFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(folder.id, apps.isEmpty()) {
+        delay(80)
+        runCatching { initialFocusRequester.requestFocus() }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        sheetMaxWidth = if (layout == FavoritesLayout.TV_CARDS) 920.dp else BottomSheetDefaults.SheetMaxWidth,
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
@@ -101,12 +121,17 @@ fun FolderContentsSheet(
                     .padding(bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                val headerInteraction = remember { MutableInteractionSource() }
+                val manageInteraction = remember { MutableInteractionSource() }
+                val closeInteraction = remember { MutableInteractionSource() }
+
                 Row(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(16.dp))
-                        .clickable(onClick = onCustomizeFolder)
-                        .padding(vertical = 4.dp)
+                        .tvFocusBorder(headerInteraction, shape = RoundedCornerShape(16.dp))
+                        .clickable(interactionSource = headerInteraction, indication = null, onClick = onCustomizeFolder)
+                        .padding(vertical = 4.dp, horizontal = 4.dp)
                         .testTag("folder_sheet_header"),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -131,7 +156,10 @@ fun FolderContentsSheet(
 
                 IconButton(
                     onClick = onManageFolderApps,
-                    modifier = Modifier.testTag("folder_sheet_manage")
+                    interactionSource = manageInteraction,
+                    modifier = Modifier
+                        .tvFocusBorder(manageInteraction, shape = CircleShape)
+                        .testTag("folder_sheet_manage")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Edit,
@@ -142,7 +170,10 @@ fun FolderContentsSheet(
 
                 IconButton(
                     onClick = onDismiss,
-                    modifier = Modifier.testTag("folder_sheet_close")
+                    interactionSource = closeInteraction,
+                    modifier = Modifier
+                        .tvFocusBorder(closeInteraction, shape = CircleShape)
+                        .testTag("folder_sheet_close")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
@@ -177,11 +208,58 @@ fun FolderContentsSheet(
                     Spacer(modifier = Modifier.height(14.dp))
                     OutlinedButton(
                         onClick = onManageFolderApps,
-                        modifier = Modifier.testTag("folder_empty_add_apps")
+                        modifier = Modifier
+                            .focusRequester(initialFocusRequester)
+                            .testTag("folder_empty_add_apps")
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Add Apps")
+                    }
+                }
+            } else if (layout == FavoritesLayout.TV_CARDS) {
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                ) {
+                    val availableWidth = maxWidth
+                    val spacing = 12.dp
+                    val minCardWidth = 156.dp
+                    val columns = minOf(
+                        TV_FAVORITES_MAX_COLUMNS,
+                        maxOf(2, ((availableWidth + spacing) / (minCardWidth + spacing)).toInt())
+                    )
+
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(columns),
+                        contentPadding = PaddingValues(top = 12.dp, bottom = 20.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(spacing),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("folder_contents_grid")
+                    ) {
+                        gridItemsIndexed(
+                            items = apps,
+                            key = { _, app -> app.id }
+                        ) { index, app ->
+                            val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
+                            val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
+                            val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
+                            AppTvCard(
+                                app = app,
+                                isFocused = app.id == focusedItemId,
+                                showFocusEffects = showFocusEffects,
+                                testTag = "folder_app_row_${app.id}",
+                                onClick = handleClick,
+                                onLongClick = handleLongClick,
+                                onFocus = handleFocus,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(if (index == 0) Modifier.focusRequester(initialFocusRequester) else Modifier)
+                            )
+                        }
                     }
                 }
             } else if (layout == FavoritesLayout.ICONS) {
@@ -203,12 +281,13 @@ fun FolderContentsSheet(
                             .fillMaxWidth()
                             .testTag("folder_contents_grid")
                     ) {
-                        items(
+                        gridItemsIndexed(
                             items = apps,
-                            key = { it.id }
-                        ) { app ->
+                            key = { _, app -> app.id }
+                        ) { index, app ->
                             val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
                             val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
+                            val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
                             AppIconTile(
                                 app = app,
                                 isFocused = app.id == focusedItemId,
@@ -216,8 +295,11 @@ fun FolderContentsSheet(
                                 testTag = "folder_app_row_${app.id}",
                                 onClick = handleClick,
                                 onLongClick = handleLongClick,
+                                onFocus = handleFocus,
                                 contentPadding = PaddingValues(horizontal = 5.dp, vertical = 10.dp),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(if (index == 0) Modifier.focusRequester(initialFocusRequester) else Modifier)
                             )
                         }
                     }
@@ -231,12 +313,13 @@ fun FolderContentsSheet(
                         .weight(1f, fill = false)
                         .testTag("folder_contents_list")
                 ) {
-                    items(
+                    itemsIndexed(
                         items = apps,
-                        key = { it.id }
-                    ) { app ->
+                        key = { _, app -> app.id }
+                    ) { index, app ->
                         val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
                         val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
+                        val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
                         AppTextRow(
                             app = app,
                             isFocused = app.id == focusedItemId,
@@ -244,8 +327,11 @@ fun FolderContentsSheet(
                             testTag = "folder_app_row_${app.id}",
                             onClick = handleClick,
                             onLongClick = handleLongClick,
+                            onFocus = handleFocus,
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(if (index == 0) Modifier.focusRequester(initialFocusRequester) else Modifier)
                         )
                     }
                 }
@@ -269,11 +355,18 @@ fun FolderPickerSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val isTv = isTelevisionMode()
     var newFolderName by remember { mutableStateOf("") }
+    val initialFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(targetItem.id) {
+        delay(80)
+        runCatching { initialFocusRequester.requestFocus() }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        sheetMaxWidth = if (isTv) 760.dp else BottomSheetDefaults.SheetMaxWidth,
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
@@ -310,11 +403,20 @@ fun FolderPickerSheet(
                     onValueChange = { newFolderName = it },
                     label = { Text("New folder name") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (newFolderName.isNotBlank()) {
+                                onCreateFolder(newFolderName.trim())
+                            }
+                        }
+                    ),
                     leadingIcon = {
                         Icon(imageVector = Icons.Default.CreateNewFolder, contentDescription = null)
                     },
                     modifier = Modifier
                         .weight(1f)
+                        .then(if (folders.isEmpty()) Modifier.focusRequester(initialFocusRequester) else Modifier)
                         .testTag("folder_create_name_input")
                 )
                 Button(
@@ -360,19 +462,24 @@ fun FolderPickerSheet(
                         .heightIn(max = 280.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    items(folders, key = { it.id }) { folder ->
+                    itemsIndexed(folders, key = { _, f -> f.id }) { index, folder ->
                         val isCurrent = targetItem.folderId == folder.id
                         val count = folderMembersMap[folder.id]?.size ?: 0
+                        val rowInteraction = remember { MutableInteractionSource() }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
+                                .tvFocusBorder(rowInteraction, shape = RoundedCornerShape(14.dp))
                                 .background(
                                     if (isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
                                     else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
                                 )
-                                .clickable { onSelectFolder(folder.id) }
+                                .clickable(interactionSource = rowInteraction, indication = null) {
+                                    onSelectFolder(folder.id)
+                                }
                                 .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .then(if (index == 0) Modifier.focusRequester(initialFocusRequester) else Modifier)
                                 .testTag("folder_picker_option_${folder.id}"),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -423,6 +530,7 @@ fun FolderAppsManageSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val isTv = isTelevisionMode()
     var selectedIds by remember(folder.id, currentMemberIds) {
         mutableStateOf(currentMemberIds)
     }
@@ -432,10 +540,16 @@ fun FolderAppsManageSheet(
         if (trimmed.isEmpty()) candidateApps
         else candidateApps.filter { it.title.contains(trimmed, ignoreCase = true) }
     }
+    val initialFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(folder.id) {
+        delay(80)
+        runCatching { initialFocusRequester.requestFocus() }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        sheetMaxWidth = if (isTv) 760.dp else BottomSheetDefaults.SheetMaxWidth,
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
@@ -447,6 +561,7 @@ fun FolderAppsManageSheet(
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp)
         ) {
+            val closeInteraction = remember { MutableInteractionSource() }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -468,7 +583,10 @@ fun FolderAppsManageSheet(
                 }
                 IconButton(
                     onClick = onDismiss,
-                    modifier = Modifier.testTag("folder_manage_close")
+                    interactionSource = closeInteraction,
+                    modifier = Modifier
+                        .tvFocusBorder(closeInteraction, shape = CircleShape)
+                        .testTag("folder_manage_close")
                 ) {
                     Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
                 }
@@ -489,6 +607,7 @@ fun FolderAppsManageSheet(
                     }
                 },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("folder_manage_search")
@@ -502,13 +621,15 @@ fun FolderAppsManageSheet(
                     .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(filteredApps, key = { it.id }) { app ->
+                itemsIndexed(filteredApps, key = { _, app -> app.id }) { index, app ->
                     val checked = app.id in selectedIds
+                    val itemInteraction = remember { MutableInteractionSource() }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .clickable {
+                            .tvFocusBorder(itemInteraction, shape = RoundedCornerShape(12.dp))
+                            .clickable(interactionSource = itemInteraction, indication = null) {
                                 selectedIds = if (checked) {
                                     selectedIds - app.id
                                 } else {
@@ -516,6 +637,7 @@ fun FolderAppsManageSheet(
                                 }
                             }
                             .padding(horizontal = 8.dp, vertical = 6.dp)
+                            .then(if (index == 0) Modifier.focusRequester(initialFocusRequester) else Modifier)
                             .testTag("folder_manage_item_${app.id}"),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -538,7 +660,8 @@ fun FolderAppsManageSheet(
                                 } else {
                                     selectedIds - app.id
                                 }
-                            }
+                            },
+                            modifier = Modifier.focusProperties { canFocus = false }
                         )
                     }
                 }
@@ -552,6 +675,7 @@ fun FolderAppsManageSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
+                    .then(if (filteredApps.isEmpty()) Modifier.focusRequester(initialFocusRequester) else Modifier)
                     .testTag("folder_manage_save")
             ) {
                 Text("Save", fontWeight = FontWeight.Bold)
