@@ -580,9 +580,6 @@ fun DashboardScreen(
                         BoxWithConstraints(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .focusProperties {
-                                    canFocus = gamesCanFocus
-                                }
                                 .focusGroup()
                                 .focusProperties {
                                     exit = { direction ->
@@ -635,6 +632,7 @@ fun DashboardScreen(
                                             isGamesTab = true,
                                             searchQuery = searchQuery,
                                             onAddClicked = { viewModel.openAddModal() },
+                                            focusEnabled = gamesCanFocus,
                                             modifier = Modifier.heightIn(min = pageMaxHeight)
                                         )
                                     }
@@ -645,6 +643,7 @@ fun DashboardScreen(
                                         showFocusEffects = showFocusEffects,
                                         showNsfwPoster = steamGridDbIncludeNsfw,
                                         firstItemFocusRequester = gamesFirstFocusRequester,
+                                        focusEnabled = gamesCanFocus,
                                         gridState = gridState,
                                         rowState = gamesRowState,
                                         compactLandscape = isCompactLandscape,
@@ -679,9 +678,6 @@ fun DashboardScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .focusProperties {
-                                    canFocus = appsTabCanFocus
-                                }
                                 .then(
                                     if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
                                 )
@@ -711,11 +707,7 @@ fun DashboardScreen(
                                         appsPagerState.currentPage == 0
                                     }
                                     Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .focusProperties {
-                                                canFocus = favoritesCanFocus
-                                            }
+                                        modifier = Modifier.fillMaxSize()
                                     ) {
                                         FavoritesHome(
                                             favorites = favoriteApps,
@@ -726,6 +718,7 @@ fun DashboardScreen(
                                             weather = weatherInfo,
                                             temperatureUnit = temperatureUnit,
                                             firstItemFocusRequester = favoritesFirstFocusRequester,
+                                            focusEnabled = favoritesCanFocus,
                                             onLaunchFavorite = { app ->
                                                 viewModel.setFocusedItem(app.id)
                                                 viewModel.launchItem(app)
@@ -752,15 +745,12 @@ fun DashboardScreen(
                                         appsPagerState.currentPage == 1
                                     }
                                     Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .focusProperties {
-                                                canFocus = appDrawerCanFocus
-                                            }
+                                        modifier = Modifier.fillMaxSize()
                                     ) {
                                         if (libraryDisplay.isEmpty()) {
                                             EmptyAppDrawerState(
                                                 hasFavorites = favoriteApps.isNotEmpty(),
+                                                focusEnabled = appDrawerCanFocus,
                                                 onNavigateUpToFavorites = {
                                                     if (appsPagerState.targetPage != 0) {
                                                         scope.launch { appsPagerState.animateScrollToPage(0) }
@@ -776,6 +766,7 @@ fun DashboardScreen(
                                                 listState = appsListState,
                                                 gridState = appsGridState,
                                                 firstItemFocusRequester = appsListFirstFocusRequester,
+                                                focusEnabled = appDrawerCanFocus,
                                                 onAppClick = onAppClick,
                                                 onAppLongClick = onAppLongClick,
                                                 onAppFocus = onAppFocus,
@@ -1213,6 +1204,7 @@ private fun GamesPosterGrid(
     showFocusEffects: Boolean,
     showNsfwPoster: Boolean,
     firstItemFocusRequester: FocusRequester? = null,
+    focusEnabled: Boolean = true,
     gridState: LazyGridState,
     rowState: LazyListState,
     compactLandscape: Boolean,
@@ -1396,6 +1388,7 @@ private fun GamesPosterGrid(
                         onLongClick = handleLongClick,
                         onFocus = handleFocus,
                         modifier = Modifier
+                            .focusProperties { canFocus = focusEnabled }
                             .then(firstItemModifier)
                             .then(if (index == 0) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
                             .width(if (isFocused) 168.dp else 112.dp)
@@ -1482,6 +1475,7 @@ private fun GamesPosterGrid(
                         onLongClick = handleLongClick,
                         onFocus = handleFocus,
                         modifier = Modifier
+                            .focusProperties { canFocus = focusEnabled }
                             .then(firstItemModifier)
                             .then(if (isLeftmost) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
                     )
@@ -1579,6 +1573,7 @@ internal fun AppsAlphabeticalList(
     listState: LazyListState,
     gridState: LazyGridState,
     firstItemFocusRequester: FocusRequester? = null,
+    focusEnabled: Boolean = true,
     onAppClick: (GameItem) -> Unit,
     onAppLongClick: (GameItem) -> Unit,
     onLetterSelected: (String) -> Unit,
@@ -1696,6 +1691,7 @@ internal fun AppsAlphabeticalList(
                                     onFocus = handleFocus,
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .focusProperties { canFocus = focusEnabled }
                                         .then(
                                             if (app.id == firstAppId) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }
@@ -1794,6 +1790,7 @@ internal fun AppsAlphabeticalList(
                                     contentPadding = PaddingValues(horizontal = 5.dp, vertical = 10.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .focusProperties { canFocus = focusEnabled }
                                         .then(
                                             if (app.id == firstAppId) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }
@@ -1874,6 +1871,7 @@ internal fun AppsAlphabeticalList(
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .focusProperties { canFocus = focusEnabled }
                                     .then(
                                         if (app.id == firstAppId) {
                                             firstItemFocusRequester?.let { Modifier.focusRequester(it) }
@@ -2170,6 +2168,7 @@ private fun alphabetSection(title: String): String {
 @Composable
 private fun EmptyAppDrawerState(
     hasFavorites: Boolean,
+    focusEnabled: Boolean = true,
     onNavigateUpToFavorites: (() -> Unit)? = null
 ) {
     Column(
@@ -2219,7 +2218,9 @@ private fun EmptyAppDrawerState(
             Button(
                 onClick = onNavigateUpToFavorites,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("empty_app_drawer_back_button")
+                modifier = Modifier
+                    .focusProperties { canFocus = focusEnabled }
+                    .testTag("empty_app_drawer_back_button")
             ) {
                 Text("Back to Favorites")
             }
@@ -2232,6 +2233,7 @@ private fun EmptyLibraryState(
     isGamesTab: Boolean,
     searchQuery: String,
     onAddClicked: () -> Unit,
+    focusEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -2284,7 +2286,8 @@ private fun EmptyLibraryState(
             Spacer(modifier = Modifier.height(18.dp))
             Button(
                 onClick = onAddClicked,
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.focusProperties { canFocus = focusEnabled }
             ) {
                 Icon(Icons.Default.Add, contentDescription = null)
                 Spacer(modifier = Modifier.width(6.dp))

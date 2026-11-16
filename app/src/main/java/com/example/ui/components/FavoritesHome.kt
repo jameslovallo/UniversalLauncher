@@ -72,6 +72,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
@@ -121,6 +122,7 @@ fun FavoritesHome(
     weather: WeatherInfo? = null,
     temperatureUnit: TemperatureUnit = TemperatureUnit.defaultForLocale(),
     firstItemFocusRequester: FocusRequester? = null,
+    focusEnabled: Boolean = true,
     onLaunchFavorite: (GameItem) -> Unit,
     onLongPressFavorite: (GameItem) -> Unit,
     onOpenClock: () -> Unit,
@@ -149,6 +151,11 @@ fun FavoritesHome(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
+            // The clock, date, and weather shortcuts are direct descendants, so this
+            // keeps them out of the focus tree while another view owns focus. Cards in
+            // the lazy grid are gated individually because a scrollable's internal
+            // focus target blocks properties applied above it.
+            .focusProperties { canFocus = focusEnabled }
             // Before the padding, so the whole home screen is a pull-down surface.
             .pointerInput(onPullDown) {
                 // A short downward drag on the home screen expands the notification
@@ -318,6 +325,7 @@ fun FavoritesHome(
                             onLongClick = { onLongPressFavorite(app) },
                             onFocus = { onFocusFavorite(app) },
                             modifier = Modifier
+                                .focusProperties { canFocus = focusEnabled }
                                 .then(
                                     if (index == 0) {
                                         firstItemFocusRequester?.let { Modifier.focusRequester(it) }
@@ -392,6 +400,7 @@ fun FavoritesHome(
                                     ),
                                     modifier = Modifier
                                         .width(itemWidth)
+                                        .focusProperties { canFocus = focusEnabled }
                                         .then(
                                             if (index == 0) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }
@@ -458,6 +467,7 @@ fun FavoritesHome(
                                     ),
                                     modifier = Modifier
                                         .width(tilePitch)
+                                        .focusProperties { canFocus = focusEnabled }
                                         .then(
                                             if (index == 0) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }

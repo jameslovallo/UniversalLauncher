@@ -9,13 +9,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
@@ -137,6 +140,26 @@ class DashboardFirstOpenBounceTest {
         // Initial load focuses the first item in the favorites grid.
         composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
 
+        // Only the active view owns focus. Asking the offscreen games grid or the app
+        // drawer to focus must not steal it from the favorites grid.
+        composeRule.onNodeWithTag("game_poster_game_test_1")
+            .performSemanticsAction(SemanticsActions.RequestFocus)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
+
+        composeRule.onNodeWithTag("app_row_app_test_5")
+            .performSemanticsAction(SemanticsActions.RequestFocus)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
+
+        // The games page must not have been pulled on screen by a focus request.
+        gamesLefts.lastOrNull()?.let { finalGamesLeft ->
+            assertTrue(
+                "Games grid slid onto screen: left=$finalGamesLeft samples=$gamesLefts",
+                finalGamesLeft > 500f
+            )
+        }
+
         // Ensure clock did not oscillate back and forth across frames after Frame 10
         val settledClockSamples = clockTops.drop(15)
         if (settledClockSamples.isNotEmpty()) {
@@ -147,5 +170,32 @@ class DashboardFirstOpenBounceTest {
                 abs(maxC - minC) < 2f
             )
         }
+    }
+
+    @Test
+    fun `switching between apps and games focuses only the first item of the active view`() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
+
+        composeRule.onNodeWithTag("tab_games").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("game_poster_game_test_1").assertIsFocused()
+
+        // Favorites must not be able to steal focus while Games is active.
+        composeRule.onNodeWithTag("favorite_app_app_test_1")
+            .performSemanticsAction(SemanticsActions.RequestFocus)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("game_poster_game_test_1").assertIsFocused()
+
+        composeRule.onNodeWithTag("tab_apps").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
+
+        // Games must not be able to steal focus while Apps is active.
+        composeRule.onNodeWithTag("game_poster_game_test_1")
+            .performSemanticsAction(SemanticsActions.RequestFocus)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
     }
 }
