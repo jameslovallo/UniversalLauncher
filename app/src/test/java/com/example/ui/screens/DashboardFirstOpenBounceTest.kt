@@ -134,6 +134,9 @@ class DashboardFirstOpenBounceTest {
         val finalFavTop = composeRule.onNodeWithTag("favorites_tv_grid").getUnclippedBoundsInRoot().top.value
         assertTrue("Expected favorites_tv_grid on screen, was top=$finalFavTop", finalFavTop in 0f..500f)
 
+        // Initial load focuses the first item in the favorites grid.
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
+
         // Ensure clock did not oscillate back and forth across frames after Frame 10
         val settledClockSamples = clockTops.drop(15)
         if (settledClockSamples.isNotEmpty()) {

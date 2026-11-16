@@ -104,6 +104,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
@@ -275,6 +276,12 @@ fun DashboardScreen(
     val appsListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
+    // Requesters for the first item of each view. Focus is requested only after the pager
+    // has settled so BringIntoView never fights an in-flight page transition.
+    val favoritesFirstFocusRequester = remember { FocusRequester() }
+    val appsListFirstFocusRequester = remember { FocusRequester() }
+    val gamesFirstFocusRequester = remember { FocusRequester() }
+
     // Filter each page by the search query. Keeping both lists separate means swiping
     // between pages shows the correct results even before the tab state catches up.
     val gamesDisplay = remember(gamesList, searchQuery) {
@@ -368,6 +375,62 @@ fun DashboardScreen(
         !showAddModal &&
         !showSettingsModal &&
         weatherAppChooser == null
+
+    // Move focus to the first item of the active view once the pager transition is complete.
+    // Focusing mid-transition would make BringIntoView fight the pager animation, which is
+    // what caused the left/right shake on TV at first open.
+    var focusedViewKey by remember { mutableStateOf<Triple<Int, Int, String?>?>(null) }
+    LaunchedEffect(
+        showFocusEffects,
+        noOverlayOpen,
+        pagerState.settledPage,
+        pagerState.isScrollInProgress,
+        appsPagerState.settledPage,
+        appsPagerState.isScrollInProgress,
+        effectiveFavoritesLayout,
+        favoriteApps.firstOrNull()?.id,
+        gamesDisplay.firstOrNull()?.id,
+        appListEntries.firstOrNull { it is AppListEntry.App },
+    ) {
+        if (!showFocusEffects || !noOverlayOpen) return@LaunchedEffect
+        if (pagerState.isScrollInProgress || appsPagerState.isScrollInProgress) return@LaunchedEffect
+        if (abs(pagerState.currentPageOffsetFraction) > 0.01f ||
+            abs(appsPagerState.currentPageOffsetFraction) > 0.01f
+        ) {
+            return@LaunchedEffect
+        }
+
+        if (pagerState.settledPage == 1) {
+            val firstGame = gamesDisplay.firstOrNull() ?: return@LaunchedEffect
+            val key = Triple(1, 0, firstGame.id)
+            if (key == focusedViewKey) return@LaunchedEffect
+            focusedViewKey = key
+            viewModel.setFocusedItem(firstGame.id)
+            withFrameNanos { }
+            runCatching { gamesFirstFocusRequester.requestFocus() }
+        } else if (appsPagerState.settledPage == 0) {
+            val firstFavorite = favoriteApps.firstOrNull()
+            val key = Triple(0, 0, firstFavorite?.id)
+            if (key == focusedViewKey) return@LaunchedEffect
+            focusedViewKey = key
+            if (firstFavorite != null) {
+                viewModel.setFocusedItem(firstFavorite.id)
+            } else {
+                viewModel.clearFocus()
+            }
+            withFrameNanos { }
+            runCatching { favoritesFirstFocusRequester.requestFocus() }
+        } else {
+            val firstApp = appListEntries.firstOrNull { it is AppListEntry.App } as? AppListEntry.App
+                ?: return@LaunchedEffect
+            val key = Triple(0, 1, firstApp.item.id)
+            if (key == focusedViewKey) return@LaunchedEffect
+            focusedViewKey = key
+            viewModel.setFocusedItem(firstApp.item.id)
+            withFrameNanos { }
+            runCatching { appsListFirstFocusRequester.requestFocus() }
+        }
+    }
 
     val disablePagerSwipeInCompactGames by remember(isCompactLandscape, gamesDisplay.isEmpty()) {
         derivedStateOf {
@@ -581,6 +644,7 @@ fun DashboardScreen(
                                         focusedItemId = focusedItemId,
                                         showFocusEffects = showFocusEffects,
                                         showNsfwPoster = steamGridDbIncludeNsfw,
+                                        firstItemFocusRequester = gamesFirstFocusRequester,
                                         gridState = gridState,
                                         rowState = gamesRowState,
                                         compactLandscape = isCompactLandscape,
@@ -661,6 +725,7 @@ fun DashboardScreen(
                                             weatherEnabled = weatherEnabled,
                                             weather = weatherInfo,
                                             temperatureUnit = temperatureUnit,
+                                            firstItemFocusRequester = favoritesFirstFocusRequester,
                                             onLaunchFavorite = { app ->
                                                 viewModel.setFocusedItem(app.id)
                                                 viewModel.launchItem(app)
@@ -710,6 +775,7 @@ fun DashboardScreen(
                                                 showFocusEffects = showFocusEffects,
                                                 listState = appsListState,
                                                 gridState = appsGridState,
+                                                firstItemFocusRequester = appsListFirstFocusRequester,
                                                 onAppClick = onAppClick,
                                                 onAppLongClick = onAppLongClick,
                                                 onAppFocus = onAppFocus,
@@ -1146,6 +1212,7 @@ private fun GamesPosterGrid(
     focusedItemId: String?,
     showFocusEffects: Boolean,
     showNsfwPoster: Boolean,
+    firstItemFocusRequester: FocusRequester? = null,
     gridState: LazyGridState,
     rowState: LazyListState,
     compactLandscape: Boolean,
@@ -1308,6 +1375,11 @@ private fun GamesPosterGrid(
                     contentType = { _, _ -> "game_poster" }
                 ) { index, game ->
                     val isFocused = game.id == focusedItemId && showFocusEffects
+                    val firstItemModifier = if (index == 0 && firstItemFocusRequester != null) {
+                        Modifier.focusRequester(firstItemFocusRequester)
+                    } else {
+                        Modifier
+                    }
                     val handleClick = remember(game, onGameClick) { { onGameClick(game) } }
                     val handleLongClick = remember(game, onGameLongClick) { { onGameLongClick(game) } }
                     val handleFocus = remember(game, onGameFocus) { { onGameFocus(game) } }
@@ -1324,6 +1396,7 @@ private fun GamesPosterGrid(
                         onLongClick = handleLongClick,
                         onFocus = handleFocus,
                         modifier = Modifier
+                            .then(firstItemModifier)
                             .then(if (index == 0) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
                             .width(if (isFocused) 168.dp else 112.dp)
                     )
@@ -1389,6 +1462,11 @@ private fun GamesPosterGrid(
                     contentType = { _, _ -> "game_poster" }
                 ) { index, game ->
                     val isLeftmost = index % columnCount == 0
+                    val firstItemModifier = if (index == 0 && firstItemFocusRequester != null) {
+                        Modifier.focusRequester(firstItemFocusRequester)
+                    } else {
+                        Modifier
+                    }
                     val handleClick = remember(game, onGameClick) { { onGameClick(game) } }
                     val handleLongClick = remember(game, onGameLongClick) { { onGameLongClick(game) } }
                     val handleFocus = remember(game, onGameFocus) { { onGameFocus(game) } }
@@ -1404,6 +1482,7 @@ private fun GamesPosterGrid(
                         onLongClick = handleLongClick,
                         onFocus = handleFocus,
                         modifier = Modifier
+                            .then(firstItemModifier)
                             .then(if (isLeftmost) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
                     )
                 }
@@ -1499,6 +1578,7 @@ internal fun AppsAlphabeticalList(
     showFocusEffects: Boolean,
     listState: LazyListState,
     gridState: LazyGridState,
+    firstItemFocusRequester: FocusRequester? = null,
     onAppClick: (GameItem) -> Unit,
     onAppLongClick: (GameItem) -> Unit,
     onLetterSelected: (String) -> Unit,
@@ -1507,6 +1587,9 @@ internal fun AppsAlphabeticalList(
 ) {
     val letters = remember(entries) {
         entries.filterIsInstance<AppListEntry.Letter>().map { it.letter }
+    }
+    val firstAppId = remember(entries) {
+        entries.filterIsInstance<AppListEntry.App>().firstOrNull()?.item?.id
     }
     val activeLetter = remember(entries, focusedItemId) {
         entries.filterIsInstance<AppListEntry.App>()
@@ -1613,6 +1696,14 @@ internal fun AppsAlphabeticalList(
                                     onFocus = handleFocus,
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .then(
+                                            if (app.id == firstAppId) {
+                                                firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                    ?: Modifier
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
                                         .then(upToFavoritesMod)
                                 )
                             }
@@ -1703,6 +1794,14 @@ internal fun AppsAlphabeticalList(
                                     contentPadding = PaddingValues(horizontal = 5.dp, vertical = 10.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .then(
+                                            if (app.id == firstAppId) {
+                                                firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                    ?: Modifier
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
                                         .then(upToFavoritesMod)
                                 )
                             }
@@ -1775,6 +1874,14 @@ internal fun AppsAlphabeticalList(
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .then(
+                                        if (app.id == firstAppId) {
+                                            firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                ?: Modifier
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                                     .then(upToFavoritesMod)
                             )
                         }
