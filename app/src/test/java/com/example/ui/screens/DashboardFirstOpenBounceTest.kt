@@ -26,6 +26,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.MainActivity
+import com.example.TvTestApplication
 import com.example.data.local.AppDatabase
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
@@ -44,7 +45,11 @@ import kotlin.math.abs
 
 @OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], qualifiers = "w960dp-h540dp-television-xhdpi")
+@Config(
+    sdk = [34],
+    qualifiers = "w960dp-h540dp-television-xhdpi",
+    application = TvTestApplication::class
+)
 class DashboardFirstOpenBounceTest {
 
     @get:Rule
@@ -159,6 +164,15 @@ class DashboardFirstOpenBounceTest {
                 finalGamesLeft > 500f
             )
         }
+
+        // The app drawer must stay below the favorites home: focusing the first favorite
+        // must not let the vertical pager's bring-into-view scroll the drawer into view.
+        val drawerTop = composeRule.onNodeWithTag("app_row_app_test_5")
+            .getUnclippedBoundsInRoot().top.value
+        assertTrue(
+            "App drawer was pulled into view: top=$drawerTop",
+            drawerTop > 400f
+        )
 
         // Ensure clock did not oscillate back and forth across frames after Frame 10
         val settledClockSamples = clockTops.drop(15)

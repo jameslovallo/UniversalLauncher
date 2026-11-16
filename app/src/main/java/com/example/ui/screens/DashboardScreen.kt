@@ -174,7 +174,24 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class)
+/**
+ * Applied around the library pagers so focus can never scroll them. On TV the platform
+ * bring-into-view spec always pivots a focused child to 30% of the container, and the pager
+ * rounds that request up to a whole page. That turned every focus request into a page
+ * scroll, which is what bounced Apps and Games back and forth at startup. Page content
+ * re-provides the ambient spec, so the lists inside each page keep their normal focus
+ * scrolling; only the pager itself refuses to move.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private val NoOpBringIntoViewSpec = object : BringIntoViewSpec {
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float
+    ): Float = 0f
+}
+
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun DashboardScreen(
     viewModel: LauncherViewModel,
@@ -319,6 +336,10 @@ fun DashboardScreen(
     // Vertical pager inside the Apps tab: favorites home, then the complete app list.
     val appsPagerState = rememberPagerState(pageCount = { 2 })
 
+    // Captured before the pagers override it with [NoOpBringIntoViewSpec] so each page can
+    // hand the real focus-scrolling behaviour back to its inner lists.
+    val ambientBringIntoViewSpec = LocalBringIntoViewSpec.current
+
     // Dismiss the drawer with a much shorter downward drag than the default half-page.
     val appsPagerFling = PagerDefaults.flingBehavior(
         state = appsPagerState,
@@ -380,6 +401,13 @@ fun DashboardScreen(
     // Focusing mid-transition would make BringIntoView fight the pager animation, which is
     // what caused the left/right shake on TV at first open.
     var focusedViewKey by remember { mutableStateOf<Triple<Int, Int, String?>?>(null) }
+    // Any pager motion invalidates the current view's focus claim. Focus is re-requested by
+    // the settle effect below once both pagers are idle again.
+    LaunchedEffect(pagerState.isScrollInProgress, appsPagerState.isScrollInProgress) {
+        if (pagerState.isScrollInProgress || appsPagerState.isScrollInProgress) {
+            focusedViewKey = null
+        }
+    }
     LaunchedEffect(
         showFocusEffects,
         noOverlayOpen,
@@ -407,6 +435,9 @@ fun DashboardScreen(
             focusedViewKey = key
             viewModel.setFocusedItem(firstGame.id)
             withFrameNanos { }
+            if (pagerState.isScrollInProgress || appsPagerState.isScrollInProgress) {
+                return@LaunchedEffect
+            }
             runCatching { gamesFirstFocusRequester.requestFocus() }
         } else if (appsPagerState.settledPage == 0) {
             val firstFavorite = favoriteApps.firstOrNull()
@@ -419,6 +450,9 @@ fun DashboardScreen(
                 viewModel.clearFocus()
             }
             withFrameNanos { }
+            if (pagerState.isScrollInProgress || appsPagerState.isScrollInProgress) {
+                return@LaunchedEffect
+            }
             runCatching { favoritesFirstFocusRequester.requestFocus() }
         } else {
             val firstApp = appListEntries.firstOrNull { it is AppListEntry.App } as? AppListEntry.App
@@ -428,6 +462,9 @@ fun DashboardScreen(
             focusedViewKey = key
             viewModel.setFocusedItem(firstApp.item.id)
             withFrameNanos { }
+            if (pagerState.isScrollInProgress || appsPagerState.isScrollInProgress) {
+                return@LaunchedEffect
+            }
             runCatching { appsListFirstFocusRequester.requestFocus() }
         }
     }
@@ -555,241 +592,242 @@ fun DashboardScreen(
                 }
 
                 // Main Content Area: swipe horizontally between the Games grid and Apps list.
-                HorizontalPager(
-                    state = pagerState,
-                    beyondViewportPageCount = 1,
-                    // On the compact landscape Games page the poster row owns horizontal
-                    // drags. Disabling pager dragging here stops its overscroll from
-                    // revealing the Apps page; a drag above/below the row still switches.
-                    userScrollEnabled = !disablePagerSwipeInCompactGames,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .testTag("library_pager")
-                ) { page ->
-                    if (page == 1) {
-                        // Games View: Steam poster aspect ratio (2:3) with pull-to-refresh.
-                        // Confine left/previous navigation so D-pad Left cannot jump to Apps,
-                        // while allowing Up from row 0 to reach the top navigation bar.
-                        val pullToRefreshState = rememberPullToRefreshState()
-                        val gamesCanFocus = if (pagerState.isScrollInProgress) {
-                            pagerState.settledPage == 1
-                        } else {
-                            pagerState.currentPage == 1
-                        }
-                        BoxWithConstraints(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .focusGroup()
-                                .focusProperties {
-                                    exit = { direction ->
-                                        if (
-                                            direction == FocusDirection.Left ||
-                                            direction == FocusDirection.Previous
-                                        ) {
-                                            FocusRequester.Cancel
-                                        } else {
-                                            FocusRequester.Default
-                                        }
-                                    }
-                                }
-                        ) {
-                            val pageMaxHeight = maxHeight
-                            PullToRefreshBox(
-                                isRefreshing = gamesRefreshing,
-                                onRefresh = { viewModel.refreshGamesLibrary() },
-                                state = pullToRefreshState,
-                                indicator = {
-                                    PullToRefreshDefaults.Indicator(
-                                        modifier = Modifier
-                                            .align(Alignment.TopCenter)
-                                            .testTag("games_pull_to_refresh_indicator"),
-                                        isRefreshing = gamesRefreshing,
-                                        state = pullToRefreshState,
-                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                },
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .testTag("games_pull_to_refresh")
-                            ) {
-                                if (gamesDisplay.isEmpty()) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(min = pageMaxHeight)
-                                            .verticalScroll(rememberScrollState())
-                                            .then(
-                                                if (isCompactLandscape) {
-                                                    Modifier.displayCutoutPadding()
+                CompositionLocalProvider(LocalBringIntoViewSpec provides NoOpBringIntoViewSpec) {
+                    HorizontalPager(
+                        state = pagerState,
+                        beyondViewportPageCount = 1,
+                        // On the compact landscape Games page the poster row owns horizontal
+                        // drags. Disabling pager dragging here stops its overscroll from
+                        // revealing the Apps page; a drag above/below the row still switches.
+                        userScrollEnabled = !disablePagerSwipeInCompactGames,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .testTag("library_pager")
+                    ) { page ->
+                        CompositionLocalProvider(LocalBringIntoViewSpec provides ambientBringIntoViewSpec) {
+                            if (page == 1) {
+                                // Games View: Steam poster aspect ratio (2:3) with pull-to-refresh.
+                                // Confine left/previous navigation so D-pad Left cannot jump to Apps,
+                                // while allowing Up from row 0 to reach the top navigation bar.
+                                val pullToRefreshState = rememberPullToRefreshState()
+                                // Never let focus land in a page while either pager is moving.
+                                // settledPage only changes once a transition finishes, so focus is
+                                // requested only after the active page is fully stable.
+                                val gamesCanFocus = !pagerState.isScrollInProgress &&
+                                    !appsPagerState.isScrollInProgress &&
+                                    pagerState.settledPage == 1
+                                BoxWithConstraints(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .focusGroup()
+                                        .focusProperties {
+                                            exit = { direction ->
+                                                if (
+                                                    direction == FocusDirection.Left ||
+                                                    direction == FocusDirection.Previous
+                                                ) {
+                                                    FocusRequester.Cancel
                                                 } else {
-                                                    Modifier
+                                                    FocusRequester.Default
                                                 }
+                                            }
+                                        }
+                                ) {
+                                    val pageMaxHeight = maxHeight
+                                    PullToRefreshBox(
+                                        isRefreshing = gamesRefreshing,
+                                        onRefresh = { viewModel.refreshGamesLibrary() },
+                                        state = pullToRefreshState,
+                                        indicator = {
+                                            PullToRefreshDefaults.Indicator(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopCenter)
+                                                    .testTag("games_pull_to_refresh_indicator"),
+                                                isRefreshing = gamesRefreshing,
+                                                state = pullToRefreshState,
+                                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                                color = MaterialTheme.colorScheme.primary
                                             )
-                                    ) {
-                                        EmptyLibraryState(
-                                            isGamesTab = true,
-                                            searchQuery = searchQuery,
-                                            onAddClicked = { viewModel.openAddModal() },
-                                            focusEnabled = gamesCanFocus,
-                                            modifier = Modifier.heightIn(min = pageMaxHeight)
-                                        )
-                                    }
-                                } else {
-                                    GamesPosterGrid(
-                                        games = gamesDisplay,
-                                        focusedItemId = focusedItemId,
-                                        showFocusEffects = showFocusEffects,
-                                        showNsfwPoster = steamGridDbIncludeNsfw,
-                                        firstItemFocusRequester = gamesFirstFocusRequester,
-                                        focusEnabled = gamesCanFocus,
-                                        gridState = gridState,
-                                        rowState = gamesRowState,
-                                        compactLandscape = isCompactLandscape,
-                                        compactViewportHeight = pageMaxHeight,
-                                        onSwipeToApps = {
-                                            scope.launch { pagerState.animateScrollToPage(0) }
                                         },
-                                        onGameClick = onGameClick,
-                                        onGameLongClick = onGameLongClick,
-                                        onGameFocus = onGameFocus
-                                    )
-                                }
-                            }
-
-                            SnackbarHost(
-                                hostState = gamesSnackbarHostState,
-                                modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .navigationBarsPadding()
-                                    .padding(horizontal = 16.dp, vertical = 12.dp)
-                                    .testTag("games_refresh_snackbar")
-                            )
-                        }
-                    } else {
-                        // Apps View: a full-height favorites home. Swiping up or pressing Down
-                        // reveals the complete app list, which excludes favorites and games.
-                        val appsTabCanFocus = if (pagerState.isScrollInProgress) {
-                            pagerState.settledPage == 0
-                        } else {
-                            pagerState.currentPage == 0
-                        }
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .then(
-                                    if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
-                                )
-                                .focusGroup()
-                                .focusProperties {
-                                    exit = { direction ->
-                                        if (direction == FocusDirection.Right || direction == FocusDirection.Next) {
-                                            FocusRequester.Cancel
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .testTag("games_pull_to_refresh")
+                                    ) {
+                                        if (gamesDisplay.isEmpty()) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(min = pageMaxHeight)
+                                                    .verticalScroll(rememberScrollState())
+                                                    .then(
+                                                        if (isCompactLandscape) {
+                                                            Modifier.displayCutoutPadding()
+                                                        } else {
+                                                            Modifier
+                                                        }
+                                                    )
+                                            ) {
+                                                EmptyLibraryState(
+                                                    isGamesTab = true,
+                                                    searchQuery = searchQuery,
+                                                    onAddClicked = { viewModel.openAddModal() },
+                                                    focusEnabled = gamesCanFocus,
+                                                    modifier = Modifier.heightIn(min = pageMaxHeight)
+                                                )
+                                            }
                                         } else {
-                                            FocusRequester.Default
+                                            GamesPosterGrid(
+                                                games = gamesDisplay,
+                                                focusedItemId = focusedItemId,
+                                                showFocusEffects = showFocusEffects,
+                                                showNsfwPoster = steamGridDbIncludeNsfw,
+                                                firstItemFocusRequester = gamesFirstFocusRequester,
+                                                focusEnabled = gamesCanFocus,
+                                                gridState = gridState,
+                                                rowState = gamesRowState,
+                                                compactLandscape = isCompactLandscape,
+                                                compactViewportHeight = pageMaxHeight,
+                                                onSwipeToApps = {
+                                                    scope.launch { pagerState.animateScrollToPage(0) }
+                                                },
+                                                onGameClick = onGameClick,
+                                                onGameLongClick = onGameLongClick,
+                                                onGameFocus = onGameFocus
+                                            )
                                         }
                                     }
+
+                                    SnackbarHost(
+                                        hostState = gamesSnackbarHostState,
+                                        modifier = Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .navigationBarsPadding()
+                                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                                            .testTag("games_refresh_snackbar")
+                                    )
                                 }
-                        ) {
-                            VerticalPager(
-                                state = appsPagerState,
-                                beyondViewportPageCount = 1,
-                                flingBehavior = appsPagerFling,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .testTag("apps_vertical_pager")
-                            ) { appsPage ->
-                                if (appsPage == 0) {
-                                    val favoritesCanFocus = appsTabCanFocus && if (appsPagerState.isScrollInProgress) {
-                                        appsPagerState.settledPage == 0
-                                    } else {
-                                        appsPagerState.currentPage == 0
-                                    }
-                                    Box(
-                                        modifier = Modifier.fillMaxSize()
-                                    ) {
-                                        FavoritesHome(
-                                            favorites = favoriteApps,
-                                            focusedItemId = focusedItemId,
-                                            layout = effectiveFavoritesLayout,
-                                            showFocusEffects = showFocusEffects,
-                                            weatherEnabled = weatherEnabled,
-                                            weather = weatherInfo,
-                                            temperatureUnit = temperatureUnit,
-                                            firstItemFocusRequester = favoritesFirstFocusRequester,
-                                            focusEnabled = favoritesCanFocus,
-                                            onLaunchFavorite = { app ->
-                                                viewModel.setFocusedItem(app.id)
-                                                viewModel.launchItem(app)
-                                            },
-                                            onLongPressFavorite = { app ->
-                                                viewModel.openFavoriteActions(app)
-                                            },
-                                            onOpenClock = { viewModel.openClockApp() },
-                                            onOpenCalendar = { viewModel.openCalendarApp() },
-                                            onOpenWeather = { viewModel.openWeatherApp() },
-                                            onPullDown = { viewModel.expandNotificationShade() },
-                                            onNavigateDownToAppList = {
-                                                if (appsPagerState.targetPage != 1) {
-                                                    scope.launch { appsPagerState.animateScrollToPage(1) }
-                                                }
-                                            },
-                                            onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
+                            } else {
+                                // Apps View: a full-height favorites home. Swiping up or pressing Down
+                                // reveals the complete app list, which excludes favorites and games.
+                                val appsTabCanFocus = !pagerState.isScrollInProgress &&
+                                    !appsPagerState.isScrollInProgress &&
+                                    pagerState.settledPage == 0
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .then(
+                                            if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
                                         )
-                                    }
-                                } else {
-                                    val appDrawerCanFocus = appsTabCanFocus && if (appsPagerState.isScrollInProgress) {
-                                        appsPagerState.settledPage == 1
-                                    } else {
-                                        appsPagerState.currentPage == 1
-                                    }
-                                    Box(
-                                        modifier = Modifier.fillMaxSize()
-                                    ) {
-                                        if (libraryDisplay.isEmpty()) {
-                                            EmptyAppDrawerState(
-                                                hasFavorites = favoriteApps.isNotEmpty(),
-                                                focusEnabled = appDrawerCanFocus,
-                                                onNavigateUpToFavorites = {
-                                                    if (appsPagerState.targetPage != 0) {
-                                                        scope.launch { appsPagerState.animateScrollToPage(0) }
-                                                    }
+                                        .focusGroup()
+                                        .focusProperties {
+                                            exit = { direction ->
+                                                if (direction == FocusDirection.Right || direction == FocusDirection.Next) {
+                                                    FocusRequester.Cancel
+                                                } else {
+                                                    FocusRequester.Default
                                                 }
-                                            )
-                                        } else {
-                                            AppsAlphabeticalList(
-                                                entries = appListEntries,
-                                                focusedItemId = focusedItemId,
-                                                layout = effectiveFavoritesLayout,
-                                                showFocusEffects = showFocusEffects,
-                                                listState = appsListState,
-                                                gridState = appsGridState,
-                                                firstItemFocusRequester = appsListFirstFocusRequester,
-                                                focusEnabled = appDrawerCanFocus,
-                                                onAppClick = onAppClick,
-                                                onAppLongClick = onAppLongClick,
-                                                onAppFocus = onAppFocus,
-                                                onNavigateUpToFavorites = {
-                                                    if (appsPagerState.targetPage != 0) {
-                                                        scope.launch { appsPagerState.animateScrollToPage(0) }
+                                            }
+                                        }
+                                ) {
+                                    CompositionLocalProvider(LocalBringIntoViewSpec provides NoOpBringIntoViewSpec) {
+                                        VerticalPager(
+                                            state = appsPagerState,
+                                            beyondViewportPageCount = 1,
+                                            flingBehavior = appsPagerFling,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .testTag("apps_vertical_pager")
+                                        ) { appsPage ->
+                                            CompositionLocalProvider(LocalBringIntoViewSpec provides ambientBringIntoViewSpec) {
+                                                if (appsPage == 0) {
+                                                    val favoritesCanFocus = appsTabCanFocus &&
+                                                        appsPagerState.settledPage == 0
+                                                    Box(
+                                                        modifier = Modifier.fillMaxSize()
+                                                    ) {
+                                                        FavoritesHome(
+                                                            favorites = favoriteApps,
+                                                            focusedItemId = focusedItemId,
+                                                            layout = effectiveFavoritesLayout,
+                                                            showFocusEffects = showFocusEffects,
+                                                            weatherEnabled = weatherEnabled,
+                                                            weather = weatherInfo,
+                                                            temperatureUnit = temperatureUnit,
+                                                            firstItemFocusRequester = favoritesFirstFocusRequester,
+                                                            focusEnabled = favoritesCanFocus,
+                                                            onLaunchFavorite = { app ->
+                                                                viewModel.setFocusedItem(app.id)
+                                                                viewModel.launchItem(app)
+                                                            },
+                                                            onLongPressFavorite = { app ->
+                                                                viewModel.openFavoriteActions(app)
+                                                            },
+                                                            onOpenClock = { viewModel.openClockApp() },
+                                                            onOpenCalendar = { viewModel.openCalendarApp() },
+                                                            onOpenWeather = { viewModel.openWeatherApp() },
+                                                            onPullDown = { viewModel.expandNotificationShade() },
+                                                            onNavigateDownToAppList = {
+                                                                if (appsPagerState.targetPage != 1) {
+                                                                    scope.launch { appsPagerState.animateScrollToPage(1) }
+                                                                }
+                                                            },
+                                                            onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
+                                                        )
                                                     }
-                                                },
-                                                onLetterSelected = { letter ->
-                                                    val index = appListEntries.indexOfFirst {
-                                                        it is AppListEntry.Letter && it.letter == letter
-                                                    }
-                                                    if (index >= 0) {
-                                                        scope.launch {
-                                                            if (effectiveFavoritesLayout != FavoritesLayout.TEXT) {
-                                                                appsGridState.scrollToItem(index)
-                                                            } else {
-                                                                appsListState.scrollToItem(index)
-                                                            }
+                                                } else {
+                                                    val appDrawerCanFocus = appsTabCanFocus &&
+                                                        appsPagerState.settledPage == 1
+                                                    Box(
+                                                        modifier = Modifier.fillMaxSize()
+                                                    ) {
+                                                        if (libraryDisplay.isEmpty()) {
+                                                            EmptyAppDrawerState(
+                                                                hasFavorites = favoriteApps.isNotEmpty(),
+                                                                focusEnabled = appDrawerCanFocus,
+                                                                onNavigateUpToFavorites = {
+                                                                    if (appsPagerState.targetPage != 0) {
+                                                                        scope.launch { appsPagerState.animateScrollToPage(0) }
+                                                                    }
+                                                                }
+                                                            )
+                                                        } else {
+                                                            AppsAlphabeticalList(
+                                                                entries = appListEntries,
+                                                                focusedItemId = focusedItemId,
+                                                                layout = effectiveFavoritesLayout,
+                                                                showFocusEffects = showFocusEffects,
+                                                                listState = appsListState,
+                                                                gridState = appsGridState,
+                                                                firstItemFocusRequester = appsListFirstFocusRequester,
+                                                                focusEnabled = appDrawerCanFocus,
+                                                                onAppClick = onAppClick,
+                                                                onAppLongClick = onAppLongClick,
+                                                                onAppFocus = onAppFocus,
+                                                                onNavigateUpToFavorites = {
+                                                                    if (appsPagerState.targetPage != 0) {
+                                                                        scope.launch { appsPagerState.animateScrollToPage(0) }
+                                                                    }
+                                                                },
+                                                                onLetterSelected = { letter ->
+                                                                    val index = appListEntries.indexOfFirst {
+                                                                        it is AppListEntry.Letter && it.letter == letter
+                                                                    }
+                                                                    if (index >= 0) {
+                                                                        scope.launch {
+                                                                            if (effectiveFavoritesLayout != FavoritesLayout.TEXT) {
+                                                                                appsGridState.scrollToItem(index)
+                                                                            } else {
+                                                                                appsListState.scrollToItem(index)
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            )
                                                         }
                                                     }
                                                 }
-                                            )
+                                            }
                                         }
                                     }
                                 }
