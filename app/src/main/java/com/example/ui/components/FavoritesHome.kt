@@ -120,7 +120,6 @@ fun FavoritesHome(
     weatherEnabled: Boolean = false,
     weather: WeatherInfo? = null,
     temperatureUnit: TemperatureUnit = TemperatureUnit.defaultForLocale(),
-    firstItemFocusRequester: FocusRequester? = null,
     onLaunchFavorite: (GameItem) -> Unit,
     onLongPressFavorite: (GameItem) -> Unit,
     onOpenClock: () -> Unit,
@@ -204,7 +203,6 @@ fun FavoritesHome(
             if (showClockAndDate) {
                 val emptyDateMod = if (favorites.isEmpty()) {
                     Modifier
-                        .then(firstItemFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
                         .then(
                             if (onNavigateDownToAppList != null) {
                                 Modifier.onPreviewKeyEvent { event ->
@@ -319,14 +317,6 @@ fun FavoritesHome(
                             onFocus = { onFocusFavorite(app) },
                             modifier = Modifier
                                 .then(
-                                    if (index == 0) {
-                                        firstItemFocusRequester?.let { Modifier.focusRequester(it) }
-                                            ?: Modifier
-                                    } else {
-                                        Modifier
-                                    }
-                                )
-                                .then(
                                     if (isLastRow && onNavigateDownToAppList != null) {
                                         Modifier.onPreviewKeyEvent { keyEvent ->
                                             if (keyEvent.type == KeyEventType.KeyDown &&
@@ -393,14 +383,6 @@ fun FavoritesHome(
                                     modifier = Modifier
                                         .width(itemWidth)
                                         .then(
-                                            if (index == 0) {
-                                                firstItemFocusRequester?.let { Modifier.focusRequester(it) }
-                                                    ?: Modifier
-                                            } else {
-                                                Modifier
-                                            }
-                                        )
-                                        .then(
                                             if (isLastRow && onNavigateDownToAppList != null) {
                                                 Modifier.onPreviewKeyEvent { keyEvent ->
                                                     if (keyEvent.type == KeyEventType.KeyDown &&
@@ -458,14 +440,6 @@ fun FavoritesHome(
                                     ),
                                     modifier = Modifier
                                         .width(tilePitch)
-                                        .then(
-                                            if (index == 0) {
-                                                firstItemFocusRequester?.let { Modifier.focusRequester(it) }
-                                                    ?: Modifier
-                                            } else {
-                                                Modifier
-                                            }
-                                        )
                                         .then(
                                             if (isLastRow && onNavigateDownToAppList != null) {
                                                 Modifier.onPreviewKeyEvent { keyEvent ->

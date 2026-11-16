@@ -311,7 +311,6 @@ fun SettingsModal(
 
             SettingsSection(
                 title = "Icon Theme",
-                description = "Changes icons in favorites and the app list. Games keep their own artwork.",
                 icon = Icons.Default.Palette
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -403,7 +402,6 @@ fun SettingsModal(
 
             SettingsSection(
                 title = "Weather",
-                description = "Show current conditions beside the date on the favorites view",
                 trailing = {
                     Switch(
                         checked = weatherEnabled,

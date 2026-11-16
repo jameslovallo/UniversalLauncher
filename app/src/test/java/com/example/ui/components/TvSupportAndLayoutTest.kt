@@ -338,8 +338,6 @@ class TvSupportAndLayoutTest {
         )
         var navigatedDown by mutableIntStateOf(0)
         var navigatedUp by mutableIntStateOf(0)
-        val firstDrawerRequester = FocusRequester()
-        val bottomFavRequester = FocusRequester()
 
         composeRule.setContent {
             MaterialTheme {
@@ -350,7 +348,6 @@ class TvSupportAndLayoutTest {
                             focusedItemId = "fav_5",
                             layout = FavoritesLayout.TV_CARDS,
                             showFocusEffects = true,
-                            firstItemFocusRequester = bottomFavRequester,
                             onLaunchFavorite = {},
                             onLongPressFavorite = {},
                             onOpenClock = {},
@@ -367,7 +364,6 @@ class TvSupportAndLayoutTest {
                             showFocusEffects = true,
                             listState = rememberLazyListState(),
                             gridState = rememberLazyGridState(),
-                            firstItemFocusRequester = firstDrawerRequester,
                             onAppClick = {},
                             onAppLongClick = {},
                             onLetterSelected = {},
@@ -388,7 +384,7 @@ class TvSupportAndLayoutTest {
         assertEquals(1, navigatedDown)
 
         // Focus first app in AppsAlphabeticalList and press Up.
-        composeRule.runOnIdle { firstDrawerRequester.requestFocus() }
+        composeRule.onNodeWithTag("app_row_alpha").performSemanticsAction(SemanticsActions.RequestFocus)
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("app_row_alpha").assertIsFocused()
         composeRule.onNodeWithTag("app_row_alpha").performKeyInput {
@@ -790,8 +786,13 @@ class TvSupportAndLayoutTest {
             preferredActivityName = bannerClass
         )
         assertNotNull(cachedBannerUrl)
-        assertTrue(cachedBannerUrl!!.contains("/app_banners/"))
-        val cachedBannerFile = File(Uri.parse(cachedBannerUrl).path!!)
+        val bannerUrlValue = cachedBannerUrl!!
+        // Windows test file URIs percent-encode the separator, so normalize before matching.
+        val normalizedBannerUrl = runCatching { Uri.decode(bannerUrlValue) }
+            .getOrDefault(bannerUrlValue)
+            .replace('\\', '/')
+        assertTrue(normalizedBannerUrl.contains("/app_banners/"))
+        val cachedBannerFile = File(Uri.parse(bannerUrlValue).path!!)
         assertTrue(cachedBannerFile.exists() && cachedBannerFile.length() > 0L)
 
         // Package B: Standard app with only a square icon and no banner -> returns null.
@@ -826,7 +827,6 @@ class TvSupportAndLayoutTest {
     @Test
     fun `empty TV FavoritesHome stacks clock above date row without overlap and opens app list on Down`() {
         var navigatedDown by mutableIntStateOf(0)
-        val initialRequester = FocusRequester()
 
         composeRule.setContent {
             MaterialTheme {
@@ -843,7 +843,6 @@ class TvSupportAndLayoutTest {
                             locationLabel = "Seattle"
                         ),
                         temperatureUnit = TemperatureUnit.FAHRENHEIT,
-                        firstItemFocusRequester = initialRequester,
                         onLaunchFavorite = {},
                         onLongPressFavorite = {},
                         onOpenClock = {},
@@ -867,8 +866,8 @@ class TvSupportAndLayoutTest {
             clockBounds.bottom <= dateRowBounds.top
         )
 
-        // Empty-state initial focus lands on date row so pressing Down immediately opens all apps.
-        composeRule.runOnIdle { initialRequester.requestFocus() }
+        // Focus the date row so pressing Down immediately opens all apps.
+        composeRule.onNodeWithTag("favorites_date_row").performSemanticsAction(SemanticsActions.RequestFocus)
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("favorites_date_row").assertIsFocused()
         composeRule.onNodeWithTag("favorites_date_row").performKeyInput {
