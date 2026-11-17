@@ -2,19 +2,25 @@ package com.example.ui.screens
 
 import android.app.Application
 import android.content.Context
+import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Looper
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
+import androidx.lifecycle.ViewModelProvider
+import java.io.File
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.MainActivity
@@ -22,6 +28,7 @@ import com.example.TvTestApplication
 import com.example.data.local.AppDatabase
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
+import com.example.ui.viewmodel.LauncherViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
@@ -79,11 +86,11 @@ class DashboardDpadNavigationTest {
                     )
                 )
             }
-            for (i in 1..8) {
+            for (i in 1..10) {
                 dao.insertGame(
                     GameItem(
                         id = "game_test_$i",
-                        title = "Game $i",
+                        title = "Game ${i.toString().padStart(2, '0')}",
                         type = GameType.GEFORCE_NOW,
                         isGame = true,
                         gfnCmsId = "cms_$i"
@@ -258,6 +265,65 @@ class DashboardDpadNavigationTest {
         composeRule.mainClock.autoAdvance = true
         assertTrue("The top bar stole focus after adding a favorite: $topBar", topBar == null)
         composeRule.onNodeWithTag("app_row_app_test_8").assertIsFocused()
+    }
+
+    @Test
+    fun `tv app drawer hides letter rail and games grid D-pad Down lands on partial second row`() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        composeRule.waitForIdle()
+
+        // Open the app drawer and verify the alphabet rail is omitted in TV mode.
+        composeRule.onNodeWithTag("favorite_app_app_test_1").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_6").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("app_row_app_test_7").assertIsFocused()
+        composeRule.onNodeWithTag("apps_alphabet_rail").assertDoesNotExist()
+
+        // Switch to Games tab (8 columns at 960dp, 10 games -> 2 on second row: 9 & 10).
+        composeRule.onNodeWithTag("tab_games").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("game_poster_game_test_5")
+            .performSemanticsAction(SemanticsActions.RequestFocus)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("game_poster_game_test_5").assertIsFocused()
+
+        composeRule.onNodeWithTag("game_poster_game_test_5").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("game_poster_game_test_10").assertIsFocused()
+    }
+
+    @Test
+    fun `setting tv_wallpaper_url renders wallpaper image behind dashboard and clearing removes it`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val wallpaperFile = File(app.filesDir, "test_tv_wallpaper.png")
+        val bmp = Bitmap.createBitmap(16, 9, Bitmap.Config.ARGB_8888)
+        wallpaperFile.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        bmp.recycle()
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("tv_wallpaper_image").assertDoesNotExist()
+
+        val vm = ViewModelProvider(composeRule.activity)[LauncherViewModel::class.java]
+        composeRule.runOnIdle {
+            vm.setTvWallpaper(Uri.fromFile(wallpaperFile))
+        }
+        composeRule.waitUntil(timeoutMillis = 3000) {
+            composeRule.onAllNodesWithTag("tv_wallpaper_image").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("tv_wallpaper_image").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            vm.clearTvWallpaper()
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("tv_wallpaper_image").assertDoesNotExist()
     }
 
     private fun settleFrames(frames: Int = 40) {

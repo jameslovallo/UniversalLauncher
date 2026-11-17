@@ -2,11 +2,13 @@ package com.example.ui.components
 
 import android.Manifest
 import android.app.Activity
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -20,8 +22,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,17 +37,23 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Opacity
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.displayCutoutPadding
@@ -107,6 +117,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.GameItem
 import com.example.data.service.IconPackInfo
+import com.example.data.service.LibrarySyncMode
 import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherApp
 import com.example.data.service.WeatherInfo
@@ -114,6 +125,7 @@ import com.example.data.service.WeatherLocationMode
 import com.example.data.service.temperatureDisplay
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
+import com.example.ui.viewmodel.LauncherViewModel
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -162,7 +174,22 @@ fun SettingsModal(
     onSyncLibraryNow: () -> Unit,
     onDisconnectLibrarySync: () -> Unit,
     onDismiss: () -> Unit,
-    isTelevision: Boolean = isTelevisionMode()
+    librarySyncMode: LibrarySyncMode = if (librarySyncConfigured) {
+        LibrarySyncMode.LOCAL_FOLDER
+    } else {
+        LibrarySyncMode.NONE
+    },
+    librarySyncNeedsReauth: Boolean = false,
+    pendingDriveAuthIntent: PendingIntent? = null,
+    onConnectGoogleDrive: () -> Unit = {},
+    onGoogleDriveAuthorizationResult: (Int, Intent?) -> Unit = { _, _ -> },
+    onConsumePendingDriveAuthIntent: () -> Unit = {},
+    isTelevision: Boolean = isTelevisionMode(),
+    tvWallpaperUrl: String? = null,
+    appGridColumns: Int = 0,
+    onSetTvWallpaper: (Uri) -> Unit = {},
+    onClearTvWallpaper: () -> Unit = {},
+    onSetAppGridColumns: (Int) -> Unit = {}
 ) {
     var apiKeyInput by remember { mutableStateOf(steamGridDbApiKey ?: "") }
     var zipInput by remember(weatherZip) { mutableStateOf(weatherZip) }
@@ -202,6 +229,28 @@ fun SettingsModal(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) onChooseSyncFolder(uri)
+    }
+
+    val driveAuthLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        onGoogleDriveAuthorizationResult(result.resultCode, result.data)
+    }
+
+    LaunchedEffect(pendingDriveAuthIntent) {
+        val pending = pendingDriveAuthIntent ?: return@LaunchedEffect
+        onConsumePendingDriveAuthIntent()
+        runCatching {
+            driveAuthLauncher.launch(IntentSenderRequest.Builder(pending.intentSender).build())
+        }.onFailure {
+            onGoogleDriveAuthorizationResult(Activity.RESULT_CANCELED, null)
+        }
+    }
+
+    val wallpaperPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) onSetTvWallpaper(uri)
     }
 
     BackHandler(onBack = onDismiss)
@@ -276,6 +325,147 @@ fun SettingsModal(
                                 isSelected = favoritesLayout == layoutOption,
                                 onSelect = { onSelectFavoritesLayout(layoutOption) },
                                 modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+            } else {
+                SettingsSection(
+                    title = "Wallpaper",
+                    description = "Choose an image file to display behind Nexus on Android TV.",
+                    icon = Icons.Default.Image
+                ) {
+                    if (!tvWallpaperUrl.isNullOrBlank()) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(tvWallpaperUrl)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = "Selected TV wallpaper preview",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .widthIn(max = 320.dp)
+                                .aspectRatio(16f / 9f)
+                                .clip(RoundedCornerShape(14.dp))
+                                .testTag("tv_wallpaper_preview")
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val chooseInteraction = remember { MutableInteractionSource() }
+                        Button(
+                            onClick = { wallpaperPickerLauncher.launch(arrayOf("image/*")) },
+                            interactionSource = chooseInteraction,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .tvFocusBorder(chooseInteraction, shape = RoundedCornerShape(12.dp))
+                                .testTag("tv_wallpaper_choose_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Image, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (tvWallpaperUrl.isNullOrBlank()) "Choose Wallpaper" else "Change Wallpaper",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        if (!tvWallpaperUrl.isNullOrBlank()) {
+                            val clearInteraction = remember { MutableInteractionSource() }
+                            OutlinedButton(
+                                onClick = onClearTvWallpaper,
+                                interactionSource = clearInteraction,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .tvFocusBorder(clearInteraction, shape = RoundedCornerShape(12.dp))
+                                    .testTag("tv_wallpaper_clear_button")
+                            ) {
+                                Icon(imageVector = Icons.Default.Delete, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Remove")
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                SettingsSection(
+                    title = "App Row Columns",
+                    description = "Set how many apps appear per row across TV favorites, the app list, and folders."
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        FilterChip(
+                            selected = appGridColumns == 0,
+                            onClick = { onSetAppGridColumns(0) },
+                            label = { Text("Auto") },
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("app_columns_auto_chip")
+                        )
+
+                        val decreaseInteraction = remember { MutableInteractionSource() }
+                        IconButton(
+                            onClick = {
+                                if (appGridColumns > 0) {
+                                    onSetAppGridColumns(appGridColumns - 1)
+                                }
+                            },
+                            enabled = appGridColumns > 0,
+                            interactionSource = decreaseInteraction,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .tvFocusBorder(decreaseInteraction, shape = CircleShape)
+                                .testTag("app_columns_decrease_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Remove,
+                                contentDescription = "Decrease columns"
+                            )
+                        }
+
+                        Text(
+                            text = if (appGridColumns == 0) {
+                                "Auto"
+                            } else {
+                                "$appGridColumns column${if (appGridColumns == 1) "" else "s"}"
+                            },
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("app_columns_value_text")
+                        )
+
+                        val increaseInteraction = remember { MutableInteractionSource() }
+                        IconButton(
+                            onClick = {
+                                if (appGridColumns < LauncherViewModel.MAX_APP_GRID_COLUMNS) {
+                                    onSetAppGridColumns(appGridColumns + 1)
+                                }
+                            },
+                            enabled = appGridColumns < LauncherViewModel.MAX_APP_GRID_COLUMNS,
+                            interactionSource = increaseInteraction,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .tvFocusBorder(increaseInteraction, shape = CircleShape)
+                                .testTag("app_columns_increase_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Increase columns"
                             )
                         }
                     }
@@ -653,20 +843,45 @@ fun SettingsModal(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            val effectiveSyncMode = when {
+                librarySyncMode != LibrarySyncMode.NONE -> librarySyncMode
+                librarySyncConfigured -> LibrarySyncMode.LOCAL_FOLDER
+                else -> LibrarySyncMode.NONE
+            }
+
             SettingsSection(
                 title = "Library Sync",
                 description = "Keep your GeForce NOW, Moonlight, and shortcut games in sync " +
-                    "with a folder on your device or cloud drive. All assigned game posters " +
-                    "and library metadata are exported automatically."
+                    "with Google Drive or a local folder. Only one method is active at a time; " +
+                    "switching methods preserves all existing library data and artwork."
             ) {
-                if (librarySyncConfigured) {
-                    Text(
-                        text = "Syncing with ${librarySyncTarget ?: "your selected folder"}",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.testTag("library_sync_target")
-                    )
+                if (effectiveSyncMode != LibrarySyncMode.NONE) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                                Icons.Default.CloudDone
+                            } else {
+                                Icons.Default.Folder
+                            },
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                                "Syncing with ${librarySyncTarget ?: "Google Drive (Nexus Launcher)"}"
+                            } else {
+                                "Syncing with ${librarySyncTarget ?: "your selected folder"}"
+                            },
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.testTag("library_sync_target")
+                        )
+                    }
                     val lastSynced = librarySyncLastSyncedAt
                         ?.takeIf { it > 0L }
                         ?.let {
@@ -676,6 +891,7 @@ fun SettingsModal(
                             ).format(java.util.Date(it))
                         }
                     if (lastSynced != null) {
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = "Last synced $lastSynced",
                             fontSize = 12.sp,
@@ -683,47 +899,116 @@ fun SettingsModal(
                             modifier = Modifier.testTag("library_sync_last_synced")
                         )
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = onSyncLibraryNow,
                             enabled = !librarySyncBusy,
                             shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).testTag("library_sync_now_button")
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("library_sync_now_button")
                         ) {
                             Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (librarySyncBusy) "Working…" else "Sync Now")
+                            Text(
+                                when {
+                                    librarySyncBusy -> "Working…"
+                                    effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE && librarySyncNeedsReauth ->
+                                        "Reconnect Drive"
+                                    else -> "Sync Now"
+                                }
+                            )
                         }
                         TextButton(
                             onClick = onDisconnectLibrarySync,
                             enabled = !librarySyncBusy,
-                            modifier = Modifier.testTag("library_sync_disconnect_button")
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("library_sync_disconnect_button")
                         ) {
                             Text("Disconnect")
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
+                    if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                        OutlinedButton(
+                            onClick = { syncFolderLauncher.launch(null) },
+                            enabled = !librarySyncBusy,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("library_sync_pick_folder_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Folder, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Switch to Local Folder")
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { syncFolderLauncher.launch(null) },
+                            enabled = !librarySyncBusy,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("library_sync_pick_folder_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Folder, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Change Folder")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onConnectGoogleDrive,
+                            enabled = !librarySyncBusy,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("library_sync_google_drive_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Cloud, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Switch to Google Drive")
+                        }
+                    }
+                } else {
+                    Button(
+                        onClick = onConnectGoogleDrive,
+                        enabled = !librarySyncBusy,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("library_sync_google_drive_button")
+                    ) {
+                        Icon(imageVector = Icons.Default.Cloud, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Connect Google Drive", fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Stores backups in your Drive's app-owned Nexus Launcher folder (drive.file) — works cleanly on Android TV without folder picker issues.",
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
                     OutlinedButton(
                         onClick = { syncFolderLauncher.launch(null) },
                         enabled = !librarySyncBusy,
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("library_sync_pick_folder_button")
-                    ) {
-                        Icon(imageVector = Icons.Default.Folder, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Change Folder")
-                    }
-                } else {
-                    Button(
-                        onClick = { syncFolderLauncher.launch(null) },
-                        enabled = !librarySyncBusy,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("library_sync_pick_folder_button")
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("library_sync_pick_folder_button")
                     ) {
                         Icon(imageVector = Icons.Default.Folder, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Choose Sync Folder", fontWeight = FontWeight.Bold)
+                        Text("Choose Local Folder Instead", fontWeight = FontWeight.SemiBold)
                     }
                 }
 
@@ -733,14 +1018,22 @@ fun SettingsModal(
                         Icon(
                             imageVector = Icons.Default.Refresh,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (librarySyncNeedsReauth) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = librarySyncStatus,
                             fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (librarySyncNeedsReauth) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                             modifier = Modifier.testTag("library_sync_status")
                         )
                     }

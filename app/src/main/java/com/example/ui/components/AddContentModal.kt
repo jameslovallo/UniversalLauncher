@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -71,6 +72,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -826,79 +828,97 @@ internal fun AddGfnSearchView(
                 )
             }
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 120.dp),
-                contentPadding = PaddingValues(vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize().testTag("gfn_poster_grid")
-            ) {
-                itemsIndexed(gfnTitles, key = { _, it -> it.id }) { index, gfnGame ->
-                    val itemInteraction = remember { MutableInteractionSource() }
-                    val itemFocused by itemInteraction.collectIsFocusedAsState()
-                    Column(
-                        modifier = Modifier
-                            .then(
-                                if (index == 0) Modifier.focusRequester(firstPosterFocusRequester)
-                                else Modifier
-                            )
-                            .clip(RoundedCornerShape(14.dp))
-                            .then(
-                                if (itemFocused) {
-                                    Modifier
-                                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
-                                        .border(2.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(14.dp))
-                                } else {
-                                    Modifier
-                                }
-                            )
-                            .clickable(interactionSource = itemInteraction, indication = null) {
-                                onGameSelected(gfnGame)
-                            }
-                            .padding(4.dp)
-                            .testTag("gfn_game_${gfnGame.id}"),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Card(
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val spacing = 12.dp
+                val columns = maxOf(2, ((maxWidth + spacing) / (120.dp + spacing)).toInt())
+                val gridState = rememberLazyGridState()
+                val posterScope = rememberCoroutineScope()
+                val posterRequesters = remember(gfnTitles.size) {
+                    List(gfnTitles.size) { idx ->
+                        if (idx == 0) firstPosterFocusRequester else FocusRequester()
+                    }
+                }
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(columns),
+                    state = gridState,
+                    contentPadding = PaddingValues(vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(spacing),
+                    modifier = Modifier.fillMaxSize().testTag("gfn_poster_grid")
+                ) {
+                    itemsIndexed(gfnTitles, key = { _, it -> it.id }) { index, gfnGame ->
+                        val itemInteraction = remember { MutableInteractionSource() }
+                        val itemFocused by itemInteraction.collectIsFocusedAsState()
+                        Column(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(2f / 3f),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                                .focusRequester(posterRequesters[index])
+                                .flatGridDownNextRowFallback(
+                                    index = index,
+                                    columns = columns,
+                                    itemCount = gfnTitles.size,
+                                    gridState = gridState,
+                                    requesters = posterRequesters,
+                                    scope = posterScope
+                                )
+                                .clip(RoundedCornerShape(14.dp))
+                                .then(
+                                    if (itemFocused) {
+                                        Modifier
+                                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
+                                            .border(2.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(14.dp))
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                                .clickable(interactionSource = itemInteraction, indication = null) {
+                                    onGameSelected(gfnGame)
+                                }
+                                .padding(4.dp)
+                                .testTag("gfn_game_${gfnGame.id}"),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                val artUrl = gfnGame.posterUrl ?: gfnGame.heroBannerUrl
-                                var imageFailed by remember(artUrl) { mutableStateOf(false) }
-                                if (!artUrl.isNullOrBlank() && !imageFailed) {
-                                    AsyncImage(
-                                        model = artUrl,
-                                        contentDescription = gfnGame.title,
-                                        contentScale = ContentScale.Crop,
-                                        onError = { imageFailed = true },
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Default.Cloud,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(36.dp)
-                                    )
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(2f / 3f),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    val artUrl = gfnGame.posterUrl ?: gfnGame.heroBannerUrl
+                                    var imageFailed by remember(artUrl) { mutableStateOf(false) }
+                                    if (!artUrl.isNullOrBlank() && !imageFailed) {
+                                        AsyncImage(
+                                            model = artUrl,
+                                            contentDescription = gfnGame.title,
+                                            contentScale = ContentScale.Crop,
+                                            onError = { imageFailed = true },
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.Cloud,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(36.dp)
+                                        )
+                                    }
                                 }
                             }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            Text(
+                                text = gfnGame.title,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center
+                            )
                         }
-
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        Text(
-                            text = gfnGame.title,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Center
-                        )
                     }
                 }
             }
@@ -1128,26 +1148,44 @@ internal fun AddLunaSearchView(
                 )
             }
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 120.dp),
-                contentPadding = PaddingValues(vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("luna_poster_grid")
-            ) {
-                itemsIndexed(lunaTitles, key = { _, it -> it.id }) { index, lunaGame ->
-                    LunaPosterOptionItem(
-                        game = lunaGame,
-                        posterResolver = posterResolver,
-                        onSelect = onGameSelected,
-                        modifier = if (index == 0) {
-                            Modifier.focusRequester(firstPosterFocusRequester)
-                        } else {
-                            Modifier
-                        }
-                    )
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val spacing = 12.dp
+                val columns = maxOf(2, ((maxWidth + spacing) / (120.dp + spacing)).toInt())
+                val gridState = rememberLazyGridState()
+                val posterScope = rememberCoroutineScope()
+                val posterRequesters = remember(lunaTitles.size) {
+                    List(lunaTitles.size) { idx ->
+                        if (idx == 0) firstPosterFocusRequester else FocusRequester()
+                    }
+                }
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(columns),
+                    state = gridState,
+                    contentPadding = PaddingValues(vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(spacing),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("luna_poster_grid")
+                ) {
+                    itemsIndexed(lunaTitles, key = { _, it -> it.id }) { index, lunaGame ->
+                        LunaPosterOptionItem(
+                            game = lunaGame,
+                            posterResolver = posterResolver,
+                            onSelect = onGameSelected,
+                            modifier = Modifier
+                                .focusRequester(posterRequesters[index])
+                                .flatGridDownNextRowFallback(
+                                    index = index,
+                                    columns = columns,
+                                    itemCount = lunaTitles.size,
+                                    gridState = gridState,
+                                    requesters = posterRequesters,
+                                    scope = posterScope
+                                )
+                        )
+                    }
                 }
             }
         }

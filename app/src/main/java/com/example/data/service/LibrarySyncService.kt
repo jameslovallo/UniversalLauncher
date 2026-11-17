@@ -1,26 +1,15 @@
 package com.example.data.service
 
 import android.content.Context
-import android.content.Intent
-import android.content.SharedPreferences
-import android.database.ContentObserver
-import android.database.Cursor
 import android.net.Uri
-import android.os.Build
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.provider.DocumentsContract
+import android.content.SharedPreferences
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
 import java.io.File
-import java.io.FileNotFoundException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
@@ -29,91 +18,226 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
-/** Result of a library folder sync or write. */
+/** Result of a library folder or Google Drive sync or write. */
 sealed interface LibrarySyncOutcome {
     data class Applied(val itemCount: Int) : LibrarySyncOutcome
     data class WroteLocal(val itemCount: Int) : LibrarySyncOutcome
+    data class Merged(val itemCount: Int, val addedFromRemote: Int) : LibrarySyncOutcome
     data object UpToDate : LibrarySyncOutcome
     data object NotConfigured : LibrarySyncOutcome
 }
 
 /**
- * Keeps the shareable game library synchronised with a folder chosen through the Storage
- * Access Framework.
+ * Keeps the shareable game library synchronised with either:
+ * - **Google Drive API (`drive.file` scope)** — stores `nexus-library.json` and `posters/`
+ *   inside an app-created `Nexus Launcher` folder, ideal for Android TV and mobile without SAF
+ *   Drive provider quirks, OR
+ * - **A local/custom folder via Storage Access Framework** — for users who prefer local or
+ *   custom folder storage.
  *
- * Inside the chosen folder:
- * - `nexus-library.json` records game metadata, launch URLs, custom titles, tags, and tombstones.
- * - `posters/` stores all assigned game poster images so custom artwork and covers travel
- *   intact across devices.
- *
- * Local changes are written back automatically; on launch, unlock or explicit sync, the folder
- * is read and wins when it is newer than the version seen on this device.
+ * The two sync methods are mutually exclusive; only one is active at a time. Switching sync
+ * methods preserves existing Room library items, favorites, folders, and local artwork.
  */
 class LibrarySyncService(
     private val context: Context,
     private val repository: GameRepository,
-    private val prefs: SharedPreferences
+    private val prefs: SharedPreferences,
+    private val driveTokenProvider: DriveAccessTokenProvider = PlayServicesDriveAuthManager(context),
+    private val driveApiClient: GoogleDriveApiClient = GoogleDriveApiClient(driveTokenProvider)
 ) {
     private val resolver = context.contentResolver
     private val mutex = Mutex()
 
-    val isConfigured: Boolean
-        get() = prefs.getString(KEY_TREE_URI, null) != null
+    val syncMode: LibrarySyncMode
+        get() = when (LibrarySyncMode.fromPrefs(prefs)) {
+            LibrarySyncMode.GOOGLE_DRIVE -> LibrarySyncMode.GOOGLE_DRIVE
+            LibrarySyncMode.LOCAL_FOLDER ->
+                if (prefs.getString(KEY_TREE_URI, null) != null) {
+                    LibrarySyncMode.LOCAL_FOLDER
+                } else {
+                    LibrarySyncMode.NONE
+                }
+            LibrarySyncMode.NONE -> LibrarySyncMode.NONE
+        }
 
-    fun targetLabel(): String? {
-        if (!isConfigured) return null
-        val treeUriStr = prefs.getString(KEY_TREE_URI, null) ?: return null
-        return prefs.getString(KEY_TARGET_LABEL, null)
-            ?: runCatching { treeDisplayName(Uri.parse(treeUriStr)) }.getOrNull()
-            ?: "Selected folder"
+    val isConfigured: Boolean
+        get() = syncMode != LibrarySyncMode.NONE
+
+    fun targetLabel(): String? = when (syncMode) {
+        LibrarySyncMode.GOOGLE_DRIVE -> {
+            val email = prefs.getString(KEY_DRIVE_ACCOUNT_EMAIL, null)
+            if (!email.isNullOrBlank()) {
+                "Google Drive ($email)"
+            } else {
+                prefs.getString(KEY_TARGET_LABEL, null) ?: "Google Drive (Nexus Launcher)"
+            }
+        }
+        LibrarySyncMode.LOCAL_FOLDER -> {
+            val treeUriStr = prefs.getString(KEY_TREE_URI, null) ?: return null
+            prefs.getString(KEY_TARGET_LABEL, null)
+                ?: SafFolderSyncTransport.treeDisplayName(resolver, Uri.parse(treeUriStr))
+                ?: "Selected folder"
+        }
+        LibrarySyncMode.NONE -> null
     }
+
+    fun driveAccountEmail(): String? =
+        if (syncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+            prefs.getString(KEY_DRIVE_ACCOUNT_EMAIL, null)
+        } else {
+            null
+        }
 
     fun lastSyncedAt(): Long? =
         prefs.getLong(KEY_LAST_SYNC, 0L).takeIf { it > 0L }
 
     private data class ConfigSnapshot(
+        val mode: String?,
         val treeUri: String?,
+        val driveFolderId: String?,
+        val driveAccountEmail: String?,
+        val driveAccountName: String?,
         val label: String?,
         val updatedAt: Long,
-        val signature: String?
+        val signature: String?,
+        val lastSync: Long
     )
 
     private fun snapshotConfig(): ConfigSnapshot = ConfigSnapshot(
+        mode = prefs.getString(KEY_SYNC_MODE, null),
         treeUri = prefs.getString(KEY_TREE_URI, null),
+        driveFolderId = prefs.getString(KEY_DRIVE_FOLDER_ID, null),
+        driveAccountEmail = prefs.getString(KEY_DRIVE_ACCOUNT_EMAIL, null),
+        driveAccountName = prefs.getString(KEY_DRIVE_ACCOUNT_NAME, null),
         label = prefs.getString(KEY_TARGET_LABEL, null),
         updatedAt = prefs.getLong(KEY_UPDATED_AT, 0L),
-        signature = prefs.getString(KEY_SIGNATURE, null)
+        signature = prefs.getString(KEY_SIGNATURE, null),
+        lastSync = prefs.getLong(KEY_LAST_SYNC, 0L)
     )
 
     private fun restoreConfig(snapshot: ConfigSnapshot) {
         prefs.edit()
+            .putString(KEY_SYNC_MODE, snapshot.mode)
             .putString(KEY_TREE_URI, snapshot.treeUri)
+            .putString(KEY_DRIVE_FOLDER_ID, snapshot.driveFolderId)
+            .putString(KEY_DRIVE_ACCOUNT_EMAIL, snapshot.driveAccountEmail)
+            .putString(KEY_DRIVE_ACCOUNT_NAME, snapshot.driveAccountName)
             .putString(KEY_TARGET_LABEL, snapshot.label)
             .putLong(KEY_UPDATED_AT, snapshot.updatedAt)
             .putString(KEY_SIGNATURE, snapshot.signature)
+            .putLong(KEY_LAST_SYNC, snapshot.lastSync)
             .apply()
     }
 
-    /** Uses a folder as the sync target, creating `nexus-library.json` and `posters/` inside it. */
+    /**
+     * Configures a local/SAF folder as the exclusive sync target. If Google Drive sync was active,
+     * switches cleanly to local folder sync without removing existing local library items.
+     */
     suspend fun configureFolder(treeUri: Uri): LibrarySyncOutcome = withContext(Dispatchers.IO) {
         mutex.withLock {
-            persistPermission(treeUri)
+            SafFolderSyncTransport.persistPermission(resolver, treeUri)
             val previous = snapshotConfig()
+            val previousMode = LibrarySyncMode.fromPrefs(prefs)
+            val label = SafFolderSyncTransport.treeDisplayName(resolver, treeUri) ?: "Selected folder"
             prefs.edit()
+                .putString(KEY_SYNC_MODE, LibrarySyncMode.LOCAL_FOLDER.name)
                 .putString(KEY_TREE_URI, treeUri.toString())
-                .putString(KEY_TARGET_LABEL, treeDisplayName(treeUri) ?: "Selected folder")
+                .putString(KEY_TARGET_LABEL, label)
+                .remove(KEY_DRIVE_FOLDER_ID)
+                .remove(KEY_DRIVE_ACCOUNT_EMAIL)
+                .remove(KEY_DRIVE_ACCOUNT_NAME)
                 .putLong(KEY_UPDATED_AT, 0L)
                 .putString(KEY_SIGNATURE, "")
                 .apply()
             try {
-                // Ensure the metadata file exists before the first read.
-                writableDocumentUri(treeUri)
-                    ?: throw IllegalStateException("Could not access or create $FILE_NAME in that folder")
-                val outcome = syncLocked(treeUri, adoptExisting = true)
-                releasePreviousPermission(previous, treeUri.toString())
+                val transport = SafFolderSyncTransport(resolver, treeUri)
+                transport.ensureReady()
+                val outcome = syncLocked(
+                    transport = transport,
+                    adoptExisting = true,
+                    previousVersion = if (previousMode == LibrarySyncMode.LOCAL_FOLDER) {
+                        0L
+                    } else {
+                        previous.updatedAt
+                    },
+                    switchingMethod = previousMode != LibrarySyncMode.NONE &&
+                        previousMode != LibrarySyncMode.LOCAL_FOLDER
+                )
+                if (previous.treeUri != null && previous.treeUri != treeUri.toString()) {
+                    SafFolderSyncTransport.releasePermission(resolver, Uri.parse(previous.treeUri))
+                }
+                outcome
+            } catch (error: Exception) {
+                restoreConfig(previous)
+                if (previous.treeUri != treeUri.toString()) {
+                    SafFolderSyncTransport.releasePermission(resolver, treeUri)
+                }
+                throw error
+            }
+        }
+    }
+
+    /** Starts interactive Google Drive authorization (`drive.file` scope). */
+    suspend fun beginGoogleDriveAuthorization(): DriveAuthorizationStep =
+        withContext(Dispatchers.IO) {
+            driveTokenProvider.beginInteractiveAuthorization(prefs.getString(KEY_DRIVE_ACCOUNT_EMAIL, null))
+        }
+
+    /** Finishes Google Drive authorization after Android consent ActivityResult. */
+    suspend fun resolveGoogleDriveAuthorization(
+        data: android.content.Intent?
+    ): DriveAuthorizationStep.Authorized = withContext(Dispatchers.IO) {
+        driveTokenProvider.resolveAuthorizationResult(data)
+    }
+
+    /**
+     * Activates Google Drive API sync (`drive.file` scope) as the exclusive sync target inside an
+     * app-owned `Nexus Launcher` folder. Releases any previously configured local folder permission
+     * while keeping all existing local library items, favorites, and artwork intact.
+     */
+    suspend fun configureGoogleDrive(
+        account: DriveAuthAccount? = null
+    ): LibrarySyncOutcome = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val previous = snapshotConfig()
+            val previousMode = LibrarySyncMode.fromPrefs(prefs)
+            val resolvedEmail = account?.email ?: previous.driveAccountEmail
+            val resolvedName = account?.displayName ?: previous.driveAccountName
+            val label = if (!resolvedEmail.isNullOrBlank()) {
+                "Google Drive ($resolvedEmail)"
+            } else {
+                "Google Drive (Nexus Launcher)"
+            }
+
+            prefs.edit()
+                .putString(KEY_SYNC_MODE, LibrarySyncMode.GOOGLE_DRIVE.name)
+                .putString(KEY_DRIVE_ACCOUNT_EMAIL, resolvedEmail)
+                .putString(KEY_DRIVE_ACCOUNT_NAME, resolvedName)
+                .putString(KEY_TARGET_LABEL, label)
+                .remove(KEY_TREE_URI)
+                .putLong(KEY_UPDATED_AT, 0L)
+                .putString(KEY_SIGNATURE, "")
+                .apply()
+
+            try {
+                val transport = buildDriveTransportLocked(resolvedEmail)
+                transport.ensureReady()
+                val outcome = syncLocked(
+                    transport = transport,
+                    adoptExisting = true,
+                    previousVersion = if (previousMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                        0L
+                    } else {
+                        previous.updatedAt
+                    },
+                    switchingMethod = previousMode != LibrarySyncMode.NONE &&
+                        previousMode != LibrarySyncMode.GOOGLE_DRIVE
+                )
+                previous.treeUri?.let { oldUri ->
+                    SafFolderSyncTransport.releasePermission(resolver, Uri.parse(oldUri))
+                }
                 outcome
             } catch (error: Exception) {
                 restoreConfig(previous)
@@ -122,39 +246,47 @@ class LibrarySyncService(
         }
     }
 
-    /** Reads the folder and restores it when newer, otherwise writes local changes and exports posters. */
+    /** Synchronises with whichever sync target is currently active. */
     suspend fun syncNow(): LibrarySyncOutcome = withContext(Dispatchers.IO) {
         mutex.withLock {
-            val treeUri = resolveTreeUri() ?: return@withLock LibrarySyncOutcome.NotConfigured
-            syncLocked(treeUri, adoptExisting = false)
-        }
-    }
-
-    fun disconnect() {
-        prefs.getString(KEY_TREE_URI, null)?.let { stored ->
-            releasePermission(Uri.parse(stored))
-        }
-        prefs.edit()
-            .remove(KEY_TREE_URI)
-            .remove(KEY_TARGET_LABEL)
-            .remove(KEY_UPDATED_AT)
-            .remove(KEY_SIGNATURE)
-            .remove(KEY_LAST_SYNC)
-            .apply()
-    }
-
-    private fun releasePreviousPermission(previous: ConfigSnapshot, current: String) {
-        val old = previous.treeUri ?: return
-        if (old != current) releasePermission(Uri.parse(old))
-    }
-
-    private fun releasePermission(uri: Uri) {
-        runCatching {
-            resolver.releasePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            val transport = currentTransportLocked() ?: return@withLock LibrarySyncOutcome.NotConfigured
+            syncLocked(
+                transport = transport,
+                adoptExisting = false,
+                previousVersion = prefs.getLong(KEY_UPDATED_AT, 0L),
+                switchingMethod = false
             )
+        }
+    }
+
+    /**
+     * Disconnects the active sync method (local folder or Google Drive) without deleting any local
+     * library items, favorites, folders, or cached artwork files.
+     */
+    suspend fun disconnect() {
+        val emailToRevoke = mutex.withLock {
+            val mode = syncMode
+            val email = prefs.getString(KEY_DRIVE_ACCOUNT_EMAIL, null)
+            prefs.getString(KEY_TREE_URI, null)?.let { stored ->
+                SafFolderSyncTransport.releasePermission(resolver, Uri.parse(stored))
+            }
+            prefs.edit()
+                .putString(KEY_SYNC_MODE, LibrarySyncMode.NONE.name)
+                .remove(KEY_TREE_URI)
+                .remove(KEY_DRIVE_FOLDER_ID)
+                .remove(KEY_DRIVE_ACCOUNT_EMAIL)
+                .remove(KEY_DRIVE_ACCOUNT_NAME)
+                .remove(KEY_TARGET_LABEL)
+                .remove(KEY_UPDATED_AT)
+                .remove(KEY_SIGNATURE)
+                .remove(KEY_LAST_SYNC)
+                .apply()
+            if (mode == LibrarySyncMode.GOOGLE_DRIVE) email else null
+        }
+        if (emailToRevoke != null) {
+            withContext(Dispatchers.IO) {
+                driveTokenProvider.revokeAccess(emailToRevoke)
+            }
         }
     }
 
@@ -165,12 +297,12 @@ class LibrarySyncService(
     )
 
     /**
-     * Watches the full library and writes to the sync folder whenever shareable content changes.
+     * Watches the full library and writes to the active sync target whenever shareable content changes.
      */
     @OptIn(FlowPreview::class)
     fun observeLibraryChanges(
         scope: CoroutineScope,
-        onError: (String) -> Unit = {}
+        onError: (Throwable) -> Unit = {}
     ) {
         scope.launch {
             repository.allItemsIncludingDeleted
@@ -193,21 +325,21 @@ class LibrarySyncService(
                 }
                 .debounce(WRITE_DEBOUNCE_MS)
                 .collect { (payload, sig) ->
-                    if (!isConfigured || sig == prefs.getString(KEY_SIGNATURE, "")) {
-                        return@collect
-                    }
                     withContext(Dispatchers.IO) {
                         mutex.withLock {
-                            val treeUri = resolveTreeUri() ?: return@withLock
+                            if (!isConfigured || sig == prefs.getString(KEY_SIGNATURE, "")) {
+                                return@withLock
+                            }
+                            val transport = currentTransportLocked() ?: return@withLock
                             runCatching {
                                 writeLocked(
-                                    treeUri = treeUri,
+                                    transport = transport,
                                     items = payload.items,
                                     localApps = payload.appCustomizations,
                                     localInstalledAppIds = payload.installedAppIds
                                 )
-                            }.onFailure {
-                                onError(it.message ?: "Library folder sync failed")
+                            }.onFailure { error ->
+                                onError(error)
                             }
                         }
                     }
@@ -215,10 +347,36 @@ class LibrarySyncService(
         }
     }
 
+    private fun currentTransportLocked(): LibrarySyncTransport? = when (syncMode) {
+        LibrarySyncMode.GOOGLE_DRIVE ->
+            buildDriveTransportLocked(prefs.getString(KEY_DRIVE_ACCOUNT_EMAIL, null))
+        LibrarySyncMode.LOCAL_FOLDER ->
+            prefs.getString(KEY_TREE_URI, null)?.let { uriStr ->
+                SafFolderSyncTransport(resolver, Uri.parse(uriStr))
+            }
+        LibrarySyncMode.NONE -> null
+    }
+
+    private fun buildDriveTransportLocked(preferredEmail: String?): GoogleDriveSyncTransport =
+        GoogleDriveSyncTransport(
+            api = driveApiClient,
+            preferredEmail = preferredEmail,
+            initialFolderId = prefs.getString(KEY_DRIVE_FOLDER_ID, null),
+            onFolderResolved = { folderId ->
+                prefs.edit().putString(KEY_DRIVE_FOLDER_ID, folderId).apply()
+            }
+        )
+
     // ---- Core sync ----------------------------------------------------------------
 
-    private suspend fun syncLocked(treeUri: Uri, adoptExisting: Boolean): LibrarySyncOutcome {
-        val snapshot = readDocument(treeUri, forceRefresh = true)
+    private suspend fun syncLocked(
+        transport: LibrarySyncTransport,
+        adoptExisting: Boolean,
+        previousVersion: Long,
+        switchingMethod: Boolean
+    ): LibrarySyncOutcome {
+        val remoteDoc = transport.readLibrary(forceRefresh = true)
+        val snapshot = remoteDoc?.parsed
         val allRows = repository.getAllItemsSnapshot()
         val localItems = syncable(allRows)
         val localApps = syncableAppCustomizations(allRows)
@@ -227,13 +385,14 @@ class LibrarySyncService(
             .mapTo(HashSet()) { it.id }
 
         if (snapshot == null || (snapshot.items.isEmpty() && snapshot.appCustomizations.isEmpty())) {
-            // Seed folder from this device (writes json and exports all assigned posters).
+            // Seed target from this device (writes json and exports all assigned posters).
             return writeLocked(
-                treeUri = treeUri,
+                transport = transport,
                 items = localItems,
                 localApps = localApps,
                 localInstalledAppIds = localInstalledAppIds,
                 minVersion = snapshot?.updatedAt ?: 0L,
+                existingDocHandle = remoteDoc?.handleId,
                 existingSnapshot = snapshot
             )
         }
@@ -242,20 +401,25 @@ class LibrarySyncService(
         val relevantRemoteAppHashes = snapshot.appPosterHashes.filterKeys { it in localInstalledAppIds }
 
         if (!snapshot.authoritative) {
-            val importedItems = importPosters(snapshot.items, snapshot.posterHashes, treeUri)
-            val importedApps = importPosters(relevantRemoteApps, relevantRemoteAppHashes, treeUri)
+            val importedItems = importPosters(snapshot.items, snapshot.posterHashes, transport)
+            val importedApps = importPosters(relevantRemoteApps, relevantRemoteAppHashes, transport)
             repository.mergeSyncedLibrary(importedItems.items)
-            repository.applySyncedAppCustomizations(importedApps.items, snapshot.tracksLocalPosters)
+            repository.applySyncedAppCustomizations(
+                remoteApps = importedApps.items,
+                tracksLocalPosters = snapshot.tracksLocalPosters,
+                preserveLocalCustomizations = switchingMethod
+            )
             val updatedRows = repository.getAllItemsSnapshot()
             val updatedInstalledIds = updatedRows
                 .filter { it.type == GameType.INSTALLED_APP }
                 .mapTo(HashSet()) { it.id }
             return writeLocked(
-                treeUri = treeUri,
+                transport = transport,
                 items = syncable(updatedRows),
                 localApps = syncableAppCustomizations(updatedRows),
                 localInstalledAppIds = updatedInstalledIds,
                 minVersion = snapshot.updatedAt,
+                existingDocHandle = remoteDoc.handleId,
                 existingSnapshot = snapshot
             )
         }
@@ -272,9 +436,28 @@ class LibrarySyncService(
         val differs = remoteSignature != localSignature
         val fileIsNewer = adoptExisting || snapshot.updatedAt > localVersion
 
+        val remoteItemIds = snapshot.items.mapTo(HashSet()) { it.id }
+        val remoteAppIds = relevantRemoteApps.mapTo(HashSet()) { it.id }
+        val hasLocalOnlyItems = localItems.any { !it.isDeleted && it.id !in remoteItemIds }
+        val hasLocalOnlyApps = localApps.any { it.id !in remoteAppIds }
+        if (adoptExisting && (switchingMethod || hasLocalOnlyItems || hasLocalOnlyApps)) {
+            return adoptMergingExistingLibrary(
+                transport = transport,
+                remoteDoc = remoteDoc,
+                snapshot = snapshot,
+                localItems = localItems,
+                localApps = localApps,
+                localInstalledAppIds = localInstalledAppIds,
+                relevantRemoteApps = relevantRemoteApps,
+                relevantRemoteAppHashes = relevantRemoteAppHashes,
+                previousVersion = previousVersion,
+                switchingMethod = switchingMethod
+            )
+        }
+
         if (differs && fileIsNewer) {
-            val importedItems = importPosters(snapshot.items, snapshot.posterHashes, treeUri)
-            val importedApps = importPosters(relevantRemoteApps, relevantRemoteAppHashes, treeUri)
+            val importedItems = importPosters(snapshot.items, snapshot.posterHashes, transport)
+            val importedApps = importPosters(relevantRemoteApps, relevantRemoteAppHashes, transport)
             repository.replaceSyncedLibrary(importedItems.items, snapshot.tracksLocalPosters)
             repository.applySyncedAppCustomizations(importedApps.items, snapshot.tracksLocalPosters)
             val appliedRows = repository.getAllItemsSnapshot()
@@ -285,12 +468,8 @@ class LibrarySyncService(
             val missingAnyPoster = importedItems.missingExpectedPoster ||
                 importedApps.missingExpectedPoster
             val storedVersion = if (missingAnyPoster) {
-                // Keep localVersion behind snapshot.updatedAt so a partially synced Drive
-                // posters/ folder gets imported on the next sync instead of being overwritten.
                 (snapshot.updatedAt - 1L).coerceAtLeast(0L)
             } else {
-                // Store the remote file's own timestamp (not local wall clock) so clock skew
-                // on this device never causes it to reject or overwrite newer updates from another.
                 snapshot.updatedAt
             }
             prefs.edit()
@@ -306,13 +485,13 @@ class LibrarySyncService(
                 val repairedItems = importPosters(
                     items = localItems,
                     posterHashes = snapshot.posterHashes,
-                    treeUri = treeUri,
+                    transport = transport,
                     forceRefresh = true
                 )
                 val repairedApps = importPosters(
                     items = localApps,
                     posterHashes = snapshot.appPosterHashes,
-                    treeUri = treeUri,
+                    transport = transport,
                     forceRefresh = true
                 )
                 val changedItems = repairedItems.items.filterIndexed { index, updated ->
@@ -342,27 +521,27 @@ class LibrarySyncService(
                 }
             }
             return writeLocked(
-                treeUri = treeUri,
+                transport = transport,
                 items = localItems,
                 localApps = localApps,
                 localInstalledAppIds = localInstalledAppIds,
                 minVersion = snapshot.updatedAt,
+                existingDocHandle = remoteDoc.handleId,
                 existingSnapshot = snapshot
             )
         }
 
-        // Metadata matches, yet Google Drive's posters/ folder can lag or have updated
-        // image assets; force-refresh posters/ and pull any missing or newer images first.
+        // Metadata matches, yet remote posters/ may have updated or missing assets locally.
         val reconciledItems = importPosters(
             items = localItems,
             posterHashes = snapshot.posterHashes,
-            treeUri = treeUri,
+            transport = transport,
             forceRefresh = true
         )
         val reconciledApps = importPosters(
             items = localApps,
             posterHashes = snapshot.appPosterHashes,
-            treeUri = treeUri,
+            transport = transport,
             forceRefresh = true
         )
         val changedItems = reconciledItems.items.filterIndexed { index, updated ->
@@ -376,8 +555,7 @@ class LibrarySyncService(
             repository.updateSyncedPosters(changedItems + changedApps)
         }
 
-        // Also ensure any local posters not yet uploaded to the folder are exported.
-        exportPosters(reconciledItems.items + reconciledApps.items, treeUri)
+        exportPosters(reconciledItems.items + reconciledApps.items, transport)
 
         val updatedRows = if (changedItems.isNotEmpty() || changedApps.isNotEmpty()) {
             repository.getAllItemsSnapshot()
@@ -407,24 +585,112 @@ class LibrarySyncService(
         }
     }
 
+    /**
+     * Merges a newly connected remote backup into an already-populated local library without
+     * ever deleting local items, folders, favorites, or artwork, and writes any combined delta
+     * back to the new sync target.
+     */
+    private suspend fun adoptMergingExistingLibrary(
+        transport: LibrarySyncTransport,
+        remoteDoc: RemoteLibraryDoc,
+        snapshot: LibrarySyncCodec.Parsed,
+        localItems: List<GameItem>,
+        localApps: List<GameItem>,
+        localInstalledAppIds: Set<String>,
+        relevantRemoteApps: List<GameItem>,
+        relevantRemoteAppHashes: Map<String, LibrarySyncCodec.PosterHashes>,
+        previousVersion: Long,
+        switchingMethod: Boolean
+    ): LibrarySyncOutcome {
+        val remoteIsNewer = !switchingMethod || snapshot.updatedAt > previousVersion
+        val remoteItemIds = snapshot.items.mapTo(HashSet()) { it.id }
+        val remoteAppIds = relevantRemoteApps.mapTo(HashSet()) { it.id }
+        val hasLocalOnlyItems = localItems.any { !it.isDeleted && it.id !in remoteItemIds }
+        val hasLocalOnlyApps = localApps.any { it.id !in remoteAppIds }
+
+        val importedItems = importPosters(snapshot.items, snapshot.posterHashes, transport)
+        val importedApps = importPosters(relevantRemoteApps, relevantRemoteAppHashes, transport)
+
+        val addedFromRemote = repository.mergeSyncedLibraryPreservingExisting(
+            remoteItems = importedItems.items,
+            allowOverwriteMatching = remoteIsNewer
+        )
+        repository.applySyncedAppCustomizations(
+            remoteApps = importedApps.items,
+            tracksLocalPosters = snapshot.tracksLocalPosters,
+            preserveLocalCustomizations = !remoteIsNewer || switchingMethod
+        )
+
+        val mergedRows = repository.getAllItemsSnapshot()
+        val mergedSyncable = syncable(mergedRows)
+        val mergedApps = syncableAppCustomizations(mergedRows)
+        val mergedInstalledIds = mergedRows
+            .filter { it.type == GameType.INSTALLED_APP }
+            .mapTo(HashSet()) { it.id }
+
+        val mergedRemoteApps = snapshot.appCustomizations.filter { it.id in mergedInstalledIds }
+        val mergedRemoteAppHashes = snapshot.appPosterHashes.filterKeys { it in mergedInstalledIds }
+        val remoteSignature = LibrarySyncCodec.librarySignature(
+            items = snapshot.items,
+            appCustomizations = mergedRemoteApps,
+            itemHashOverrides = snapshot.posterHashes,
+            appHashOverrides = mergedRemoteAppHashes,
+            localHashForUrl = ::localHashForUrl
+        )
+        val mergedSignature = librarySignature(mergedSyncable, mergedApps)
+
+        if (switchingMethod || hasLocalOnlyItems || hasLocalOnlyApps || mergedSignature != remoteSignature) {
+            writeLocked(
+                transport = transport,
+                items = mergedSyncable,
+                localApps = mergedApps,
+                localInstalledAppIds = mergedInstalledIds,
+                minVersion = maxOf(snapshot.updatedAt, previousVersion),
+                existingDocHandle = remoteDoc.handleId,
+                existingSnapshot = snapshot
+            )
+            return if (addedFromRemote > 0 || hasLocalOnlyItems || switchingMethod) {
+                LibrarySyncOutcome.Merged(
+                    itemCount = mergedSyncable.count { !it.isDeleted },
+                    addedFromRemote = addedFromRemote
+                )
+            } else {
+                LibrarySyncOutcome.WroteLocal(mergedSyncable.count { !it.isDeleted })
+            }
+        }
+
+        val missingAnyPoster = importedItems.missingExpectedPoster ||
+            importedApps.missingExpectedPoster
+        val storedVersion = if (missingAnyPoster) {
+            (snapshot.updatedAt - 1L).coerceAtLeast(0L)
+        } else {
+            snapshot.updatedAt
+        }
+        prefs.edit()
+            .putLong(KEY_UPDATED_AT, storedVersion)
+            .putString(KEY_SIGNATURE, mergedSignature)
+            .putLong(KEY_LAST_SYNC, System.currentTimeMillis())
+            .apply()
+        return LibrarySyncOutcome.Applied(snapshot.items.size)
+    }
+
     private suspend fun writeLocked(
-        treeUri: Uri,
+        transport: LibrarySyncTransport,
         items: List<GameItem>,
         localApps: List<GameItem>,
         localInstalledAppIds: Set<String>,
         minVersion: Long = 0L,
-        existingSnapshot: Snapshot? = null
+        existingDocHandle: String? = null,
+        existingSnapshot: LibrarySyncCodec.Parsed? = null
     ): LibrarySyncOutcome {
-        val resolvedDoc = try {
-            resolveOrCreateLibraryDocument(treeUri)
-        } catch (error: SecurityException) {
-            throw fileAccessError(error)
-        } ?: throw IllegalStateException("Could not open $FILE_NAME in sync folder")
-        val docUri = resolvedDoc.uri
+        val currentRemote = if (existingSnapshot == null || existingDocHandle == null) {
+            transport.readLibrary(forceRefresh = false)
+        } else {
+            null
+        }
+        val docHandle = existingDocHandle ?: currentRemote?.handleId
+        val baseSnapshot = existingSnapshot ?: currentRemote?.parsed
 
-        // Preserve remote appCustomizations for packages not installed on this device so we
-        // never erase another device's installed-game posters when writing local edits.
-        val baseSnapshot = existingSnapshot ?: resolvedDoc.snapshot
         val preservedRemoteApps = baseSnapshot?.appCustomizations
             ?.filter { it.id !in localInstalledAppIds }
             .orEmpty()
@@ -441,18 +707,8 @@ class LibrarySyncService(
             appPosterHashOverrides = preservedAppHashes
         ).toString()
 
-        try {
-            resolver.openOutputStream(docUri, "wt")?.use { stream ->
-                stream.write(document.toByteArray(Charsets.UTF_8))
-            } ?: throw IllegalStateException("Could not open $FILE_NAME for writing")
-        } catch (error: SecurityException) {
-            throw fileAccessError(error)
-        } catch (error: FileNotFoundException) {
-            throw fileAccessError(error)
-        }
-
-        // Export all assigned game posters to posters/ directory
-        exportPosters(items + localApps, treeUri)
+        transport.writeLibrary(docHandle, document)
+        exportPosters(items + localApps, transport)
 
         prefs.edit()
             .putLong(KEY_UPDATED_AT, version)
@@ -467,26 +723,22 @@ class LibrarySyncService(
 
     // ---- Poster Export & Import ---------------------------------------------------
 
-    /**
-     * Exports all assigned game posters (default and optional NSFW) into a `posters/` folder
-     * inside the sync folder, and removes exported poster files when artwork is cleared or deleted.
-     */
-    private suspend fun exportPosters(items: List<GameItem>, treeUri: Uri) {
+    private suspend fun exportPosters(items: List<GameItem>, transport: LibrarySyncTransport) {
         runCatching {
-            val postersFolderUri = findOrCreateChildDirectory(treeUri, POSTERS_DIR_NAME)
-                ?: return
-            val postersFolderDocId = DocumentsContract.getDocumentId(postersFolderUri)
-            val existingFiles = listChildDocuments(treeUri, postersFolderDocId)
+            val postersContainerId = transport.ensurePostersContainer(forceRefresh = true) ?: return
+            val existingFiles = transport.listRemotePosters(forceRefresh = true)
 
             items.forEach { item ->
                 exportSinglePosterSlot(
-                    postersFolderUri = postersFolderUri,
+                    transport = transport,
+                    postersContainerId = postersContainerId,
                     existingFiles = existingFiles,
                     fileName = posterFileNameFor(item.id),
                     rawUrl = if (item.isDeleted) null else item.posterUrl
                 )
                 exportSinglePosterSlot(
-                    postersFolderUri = postersFolderUri,
+                    transport = transport,
+                    postersContainerId = postersContainerId,
                     existingFiles = existingFiles,
                     fileName = nsfwPosterFileNameFor(item.id),
                     rawUrl = if (item.isDeleted) null else item.nsfwPosterUrl
@@ -495,74 +747,47 @@ class LibrarySyncService(
         }
     }
 
-    private fun exportSinglePosterSlot(
-        postersFolderUri: Uri,
-        existingFiles: MutableMap<String, Uri>,
+    private suspend fun exportSinglePosterSlot(
+        transport: LibrarySyncTransport,
+        postersContainerId: String,
+        existingFiles: MutableMap<String, RemotePosterEntry>,
         fileName: String,
         rawUrl: String?
     ) {
-        val existingDocUri = existingFiles[fileName]
+        val existingEntry = existingFiles[fileName]
         if (rawUrl.isNullOrBlank()) {
-            if (existingDocUri != null) {
-                runCatching { DocumentsContract.deleteDocument(resolver, existingDocUri) }
+            if (existingEntry != null) {
+                transport.deletePoster(existingEntry)
                 existingFiles.remove(fileName)
             }
             return
         }
 
         val isLocal = rawUrl.startsWith("file:") || rawUrl.startsWith("content:")
-        if (!isLocal && existingDocUri != null && documentSize(existingDocUri) > 0L) {
+        if (!isLocal && existingEntry != null && existingEntry.size > 0L) {
             return
         }
 
         val bytes = fetchPosterBytes(rawUrl) ?: return
-        if (existingDocUri != null && documentMatchesBytes(existingDocUri, bytes)) {
+        val sha256 = LibrarySyncCodec.sha256Hex(bytes)
+        if (existingEntry != null &&
+            existingEntry.sha256 == sha256 &&
+            existingEntry.size == bytes.size.toLong()
+        ) {
             return
         }
 
-        val docUri = existingDocUri ?: DocumentsContract.createDocument(
-            resolver,
-            postersFolderUri,
-            "image/png",
-            fileName
-        ) ?: return
-
-        val wrote = writeBytesToDocument(docUri, bytes)
-        if (!wrote && existingDocUri != null) {
-            runCatching { DocumentsContract.deleteDocument(resolver, existingDocUri) }
-            existingFiles.remove(fileName)
-            val recreated = DocumentsContract.createDocument(
-                resolver,
-                postersFolderUri,
-                "image/png",
-                fileName
-            ) ?: return
-            if (writeBytesToDocument(recreated, bytes)) {
-                existingFiles[fileName] = recreated
-            }
-            return
+        val uploaded = transport.uploadPoster(
+            postersContainerId = postersContainerId,
+            fileName = fileName,
+            bytes = bytes,
+            sha256Hex = sha256,
+            existing = existingEntry
+        )
+        if (uploaded != null) {
+            existingFiles[fileName] = uploaded
         }
-        existingFiles[fileName] = docUri
     }
-
-    private fun documentMatchesBytes(docUri: Uri, bytes: ByteArray): Boolean {
-        val remoteSize = documentSize(docUri)
-        if (remoteSize > 0L && remoteSize != bytes.size.toLong()) return false
-        val remoteBytes = runCatching {
-            resolver.openInputStream(docUri)?.use { it.readBytes() }
-        }.getOrNull() ?: return false
-        return remoteBytes.size == bytes.size &&
-            LibrarySyncCodec.sha256Hex(remoteBytes) == LibrarySyncCodec.sha256Hex(bytes)
-    }
-
-    private fun writeBytesToDocument(docUri: Uri, bytes: ByteArray): Boolean =
-        runCatching {
-            val stream = runCatching { resolver.openOutputStream(docUri, "wt") }.getOrNull()
-                ?: resolver.openOutputStream(docUri, "w")
-                ?: return false
-            stream.use { out -> out.write(bytes) }
-            true
-        }.getOrDefault(false)
 
     private data class ImportResult(
         val items: List<GameItem>,
@@ -570,30 +795,14 @@ class LibrarySyncService(
         val pulledCount: Int = 0
     )
 
-    /**
-     * Restores local poster images from the sync folder's `posters/` directory when the JSON
-     * metadata omits a shareable URL (for example `file:` artwork picked on another device) or
-     * when the local cached poster file is missing/outdated.
-     */
     private suspend fun importPosters(
         items: List<GameItem>,
         posterHashes: Map<String, LibrarySyncCodec.PosterHashes>,
-        treeUri: Uri,
+        transport: LibrarySyncTransport,
         forceRefresh: Boolean = true
     ): ImportResult {
         return runCatching {
-            val postersFolderUri = findChildDirectory(
-                treeUri = treeUri,
-                dirName = POSTERS_DIR_NAME,
-                forceRefresh = forceRefresh
-            )
-            val existingEntries = if (postersFolderUri != null) {
-                val postersFolderDocId = DocumentsContract.getDocumentId(postersFolderUri)
-                listChildDocumentEntries(treeUri, postersFolderDocId)
-            } else {
-                emptyMap()
-            }
-
+            val existingEntries = transport.listRemotePosters(forceRefresh = forceRefresh)
             val localDir = File(context.filesDir, "custom_art").apply { mkdirs() }
             var missingExpectedPoster = false
             var pulledCount = 0
@@ -605,7 +814,8 @@ class LibrarySyncService(
 
                 val posterEntry = existingEntries[posterFileNameFor(item.id)]
                 if (slotNeedsPosterPull(item.posterUrl, expectedHashes?.posterHash, posterEntry)) {
-                    val importedPoster = copyPosterFromSyncFolder(
+                    val importedPoster = copyPosterFromTransport(
+                        transport = transport,
                         posterEntry = posterEntry,
                         localDir = localDir,
                         filePrefix = "$safeId-synced",
@@ -625,7 +835,8 @@ class LibrarySyncService(
 
                 val nsfwEntry = existingEntries[nsfwPosterFileNameFor(item.id)]
                 if (slotNeedsPosterPull(item.nsfwPosterUrl, expectedHashes?.nsfwPosterHash, nsfwEntry)) {
-                    val importedNsfw = copyPosterFromSyncFolder(
+                    val importedNsfw = copyPosterFromTransport(
+                        transport = transport,
                         posterEntry = nsfwEntry,
                         localDir = localDir,
                         filePrefix = "$safeId-nsfw-synced",
@@ -654,7 +865,7 @@ class LibrarySyncService(
     private fun slotNeedsPosterPull(
         currentUrl: String?,
         expectedHash: String?,
-        remoteEntry: ChildEntry?
+        remoteEntry: RemotePosterEntry?
     ): Boolean {
         if (currentUrl.isNullOrBlank()) return true
         if (!currentUrl.startsWith("file:")) return false
@@ -671,18 +882,18 @@ class LibrarySyncService(
             remoteEntry.lastModified > localFile.lastModified()
     }
 
-    private suspend fun copyPosterFromSyncFolder(
-        posterEntry: ChildEntry?,
+    private suspend fun copyPosterFromTransport(
+        transport: LibrarySyncTransport,
+        posterEntry: RemotePosterEntry?,
         localDir: File,
         filePrefix: String,
         expectedHash: String?,
         forceRefresh: Boolean
     ): String? {
-        val posterDocUri = posterEntry?.uri ?: return null
+        if (posterEntry == null) return null
 
-        // Fast path: if the expected hash already matches an imported local file, reuse it.
         if (!expectedHash.isNullOrBlank()) {
-            val expectedTarget = File(localDir, "${filePrefix}-${expectedHash.take(12)}.png")
+            val expectedTarget = File(localDir, "$filePrefix-${expectedHash.take(12)}.png")
             if (expectedTarget.exists() && expectedTarget.length() > 0L) {
                 val existingHash = runCatching {
                     LibrarySyncCodec.sha256Hex(expectedTarget.readBytes())
@@ -694,41 +905,20 @@ class LibrarySyncService(
             }
         }
 
-        if (forceRefresh) {
-            refreshDocumentUri(posterDocUri)
-        }
-
-        var remoteBytes = runCatching {
-            resolver.openInputStream(posterDocUri)?.use { it.readBytes() }
-        }.getOrNull()?.takeIf { it.isNotEmpty() }
-
-        var actualHash = remoteBytes?.let(LibrarySyncCodec::sha256Hex)
-        val staleOrEmpty = remoteBytes == null ||
-            (!expectedHash.isNullOrBlank() && actualHash != expectedHash)
-        if (staleOrEmpty) {
-            // Ask Google Drive / cloud provider again and give the refreshed content a moment
-            // to flush so a newly uploaded poster isn't lost behind stale SAF file cache.
-            refreshDocumentUri(posterDocUri)
-            delay(DRIVE_FILE_RETRY_DELAY_MS)
-            remoteBytes = runCatching {
-                resolver.openInputStream(posterDocUri)?.use { it.readBytes() }
-            }.getOrNull()?.takeIf { it.isNotEmpty() }
-            actualHash = remoteBytes?.let(LibrarySyncCodec::sha256Hex)
-        }
-
-        val verifiedBytes = remoteBytes ?: return null
-        val verifiedHash = actualHash ?: return null
-        if (!expectedHash.isNullOrBlank() && verifiedHash != expectedHash) {
+        val remoteBytes = transport.downloadPosterBytes(posterEntry, expectedHash, forceRefresh)
+            ?.takeIf { it.isNotEmpty() } ?: return null
+        val actualHash = LibrarySyncCodec.sha256Hex(remoteBytes)
+        if (!expectedHash.isNullOrBlank() && actualHash != expectedHash) {
             return null
         }
 
-        val targetFile = File(localDir, "${filePrefix}-${verifiedHash.take(12)}.png")
+        val targetFile = File(localDir, "$filePrefix-${actualHash.take(12)}.png")
         val written = runCatching {
             val needsWrite = !targetFile.exists() ||
-                targetFile.length() != verifiedBytes.size.toLong() ||
-                LibrarySyncCodec.sha256Hex(targetFile.readBytes()) != verifiedHash
+                targetFile.length() != remoteBytes.size.toLong() ||
+                LibrarySyncCodec.sha256Hex(targetFile.readBytes()) != actualHash
             if (needsWrite) {
-                targetFile.writeBytes(verifiedBytes)
+                targetFile.writeBytes(remoteBytes)
             }
             cleanupOlderSyncedFiles(localDir, filePrefix, targetFile)
             targetFile.exists() && targetFile.length() > 0L
@@ -779,489 +969,6 @@ class LibrarySyncService(
         }
     }.getOrNull()
 
-    private fun documentSize(uri: Uri): Long = runCatching {
-        queryDocumentCursor(
-            uri,
-            arrayOf(DocumentsContract.Document.COLUMN_SIZE)
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getLong(0) else 0L
-        } ?: 0L
-    }.getOrDefault(0L)
-
-    // ---- File / Directory Access --------------------------------------------------
-
-    private data class Snapshot(
-        val updatedAt: Long,
-        val items: List<GameItem>,
-        val signature: String,
-        val authoritative: Boolean,
-        val tracksLocalPosters: Boolean,
-        val posterHashes: Map<String, LibrarySyncCodec.PosterHashes>,
-        val appCustomizations: List<GameItem>,
-        val appPosterHashes: Map<String, LibrarySyncCodec.PosterHashes>
-    )
-
-    private fun resolveTreeUri(): Uri? =
-        prefs.getString(KEY_TREE_URI, null)?.let(Uri::parse)
-
-    private fun fileAccessError(cause: Exception): IllegalStateException =
-        IllegalStateException(
-            "Nexus cannot access the sync folder. Please re-select it in Settings.",
-            cause
-        )
-
-    private data class ResolvedLibraryDoc(
-        val uri: Uri,
-        val snapshot: Snapshot?
-    )
-
-    private data class ChildEntry(
-        val docId: String,
-        val uri: Uri,
-        val name: String,
-        val mimeType: String,
-        val lastModified: Long,
-        val size: Long
-    ) {
-        val isDirectory: Boolean
-            get() = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
-    }
-
-    private suspend fun readDocument(treeUri: Uri, forceRefresh: Boolean = false): Snapshot? =
-        findAndDeduplicateLibraryDocument(treeUri, forceRefresh)?.snapshot
-
-    private suspend fun writableDocumentUri(treeUri: Uri): Uri? =
-        resolveOrCreateLibraryDocument(treeUri)?.uri
-
-    private suspend fun resolveOrCreateLibraryDocument(treeUri: Uri): ResolvedLibraryDoc? {
-        val existing = findAndDeduplicateLibraryDocument(treeUri, forceRefresh = false)
-        if (existing != null) return existing
-        val created = createChildDocument(treeUri) ?: return null
-        return ResolvedLibraryDoc(uri = created, snapshot = null)
-    }
-
-    /**
-     * Finds `nexus-library.json` inside [treeUri]. Cloud providers like Google Drive allow
-     * multiple files with the same name; when duplicates exist, the most recently updated
-     * snapshot wins (`updatedAt`, then SAF `lastModified`, then file size) and the older
-     * duplicates are deleted so only one library file remains.
-     */
-    private suspend fun findAndDeduplicateLibraryDocument(
-        treeUri: Uri,
-        forceRefresh: Boolean = false
-    ): ResolvedLibraryDoc? {
-        val rootDocId = DocumentsContract.getTreeDocumentId(treeUri)
-        if (forceRefresh) {
-            forceRefreshFolder(treeUri, rootDocId)
-        }
-        val candidates = try {
-            listChildEntries(treeUri, rootDocId)
-                .filter { !it.isDirectory && it.name == FILE_NAME }
-        } catch (error: SecurityException) {
-            throw fileAccessError(error)
-        }
-        if (candidates.isEmpty()) return null
-
-        if (candidates.size == 1) {
-            val only = candidates.single()
-            if (forceRefresh) refreshDocumentUri(only.uri)
-            return ResolvedLibraryDoc(
-                uri = only.uri,
-                snapshot = readAndParseCandidate(only.uri, throwOnError = true)
-            )
-        }
-
-        data class ScoredCandidate(
-            val entry: ChildEntry,
-            val snapshot: Snapshot?,
-            val parseError: Throwable?
-        )
-
-        val scored = candidates.map { entry ->
-            var parsedSnapshot: Snapshot? = null
-            var error: Throwable? = null
-            try {
-                if (forceRefresh) refreshDocumentUri(entry.uri)
-                parsedSnapshot = readAndParseCandidate(entry.uri, throwOnError = true)
-            } catch (t: Throwable) {
-                error = t
-            }
-            ScoredCandidate(entry, parsedSnapshot, error)
-        }
-
-        val winner = scored.maxWith(
-            compareBy<ScoredCandidate>(
-                { it.snapshot != null },
-                { it.snapshot?.updatedAt ?: -1L },
-                { it.entry.lastModified },
-                { it.entry.size }
-            )
-        )
-
-        scored.forEach { candidate ->
-            if (candidate.entry.uri != winner.entry.uri) {
-                runCatching { DocumentsContract.deleteDocument(resolver, candidate.entry.uri) }
-            }
-        }
-
-        if (winner.snapshot == null && winner.parseError != null) {
-            throw winner.parseError
-        }
-        return ResolvedLibraryDoc(uri = winner.entry.uri, snapshot = winner.snapshot)
-    }
-
-    private fun readAndParseCandidate(docUri: Uri, throwOnError: Boolean): Snapshot? {
-        val text = try {
-            resolver.openInputStream(docUri)?.use {
-                it.readBytes().toString(Charsets.UTF_8)
-            } ?: throw IllegalStateException("Could not read $FILE_NAME in sync folder")
-        } catch (error: FileNotFoundException) {
-            if (throwOnError) throw fileAccessError(error) else return null
-        } catch (error: SecurityException) {
-            if (throwOnError) throw fileAccessError(error) else return null
-        }
-        if (text.isBlank()) return null
-        return parseDocument(text)
-    }
-
-    private fun createChildDocument(treeUri: Uri): Uri? = runCatching {
-        val parentUri = DocumentsContract.buildDocumentUriUsingTree(
-            treeUri,
-            DocumentsContract.getTreeDocumentId(treeUri)
-        )
-        DocumentsContract.createDocument(resolver, parentUri, MIME_TYPE, FILE_NAME)
-    }.getOrNull()
-
-    private suspend fun findChildDirectory(
-        treeUri: Uri,
-        dirName: String,
-        forceRefresh: Boolean = false
-    ): Uri? = resolveCanonicalDirectory(treeUri, dirName, createIfMissing = false, forceRefresh = forceRefresh)
-
-    private suspend fun findOrCreateChildDirectory(
-        treeUri: Uri,
-        dirName: String,
-        forceRefresh: Boolean = true
-    ): Uri? = resolveCanonicalDirectory(treeUri, dirName, createIfMissing = true, forceRefresh = forceRefresh)
-
-    /**
-     * Resolves a named child directory (such as `posters/`). If Google Drive or another
-     * provider created duplicate folders with the same name, selects the most recently
-     * updated folder (by folder or newest contained poster timestamp), merges any missing
-     * or newer files into it, and deletes the duplicate folders.
-     */
-    private suspend fun resolveCanonicalDirectory(
-        treeUri: Uri,
-        dirName: String,
-        createIfMissing: Boolean,
-        forceRefresh: Boolean = false
-    ): Uri? {
-        val rootDocId = DocumentsContract.getTreeDocumentId(treeUri)
-        if (forceRefresh) {
-            forceRefreshFolder(treeUri, rootDocId)
-        }
-        val dirs = runCatching {
-            listChildEntries(treeUri, rootDocId)
-                .filter { it.isDirectory && it.name == dirName }
-        }.getOrDefault(emptyList())
-
-        if (dirs.isEmpty()) {
-            if (!createIfMissing) return null
-            return runCatching {
-                val parentUri = DocumentsContract.buildDocumentUriUsingTree(
-                    treeUri,
-                    rootDocId
-                )
-                DocumentsContract.createDocument(
-                    resolver,
-                    parentUri,
-                    DocumentsContract.Document.MIME_TYPE_DIR,
-                    dirName
-                )
-            }.getOrNull()
-        }
-
-        if (dirs.size == 1) {
-            val onlyDir = dirs.single()
-            if (forceRefresh) {
-                forceRefreshFolder(treeUri, onlyDir.docId)
-            }
-            return onlyDir.uri
-        }
-
-        data class DirWithChildren(
-            val dir: ChildEntry,
-            val children: Map<String, ChildEntry>,
-            val effectiveLastModified: Long
-        )
-
-        val inspected = dirs.map { dir ->
-            if (forceRefresh) {
-                forceRefreshFolder(treeUri, dir.docId)
-            }
-            val rawChildren = runCatching {
-                listChildEntries(treeUri, dir.docId).filter { !it.isDirectory }
-            }.getOrDefault(emptyList())
-            val deduped = deduplicateNamedFiles(rawChildren)
-            val newestChildTs = deduped.values.maxOfOrNull { it.lastModified } ?: 0L
-            DirWithChildren(
-                dir = dir,
-                children = deduped,
-                effectiveLastModified = maxOf(dir.lastModified, newestChildTs)
-            )
-        }
-
-        val winner = inspected.maxWith(
-            compareBy<DirWithChildren>(
-                { it.children.isNotEmpty() },
-                { it.effectiveLastModified },
-                { it.children.size },
-                { it.dir.lastModified }
-            )
-        )
-        val winnerFiles = winner.children.toMutableMap()
-
-        inspected.forEach { candidate ->
-            if (candidate.dir.uri == winner.dir.uri) return@forEach
-
-            candidate.children.forEach { (name, dupFile) ->
-                val existingInWinner = winnerFiles[name]
-                val shouldCopyToWinner = existingInWinner == null ||
-                    (existingInWinner.size <= 0L && dupFile.size > 0L) ||
-                    (dupFile.size > 0L && dupFile.lastModified > existingInWinner.lastModified)
-                if (shouldCopyToWinner) {
-                    val copiedUri = copyFileEntryToDirectory(
-                        source = dupFile,
-                        destFolderUri = winner.dir.uri,
-                        existingTargetUri = existingInWinner?.uri
-                    )
-                    if (copiedUri != null) {
-                        winnerFiles[name] = dupFile.copy(uri = copiedUri)
-                    }
-                }
-            }
-
-            // Delete remaining children before removing the duplicate directory so both
-            // cloud providers and local ExternalStorageProvider allow folder deletion.
-            runCatching {
-                listChildEntries(treeUri, candidate.dir.docId).forEach { child ->
-                    runCatching { DocumentsContract.deleteDocument(resolver, child.uri) }
-                }
-            }
-            runCatching { DocumentsContract.deleteDocument(resolver, candidate.dir.uri) }
-        }
-
-        return winner.dir.uri
-    }
-
-    private fun copyFileEntryToDirectory(
-        source: ChildEntry,
-        destFolderUri: Uri,
-        existingTargetUri: Uri?
-    ): Uri? {
-        val bytes = runCatching {
-            resolver.openInputStream(source.uri)?.use { it.readBytes() }
-        }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return null
-
-        if (existingTargetUri != null && writeBytesToDocument(existingTargetUri, bytes)) {
-            return existingTargetUri
-        }
-        if (existingTargetUri != null) {
-            runCatching { DocumentsContract.deleteDocument(resolver, existingTargetUri) }
-        }
-        val mime = source.mimeType.takeIf { it.isNotBlank() && it != DocumentsContract.Document.MIME_TYPE_DIR }
-            ?: "image/png"
-        val created = runCatching {
-            DocumentsContract.createDocument(resolver, destFolderUri, mime, source.name)
-        }.getOrNull() ?: return null
-        return if (writeBytesToDocument(created, bytes)) created else null
-    }
-
-    private fun listChildDocumentEntries(treeUri: Uri, parentDocId: String): Map<String, ChildEntry> {
-        val rawFiles = listChildEntries(treeUri, parentDocId).filter { !it.isDirectory }
-        return deduplicateNamedFiles(rawFiles)
-    }
-
-    private fun listChildDocuments(treeUri: Uri, parentDocId: String): MutableMap<String, Uri> =
-        listChildDocumentEntries(treeUri, parentDocId)
-            .mapValuesTo(mutableMapOf()) { (_, entry) -> entry.uri }
-
-    /**
-     * When multiple files share the exact same display name in a folder (e.g. on Google
-     * Drive), keeps the most recently modified non-empty file and deletes the older copies.
-     */
-    private fun deduplicateNamedFiles(entries: List<ChildEntry>): Map<String, ChildEntry> {
-        val byName = LinkedHashMap<String, MutableList<ChildEntry>>()
-        entries.forEach { entry ->
-            byName.getOrPut(entry.name) { mutableListOf() }.add(entry)
-        }
-        val result = LinkedHashMap<String, ChildEntry>(byName.size)
-        byName.forEach { (name, group) ->
-            if (group.size == 1) {
-                result[name] = group.single()
-            } else {
-                val winner = group.maxWith(
-                    compareBy<ChildEntry>(
-                        { it.size > 0L },
-                        { it.lastModified },
-                        { it.size }
-                    )
-                )
-                group.forEach { entry ->
-                    if (entry.uri != winner.uri) {
-                        runCatching { DocumentsContract.deleteDocument(resolver, entry.uri) }
-                    }
-                }
-                result[name] = winner
-            }
-        }
-        return result
-    }
-
-    private fun listChildEntries(treeUri: Uri, parentDocId: String): List<ChildEntry> {
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
-        val result = mutableListOf<ChildEntry>()
-        queryDocumentCursor(
-            childrenUri,
-            arrayOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE,
-                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-                DocumentsContract.Document.COLUMN_SIZE
-            )
-        )?.use { cursor ->
-            val idIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-            val nameIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-            val mimeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
-            val modIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-            val sizeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
-            while (cursor.moveToNext()) {
-                val docId = cursor.optString(idIdx) ?: continue
-                val name = cursor.optString(nameIdx)?.takeIf { it.isNotBlank() } ?: continue
-                val mime = cursor.optString(mimeIdx).orEmpty()
-                val lastModified = cursor.optLong(modIdx, 0L)
-                val size = cursor.optLong(sizeIdx, 0L)
-                result.add(
-                    ChildEntry(
-                        docId = docId,
-                        uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId),
-                        name = name,
-                        mimeType = mime,
-                        lastModified = lastModified,
-                        size = size
-                    )
-                )
-            }
-        }
-        return result
-    }
-
-    private fun Cursor.optString(index: Int): String? =
-        if (index >= 0 && !isNull(index)) getString(index) else null
-
-    private fun Cursor.optLong(index: Int, default: Long): Long =
-        if (index >= 0 && !isNull(index)) getLong(index) else default
-
-    private fun persistPermission(uri: Uri) {
-        runCatching {
-            resolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            )
-        }
-    }
-
-    private fun treeDisplayName(treeUri: Uri): String? = runCatching {
-        val documentUri = DocumentsContract.buildDocumentUriUsingTree(
-            treeUri,
-            DocumentsContract.getTreeDocumentId(treeUri)
-        )
-        queryDocumentCursor(
-            documentUri,
-            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0) else null
-        }
-    }.getOrNull()
-
-    /**
-     * Triggers an explicit SAF refresh on a directory (both its document URI and children URI)
-     * so cloud providers such as Google Drive pull fresh folder listings from the server rather
-     * than serving a stale local cache. If the provider signals `EXTRA_LOADING`, waits briefly
-     * for its content notification before proceeding.
-     */
-    private suspend fun forceRefreshFolder(treeUri: Uri, docId: String) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
-        runCatching { resolver.refresh(docUri, Bundle.EMPTY, null) }
-        runCatching { resolver.refresh(childrenUri, Bundle.EMPTY, null) }
-        awaitProviderLoadingIfNeeded(childrenUri)
-    }
-
-    private fun refreshDocumentUri(docUri: Uri) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            runCatching { resolver.refresh(docUri, Bundle.EMPTY, null) }
-        }
-    }
-
-    private suspend fun awaitProviderLoadingIfNeeded(childrenUri: Uri) {
-        var isLoading = false
-        var notifyUri: Uri? = null
-        runCatching {
-            queryDocumentCursor(
-                childrenUri,
-                arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-            )?.use { cursor ->
-                val extras = cursor.extras
-                isLoading = extras?.getBoolean(DocumentsContract.EXTRA_LOADING, false) == true
-                if (isLoading) {
-                    notifyUri = cursor.notificationUri ?: childrenUri
-                }
-            }
-        }
-        if (!isLoading) return
-
-        val targetUri = notifyUri ?: childrenUri
-        val changed = CompletableDeferred<Unit>()
-        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) {
-                changed.complete(Unit)
-            }
-
-            override fun onChange(selfChange: Boolean, uri: Uri?) {
-                changed.complete(Unit)
-            }
-        }
-        val registered = runCatching {
-            resolver.registerContentObserver(targetUri, true, observer)
-            true
-        }.getOrDefault(false)
-        try {
-            if (registered) {
-                withTimeoutOrNull(DRIVE_LOADING_TIMEOUT_MS) {
-                    changed.await()
-                }
-            } else {
-                delay(DRIVE_FILE_RETRY_DELAY_MS)
-            }
-        } finally {
-            if (registered) {
-                runCatching { resolver.unregisterContentObserver(observer) }
-            }
-        }
-    }
-
-    private fun queryDocumentCursor(uri: Uri, projection: Array<String>): Cursor? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            resolver.query(uri, projection, Bundle.EMPTY, null)
-        } else {
-            @Suppress("DEPRECATION")
-            resolver.query(uri, projection, null, null, null)
-        }
-
     // ---- JSON & Codec -------------------------------------------------------------
 
     private fun buildDocument(
@@ -1276,20 +983,6 @@ class LibrarySyncService(
         appCustomizations = appCustomizations,
         appPosterHashOverrides = appPosterHashOverrides
     )
-
-    private fun parseDocument(text: String): Snapshot =
-        LibrarySyncCodec.parse(text).let {
-            Snapshot(
-                updatedAt = it.updatedAt,
-                items = it.items,
-                signature = it.signature,
-                authoritative = it.authoritative,
-                tracksLocalPosters = it.tracksLocalPosters,
-                posterHashes = it.posterHashes,
-                appCustomizations = it.appCustomizations,
-                appPosterHashes = it.appPosterHashes
-            )
-        }
 
     private fun syncable(rows: List<GameItem>): List<GameItem> = LibrarySyncCodec.syncable(rows)
 
@@ -1320,12 +1013,13 @@ class LibrarySyncService(
         const val FILE_NAME = "nexus-library.json"
         const val POSTERS_DIR_NAME = "posters"
 
-        private const val MIME_TYPE = "application/json"
         private const val WRITE_DEBOUNCE_MS = 750L
-        private const val DRIVE_LOADING_TIMEOUT_MS = 3_000L
-        private const val DRIVE_FILE_RETRY_DELAY_MS = 250L
 
-        private const val KEY_TREE_URI = "library_sync_tree_uri"
+        internal const val KEY_SYNC_MODE = "library_sync_mode"
+        internal const val KEY_TREE_URI = "library_sync_tree_uri"
+        internal const val KEY_DRIVE_FOLDER_ID = "library_sync_drive_folder_id"
+        internal const val KEY_DRIVE_ACCOUNT_EMAIL = "library_sync_drive_account_email"
+        internal const val KEY_DRIVE_ACCOUNT_NAME = "library_sync_drive_account_name"
         private const val KEY_TARGET_LABEL = "library_sync_target_label"
         private const val KEY_UPDATED_AT = "library_sync_updated_at"
         private const val KEY_SIGNATURE = "library_sync_signature"

@@ -169,6 +169,26 @@ class GameRepository(
     }
 
     /**
+     * One-time migration for existing databases that previously categorized installed
+     * GeForce NOW, Amazon Luna, or Moonlight client apps as Games.
+     */
+    suspend fun recategorizeStreamingClientsAsApps(packages: Set<String>) {
+        if (packages.isEmpty()) return
+        val updates = gameDao.getGamesByTypeNow(GameType.INSTALLED_APP)
+            .filter { !it.isDeleted && it.isGame && it.packageName in packages }
+            .map { item ->
+                item.copy(
+                    isGame = false,
+                    genre = if (item.genre == "Installed Game") "Installed Application" else item.genre,
+                    tags = if (item.tags == "Installed,Game,Android") "Installed,Android,App" else item.tags
+                )
+            }
+        if (updates.isNotEmpty()) {
+            gameDao.updateItemsInTransaction(updates)
+        }
+    }
+
+    /**
      * Installed games are detected without any artwork. Resolve a real portrait poster for
      * each one once, in small parallel batches, and store it as SteamGridDB artwork. Items
      * that already have artwork (including user-chosen artwork) are never touched.
@@ -453,40 +473,62 @@ class GameRepository(
      */
     suspend fun applySyncedAppCustomizations(
         remoteApps: List<GameItem>,
-        tracksLocalPosters: Boolean = false
+        tracksLocalPosters: Boolean = false,
+        preserveLocalCustomizations: Boolean = false
     ) {
         if (remoteApps.isEmpty()) return
         val localById = gameDao.getGamesByTypeNow(GameType.INSTALLED_APP).associateBy { it.id }
         remoteApps.forEach { remote ->
             val existing = localById[remote.id] ?: return@forEach
             if (existing.isDeleted) return@forEach
-            val resolvedPosterUrl = remote.posterUrl
-                ?: if (tracksLocalPosters) null
-                else existing.posterUrl?.takeIf {
-                    it.startsWith("file:") && !it.contains("-synced")
-                }
-            val resolvedNsfwPosterUrl = remote.nsfwPosterUrl
-                ?: if (tracksLocalPosters) null
-                else existing.nsfwPosterUrl?.takeIf {
-                    it.startsWith("file:") && !it.contains("-nsfw-synced")
-                }
+            val keepLocal = preserveLocalCustomizations && LibrarySyncCodec.isSyncableAppCustomization(existing)
+            val resolvedPosterUrl = if (keepLocal) {
+                existing.posterUrl ?: remote.posterUrl
+            } else {
+                remote.posterUrl
+                    ?: if (tracksLocalPosters) null
+                    else existing.posterUrl?.takeIf {
+                        it.startsWith("file:") && !it.contains("-synced")
+                    }
+            }
+            val resolvedNsfwPosterUrl = if (keepLocal) {
+                existing.nsfwPosterUrl ?: remote.nsfwPosterUrl
+            } else {
+                remote.nsfwPosterUrl
+                    ?: if (tracksLocalPosters) null
+                    else existing.nsfwPosterUrl?.takeIf {
+                        it.startsWith("file:") && !it.contains("-nsfw-synced")
+                    }
+            }
             gameDao.insertGame(
                 existing.copy(
-                    title = if (remote.isCustomized && remote.title.isNotBlank()) remote.title else existing.title,
-                    isGame = remote.isGame,
+                    title = if (!keepLocal && remote.isCustomized && remote.title.isNotBlank()) {
+                        remote.title
+                    } else {
+                        existing.title
+                    },
+                    isGame = if (keepLocal) existing.isGame else remote.isGame,
                     isFavorite = existing.isFavorite,
                     favoriteOrder = existing.favoriteOrder,
-                    isHidden = remote.isHidden,
-                    isCustomized = remote.isCustomized,
+                    isHidden = if (keepLocal) existing.isHidden else remote.isHidden,
+                    isCustomized = existing.isCustomized || remote.isCustomized,
                     posterUrl = resolvedPosterUrl,
                     nsfwPosterUrl = resolvedNsfwPosterUrl,
-                    logoUrl = remote.logoUrl,
-                    overlayLogo = remote.overlayLogo,
-                    nsfwLogoUrl = remote.nsfwLogoUrl,
-                    overlayNsfwLogo = remote.overlayNsfwLogo,
-                    heroBannerUrl = remote.heroBannerUrl
-                        ?: existing.heroBannerUrl?.takeIf { it.startsWith("file:") },
-                    customArtworkSource = remote.customArtworkSource
+                    logoUrl = if (keepLocal) existing.logoUrl ?: remote.logoUrl else remote.logoUrl,
+                    overlayLogo = if (keepLocal) existing.overlayLogo else remote.overlayLogo,
+                    nsfwLogoUrl = if (keepLocal) existing.nsfwLogoUrl ?: remote.nsfwLogoUrl else remote.nsfwLogoUrl,
+                    overlayNsfwLogo = if (keepLocal) existing.overlayNsfwLogo else remote.overlayNsfwLogo,
+                    heroBannerUrl = if (keepLocal) {
+                        existing.heroBannerUrl ?: remote.heroBannerUrl
+                    } else {
+                        remote.heroBannerUrl
+                            ?: existing.heroBannerUrl?.takeIf { it.startsWith("file:") }
+                    },
+                    customArtworkSource = if (keepLocal) {
+                        existing.customArtworkSource ?: remote.customArtworkSource
+                    } else {
+                        remote.customArtworkSource
+                    }
                 )
             )
         }
@@ -496,6 +538,78 @@ class GameRepository(
         if (items.isNotEmpty()) {
             gameDao.insertGames(items)
         }
+    }
+
+    /**
+     * Non-destructively merges [remoteItems] into the existing local library when connecting
+     * or switching sync methods so local games, shortcuts, favorites, and artwork are never lost.
+     *
+     * Returns the number of net-new live items added from [remoteItems].
+     */
+    suspend fun mergeSyncedLibraryPreservingExisting(
+        remoteItems: List<GameItem>,
+        allowOverwriteMatching: Boolean
+    ): Int {
+        val local = gameDao.getAllItemsNow()
+        val localById = local.associateBy { it.id }
+        var addedCount = 0
+
+        remoteItems.forEach { remote ->
+            if (!isSyncableItem(remote)) return@forEach
+            val existing = localById[remote.id]
+            if (existing == null) {
+                if (!remote.isDeleted) {
+                    gameDao.insertGame(
+                        remote.copy(
+                            isPinned = false,
+                            isFavorite = false,
+                            favoriteOrder = 0
+                        )
+                    )
+                    addedCount++
+                }
+                return@forEach
+            }
+
+            if (existing.isDeleted || remote.isDeleted) {
+                return@forEach
+            }
+
+            val merged = if (allowOverwriteMatching) {
+                remote.copy(
+                    isPinned = existing.isPinned,
+                    isFavorite = existing.isFavorite,
+                    favoriteOrder = existing.favoriteOrder,
+                    posterUrl = remote.posterUrl ?: existing.posterUrl,
+                    nsfwPosterUrl = remote.nsfwPosterUrl ?: existing.nsfwPosterUrl,
+                    logoUrl = remote.logoUrl ?: existing.logoUrl,
+                    overlayLogo = remote.overlayLogo || existing.overlayLogo,
+                    nsfwLogoUrl = remote.nsfwLogoUrl ?: existing.nsfwLogoUrl,
+                    overlayNsfwLogo = remote.overlayNsfwLogo || existing.overlayNsfwLogo,
+                    heroBannerUrl = remote.heroBannerUrl ?: existing.heroBannerUrl,
+                    iconUrl = remote.iconUrl ?: existing.iconUrl,
+                    customArtworkSource = remote.customArtworkSource ?: existing.customArtworkSource,
+                    lastPlayedTimestamp = maxOf(remote.lastPlayedTimestamp, existing.lastPlayedTimestamp),
+                    playCount = maxOf(remote.playCount, existing.playCount)
+                )
+            } else {
+                existing.copy(
+                    posterUrl = existing.posterUrl ?: remote.posterUrl,
+                    nsfwPosterUrl = existing.nsfwPosterUrl ?: remote.nsfwPosterUrl,
+                    logoUrl = existing.logoUrl ?: remote.logoUrl,
+                    nsfwLogoUrl = existing.nsfwLogoUrl ?: remote.nsfwLogoUrl,
+                    heroBannerUrl = existing.heroBannerUrl ?: remote.heroBannerUrl,
+                    iconUrl = existing.iconUrl ?: remote.iconUrl,
+                    customArtworkSource = existing.customArtworkSource ?: remote.customArtworkSource,
+                    lastPlayedTimestamp = maxOf(existing.lastPlayedTimestamp, remote.lastPlayedTimestamp),
+                    playCount = maxOf(existing.playCount, remote.playCount)
+                )
+            }
+            if (merged != existing) {
+                gameDao.insertGame(merged)
+            }
+        }
+        return addedCount
     }
 
     /**

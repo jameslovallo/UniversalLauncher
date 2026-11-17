@@ -79,12 +79,13 @@ class InstalledAppsManager(private val context: Context) {
             val label = resolveInfo.loadLabel(packageManager).toString()
             val activityName = resolveInfo.activityInfo.name
             val appInfo = resolveInfo.activityInfo.applicationInfo
-            val isGameApp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                appInfo.category == android.content.pm.ApplicationInfo.CATEGORY_GAME
+            val systemIsGame = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                appInfo.category == ApplicationInfo.CATEGORY_GAME
             } else {
                 @Suppress("DEPRECATION")
-                (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME) != 0
+                (appInfo.flags and ApplicationInfo.FLAG_IS_GAME) != 0
             }
+            val isGameApp = resolveInstalledAppIsGame(pkg, systemIsGame)
 
             // Render the app icon (and 16:9 TV banner when declared) to cached PNGs.
             val versionStamp = packageVersionStamp(pkg)
@@ -663,6 +664,15 @@ internal fun selectLunaPwaPackage(
     return domainSpecific.firstOrNull { it.contains("webapk", ignoreCase = true) }
         ?: domainSpecific.firstOrNull()
 }
+
+internal val STREAMING_CLIENT_APP_PACKAGES: Set<String> = buildSet {
+    add("com.nvidia.geforcenow")
+    add(AmazonLunaService.LUNA_PACKAGE_NAME)
+    addAll(MOONLIGHT_PACKAGES)
+}
+
+internal fun resolveInstalledAppIsGame(packageName: String, systemIsGame: Boolean): Boolean =
+    systemIsGame && packageName !in STREAMING_CLIENT_APP_PACKAGES
 
 internal fun isProtectedApplicationFlags(flags: Int): Boolean =
     (flags and PROTECTED_APP_FLAGS) != 0

@@ -11,6 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -20,8 +21,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -40,6 +43,7 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -227,5 +231,47 @@ fun Modifier.tvFocusBorder(
         this.border(unfocusedWidth, unfocusedColor, shape)
     } else {
         this
+    }
+}
+
+/**
+ * Ensures pressing [Key.DirectionDown] from any row in a flat [LazyVerticalGrid] that has a
+ * row below it advances focus to the last item on that next row when there is no card
+ * directly beneath the focused column.
+ */
+fun Modifier.flatGridDownNextRowFallback(
+    index: Int,
+    columns: Int,
+    itemCount: Int,
+    gridState: LazyGridState,
+    requesters: List<FocusRequester>,
+    scope: CoroutineScope,
+    gridIndexOffset: Int = 0
+): Modifier = if (columns <= 1 || itemCount <= 0) {
+    this
+} else {
+    onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+            val currentRow = index / columns
+            val lastRow = (itemCount - 1) / columns
+            if (currentRow < lastRow && index + columns >= itemCount) {
+                val targetIndex = itemCount - 1
+                val focusedImmediately = runCatching {
+                    requesters.getOrNull(targetIndex)?.requestFocus()
+                }.isSuccess
+                if (!focusedImmediately) {
+                    scope.launch {
+                        gridState.animateScrollToItem(targetIndex + gridIndexOffset)
+                        withFrameNanos { }
+                        runCatching { requesters.getOrNull(targetIndex)?.requestFocus() }
+                    }
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
 }

@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -55,6 +56,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -91,10 +93,14 @@ fun FolderContentsSheet(
     onCustomizeFolder: () -> Unit,
     onManageFolderApps: () -> Unit,
     onDismiss: () -> Unit,
-    onAppFocus: (GameItem) -> Unit = {}
+    onAppFocus: (GameItem) -> Unit = {},
+    configuredColumns: Int = 0
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val initialFocusRequester = remember { FocusRequester() }
+    val itemFocusRequesters = remember(apps.size) { List(apps.size) { FocusRequester() } }
+    val gridState = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -228,13 +234,18 @@ fun FolderContentsSheet(
                     val availableWidth = maxWidth
                     val spacing = 12.dp
                     val minCardWidth = 156.dp
-                    val columns = minOf(
-                        TV_FAVORITES_MAX_COLUMNS,
-                        maxOf(2, ((availableWidth + spacing) / (minCardWidth + spacing)).toInt())
-                    )
+                    val columns = if (configuredColumns > 0) {
+                        configuredColumns
+                    } else {
+                        minOf(
+                            TV_FAVORITES_MAX_COLUMNS,
+                            maxOf(2, ((availableWidth + spacing) / (minCardWidth + spacing)).toInt())
+                        )
+                    }
 
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(columns),
+                        state = gridState,
                         contentPadding = PaddingValues(top = 12.dp, bottom = 20.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         horizontalArrangement = Arrangement.spacedBy(spacing),
@@ -259,7 +270,16 @@ fun FolderContentsSheet(
                                 onFocus = handleFocus,
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .focusRequester(itemFocusRequesters[index])
                                     .then(if (index == 0) Modifier.focusRequester(initialFocusRequester) else Modifier)
+                                    .flatGridDownNextRowFallback(
+                                        index = index,
+                                        columns = columns,
+                                        itemCount = apps.size,
+                                        gridState = gridState,
+                                        requesters = itemFocusRequesters,
+                                        scope = scope
+                                    )
                             )
                         }
                     }
@@ -272,10 +292,15 @@ fun FolderContentsSheet(
                 ) {
                     val availableWidth = maxWidth
                     val tileMinSize = 78.dp
-                    val columns = maxOf(3, (availableWidth / tileMinSize).toInt())
+                    val columns = if (configuredColumns > 0) {
+                        configuredColumns
+                    } else {
+                        maxOf(3, (availableWidth / tileMinSize).toInt())
+                    }
 
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(columns),
+                        state = gridState,
                         contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(0.dp),
                         horizontalArrangement = Arrangement.spacedBy(0.dp),
@@ -301,9 +326,61 @@ fun FolderContentsSheet(
                                 contentPadding = PaddingValues(horizontal = 5.dp, vertical = 10.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .focusRequester(itemFocusRequesters[index])
                                     .then(if (index == 0) Modifier.focusRequester(initialFocusRequester) else Modifier)
+                                    .flatGridDownNextRowFallback(
+                                        index = index,
+                                        columns = columns,
+                                        itemCount = apps.size,
+                                        gridState = gridState,
+                                        requesters = itemFocusRequesters,
+                                        scope = scope
+                                    )
                             )
                         }
+                    }
+                }
+            } else if (configuredColumns > 1) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(configuredColumns),
+                    state = gridState,
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                        .testTag("folder_contents_list")
+                ) {
+                    gridItemsIndexed(
+                        items = apps,
+                        key = { _, app -> app.id }
+                    ) { index, app ->
+                        val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
+                        val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
+                        val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
+                        AppTextRow(
+                            app = app,
+                            isFocused = app.id == focusedItemId,
+                            showFocusEffects = showFocusEffects,
+                            testTag = "folder_app_row_${app.id}",
+                            onClick = handleClick,
+                            onLongClick = handleLongClick,
+                            onFocus = handleFocus,
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(itemFocusRequesters[index])
+                                .then(if (index == 0) Modifier.focusRequester(initialFocusRequester) else Modifier)
+                                .flatGridDownNextRowFallback(
+                                    index = index,
+                                    columns = configuredColumns,
+                                    itemCount = apps.size,
+                                    gridState = gridState,
+                                    requesters = itemFocusRequesters,
+                                    scope = scope
+                                )
+                        )
                     }
                 }
             } else {

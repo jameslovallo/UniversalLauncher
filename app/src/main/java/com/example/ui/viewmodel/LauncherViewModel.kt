@@ -1,7 +1,12 @@
 package com.example.ui.viewmodel
 
+import android.app.Activity
 import android.app.Application
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
@@ -10,15 +15,20 @@ import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
 import com.example.data.service.AmazonLunaService
+import com.example.data.service.DriveAuthAccount
+import com.example.data.service.DriveAuthorizationRequiredException
+import com.example.data.service.DriveAuthorizationStep
 import com.example.data.service.GeForceNowService
 import com.example.data.service.IconPackIcon
 import com.example.data.service.IconPackInfo
 import com.example.data.service.IconPackManager
 import com.example.data.service.IconPackOverridesStore
 import com.example.data.service.InstalledAppsManager
+import com.example.data.service.LibrarySyncMode
 import com.example.data.service.LibrarySyncOutcome
 import com.example.data.service.LibrarySyncService
 import com.example.data.service.MOONLIGHT_PACKAGES
+import com.example.data.service.STREAMING_CLIENT_APP_PACKAGES
 import com.example.data.service.SteamGridDbService
 import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherApp
@@ -30,6 +40,7 @@ import com.example.input.ControllerManager
 import com.example.ui.components.hasCustomAppIconUrl
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -40,6 +51,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.io.File
 
 enum class MainLibraryTab {
     APPS,
@@ -180,6 +193,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     )
     val appsBackgroundOpacity: StateFlow<Float> = _appsBackgroundOpacity.asStateFlow()
 
+    // File-backed background wallpaper for TV devices (Android TV lacks a system live wallpaper).
+    private val _tvWallpaperUrl = MutableStateFlow(
+        prefs.getString(KEY_TV_WALLPAPER_URL, null)?.takeIf { it.isNotBlank() }
+    )
+    val tvWallpaperUrl: StateFlow<String?> = _tvWallpaperUrl.asStateFlow()
+
+    // Custom column count for app rows across Favorites, App List, and Folders (0 = Auto).
+    private val _appGridColumns = MutableStateFlow(
+        prefs.getInt(KEY_APP_GRID_COLUMNS, 0).coerceIn(0, MAX_APP_GRID_COLUMNS)
+    )
+    val appGridColumns: StateFlow<Int> = _appGridColumns.asStateFlow()
+
     private val _themeStyle = MutableStateFlow(
         ThemeStyle.fromStorage(prefs.getString("theme_style", ThemeStyle.WALLPAPER.name))
     )
@@ -232,11 +257,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _librarySyncConfigured = MutableStateFlow(librarySyncService.isConfigured)
     val librarySyncConfigured: StateFlow<Boolean> = _librarySyncConfigured.asStateFlow()
 
+    private val _librarySyncMode = MutableStateFlow(librarySyncService.syncMode)
+    val librarySyncMode: StateFlow<LibrarySyncMode> = _librarySyncMode.asStateFlow()
+
     private val _librarySyncTarget = MutableStateFlow(librarySyncService.targetLabel())
     val librarySyncTarget: StateFlow<String?> = _librarySyncTarget.asStateFlow()
 
     private val _librarySyncLastSyncedAt = MutableStateFlow(librarySyncService.lastSyncedAt())
     val librarySyncLastSyncedAt: StateFlow<Long?> = _librarySyncLastSyncedAt.asStateFlow()
+
+    private val _librarySyncNeedsReauth = MutableStateFlow(false)
+    val librarySyncNeedsReauth: StateFlow<Boolean> = _librarySyncNeedsReauth.asStateFlow()
+
+    private val _pendingDriveAuthIntent = MutableStateFlow<PendingIntent?>(null)
+    val pendingDriveAuthIntent: StateFlow<PendingIntent?> = _pendingDriveAuthIntent.asStateFlow()
 
     private val _gamesRefreshing = MutableStateFlow(false)
     val gamesRefreshing: StateFlow<Boolean> = _gamesRefreshing.asStateFlow()
@@ -295,22 +329,36 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 prefs.edit().putBoolean(KEY_LEGACY_CLEANUP_DONE, true).apply()
             }
 
+            if (!prefs.getBoolean(KEY_STREAMING_CLIENTS_AS_APPS_DONE, false)) {
+                repository.recategorizeStreamingClientsAsApps(STREAMING_CLIENT_APP_PACKAGES)
+                prefs.edit().putBoolean(KEY_STREAMING_CLIENTS_AS_APPS_DONE, true).apply()
+            }
+
             // Restore the library file before anything else can write over it.
             if (librarySyncService.isConfigured) {
                 runCatching { librarySyncService.syncNow() }
                     .onSuccess { outcome ->
-                        if (outcome is LibrarySyncOutcome.Applied) {
-                            _librarySyncStatus.value =
-                                "Restored ${outcome.itemCount} games from the sync file"
+                        _librarySyncNeedsReauth.value = false
+                        if (outcome is LibrarySyncOutcome.Applied || outcome is LibrarySyncOutcome.Merged) {
+                            _librarySyncStatus.value = formatSyncOutcomeStatus(
+                                outcome,
+                                librarySyncService.syncMode
+                            )
                         }
                     }
-                    .onFailure {
-                        _librarySyncStatus.value = it.message ?: "Library sync failed"
+                    .onFailure { error ->
+                        if (error is DriveAuthorizationRequiredException) {
+                            _librarySyncNeedsReauth.value = true
+                        }
+                        _librarySyncStatus.value = error.message ?: "Library sync failed"
                     }
             }
             refreshLibrarySyncState()
-            librarySyncService.observeLibraryChanges(viewModelScope) { message ->
-                _librarySyncStatus.value = message
+            librarySyncService.observeLibraryChanges(viewModelScope) { error ->
+                if (error is DriveAuthorizationRequiredException) {
+                    _librarySyncNeedsReauth.value = true
+                }
+                _librarySyncStatus.value = error.message ?: "Library sync failed"
             }
 
             repository.backfillGfnArtwork()
@@ -1222,6 +1270,34 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appsBackgroundOpacity.value = clamped
     }
 
+    fun setTvWallpaper(uri: Uri) {
+        viewModelScope.launch {
+            val storedUrl = withContext(Dispatchers.IO) {
+                copyTvWallpaperImage(getApplication(), uri)
+            } ?: return@launch
+            prefs.edit().putString(KEY_TV_WALLPAPER_URL, storedUrl).apply()
+            _tvWallpaperUrl.value = storedUrl
+        }
+    }
+
+    fun clearTvWallpaper() {
+        prefs.edit().remove(KEY_TV_WALLPAPER_URL).apply()
+        _tvWallpaperUrl.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                File(getApplication<Application>().filesDir, TV_WALLPAPER_DIR)
+                    .listFiles()
+                    ?.forEach { it.delete() }
+            }
+        }
+    }
+
+    fun setAppGridColumns(columns: Int) {
+        val normalized = columns.coerceIn(0, MAX_APP_GRID_COLUMNS)
+        prefs.edit().putInt(KEY_APP_GRID_COLUMNS, normalized).apply()
+        _appGridColumns.value = normalized
+    }
+
     fun setThemeStyle(style: ThemeStyle) {
         prefs.edit().putString("theme_style", style.name).apply()
         _themeStyle.value = style
@@ -1310,28 +1386,125 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // ---- Library folder sync -------------------------------------------------------
+    // ---- Library sync (Google Drive API or Local Folder) ---------------------------
 
-    /** Uses a folder as the sync target; Nexus stores nexus-library.json and posters inside it. */
+    /** Uses a local/SAF folder as the exclusive sync target without losing existing library data. */
     fun chooseSyncFolder(uri: Uri) {
-        runLibrarySync("Reading library folder…") { librarySyncService.configureFolder(uri) }
+        runLibrarySync("Switching to folder sync…") {
+            librarySyncService.configureFolder(uri).also {
+                _librarySyncNeedsReauth.value = false
+            }
+        }
+    }
+
+    /** Starts Google Drive (`drive.file`) authorization & configures it as the exclusive sync target. */
+    fun connectGoogleDrive() {
+        if (_librarySyncBusy.value) return
+        viewModelScope.launch {
+            _librarySyncBusy.value = true
+            _librarySyncStatus.value = "Connecting to Google Drive…"
+            try {
+                when (val step = librarySyncService.beginGoogleDriveAuthorization()) {
+                    is DriveAuthorizationStep.NeedsUserConsent -> {
+                        _pendingDriveAuthIntent.value = step.pendingIntent
+                        _librarySyncStatus.value = "Approve Google Drive access to continue"
+                        _librarySyncBusy.value = false
+                    }
+                    is DriveAuthorizationStep.Authorized -> {
+                        finishGoogleDriveConfiguration(step.account)
+                    }
+                }
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                _librarySyncStatus.value = "Google Drive sign-in cancelled"
+                _librarySyncBusy.value = false
+            } catch (error: Throwable) {
+                _librarySyncStatus.value = error.message ?: "Google Drive sign-in failed"
+                _librarySyncBusy.value = false
+            }
+        }
+    }
+
+    fun consumePendingDriveAuthIntent() {
+        _pendingDriveAuthIntent.value = null
+    }
+
+    fun onGoogleDriveAuthorizationResult(resultCode: Int, data: Intent?) {
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            _librarySyncStatus.value = "Google Drive sign-in cancelled"
+            _librarySyncBusy.value = false
+            return
+        }
+        viewModelScope.launch {
+            _librarySyncBusy.value = true
+            _librarySyncStatus.value = "Syncing with Google Drive…"
+            try {
+                val authorized = librarySyncService.resolveGoogleDriveAuthorization(data)
+                finishGoogleDriveConfiguration(authorized.account)
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                _librarySyncStatus.value = "Google Drive sign-in cancelled"
+                _librarySyncBusy.value = false
+            } catch (error: Throwable) {
+                if (error is DriveAuthorizationRequiredException) {
+                    _librarySyncNeedsReauth.value = true
+                }
+                _librarySyncStatus.value = error.message ?: "Google Drive sync failed"
+                refreshLibrarySyncState()
+                _librarySyncBusy.value = false
+            }
+        }
+    }
+
+    private suspend fun finishGoogleDriveConfiguration(account: DriveAuthAccount?) {
+        runCatching {
+            if (librarySyncService.syncMode == LibrarySyncMode.GOOGLE_DRIVE && _librarySyncNeedsReauth.value) {
+                librarySyncService.syncNow()
+            } else {
+                librarySyncService.configureGoogleDrive(account)
+            }
+        }.onSuccess { outcome ->
+            _librarySyncNeedsReauth.value = false
+            _librarySyncStatus.value = formatSyncOutcomeStatus(outcome, LibrarySyncMode.GOOGLE_DRIVE)
+        }.onFailure { error ->
+            if (error is DriveAuthorizationRequiredException) {
+                _librarySyncNeedsReauth.value = true
+                error.pendingIntent?.let { _pendingDriveAuthIntent.value = it }
+            }
+            _librarySyncStatus.value = error.message ?: "Google Drive sync failed"
+        }
+        refreshLibrarySyncState()
+        _librarySyncBusy.value = false
     }
 
     fun syncLibraryNow() {
         if (!librarySyncService.isConfigured) {
-            _librarySyncStatus.value = "Choose a sync folder first"
+            _librarySyncStatus.value = "Choose Google Drive or a sync folder first"
             return
         }
-        runLibrarySync("Syncing library folder…") { librarySyncService.syncNow() }
+        if (librarySyncService.syncMode == LibrarySyncMode.GOOGLE_DRIVE && _librarySyncNeedsReauth.value) {
+            connectGoogleDrive()
+            return
+        }
+        runLibrarySync(
+            if (librarySyncService.syncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                "Syncing with Google Drive…"
+            } else {
+                "Syncing library folder…"
+            }
+        ) {
+            librarySyncService.syncNow()
+        }
     }
 
     fun disconnectLibrarySync() {
-        librarySyncService.disconnect()
-        refreshLibrarySyncState()
-        _librarySyncStatus.value = "Library sync disconnected"
+        viewModelScope.launch {
+            librarySyncService.disconnect()
+            _librarySyncNeedsReauth.value = false
+            refreshLibrarySyncState()
+            _librarySyncStatus.value = "Library sync disconnected (local library kept)"
+        }
     }
 
-    /** Reads the sync folder when the device is unlocked. */
+    /** Reads the active sync target when the device is unlocked. */
     fun onDeviceUnlocked() {
         if (!librarySyncService.isConfigured || _librarySyncBusy.value) return
         lastResumeLibrarySyncMs = SystemClock.elapsedRealtime()
@@ -1351,13 +1524,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             runCatching { librarySyncService.syncNow() }
                 .onSuccess { outcome ->
-                    if (outcome is LibrarySyncOutcome.Applied) {
-                        _librarySyncStatus.value =
-                            "Restored ${outcome.itemCount} games and posters from sync folder"
+                    _librarySyncNeedsReauth.value = false
+                    if (outcome is LibrarySyncOutcome.Applied || outcome is LibrarySyncOutcome.Merged) {
+                        _librarySyncStatus.value = formatSyncOutcomeStatus(
+                            outcome,
+                            librarySyncService.syncMode
+                        )
                     }
                 }
-                .onFailure {
-                    _librarySyncStatus.value = it.message ?: "Library folder sync failed"
+                .onFailure { error ->
+                    if (error is DriveAuthorizationRequiredException) {
+                        _librarySyncNeedsReauth.value = true
+                    }
+                    _librarySyncStatus.value = error.message ?: "Library sync failed"
                 }
             refreshLibrarySyncState()
         }
@@ -1373,24 +1552,47 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             _librarySyncStatus.value = message
             runCatching { operation() }
                 .onSuccess { outcome ->
-                    _librarySyncStatus.value = when (outcome) {
-                        is LibrarySyncOutcome.Applied ->
-                            "Restored ${outcome.itemCount} games from the sync file"
-                        is LibrarySyncOutcome.WroteLocal ->
-                            "Saved ${outcome.itemCount} games to the sync file"
-                        LibrarySyncOutcome.UpToDate -> "Library is already up to date"
-                        LibrarySyncOutcome.NotConfigured -> "Choose a sync file or folder first"
-                    }
+                    _librarySyncNeedsReauth.value = false
+                    _librarySyncStatus.value = formatSyncOutcomeStatus(
+                        outcome,
+                        librarySyncService.syncMode
+                    )
                 }
-                .onFailure {
-                    _librarySyncStatus.value = it.message ?: "Library sync failed"
+                .onFailure { error ->
+                    if (error is DriveAuthorizationRequiredException) {
+                        _librarySyncNeedsReauth.value = true
+                        error.pendingIntent?.let { _pendingDriveAuthIntent.value = it }
+                    }
+                    _librarySyncStatus.value = error.message ?: "Library sync failed"
                 }
             refreshLibrarySyncState()
             _librarySyncBusy.value = false
         }
     }
 
+    private fun formatSyncOutcomeStatus(
+        outcome: LibrarySyncOutcome,
+        mode: LibrarySyncMode
+    ): String {
+        val targetName = if (mode == LibrarySyncMode.GOOGLE_DRIVE) "Google Drive" else "sync folder"
+        return when (outcome) {
+            is LibrarySyncOutcome.Applied ->
+                "Restored ${outcome.itemCount} games from $targetName"
+            is LibrarySyncOutcome.WroteLocal ->
+                "Saved ${outcome.itemCount} games to $targetName"
+            is LibrarySyncOutcome.Merged ->
+                if (outcome.addedFromRemote > 0) {
+                    "Synced ${outcome.itemCount} games to $targetName (merged ${outcome.addedFromRemote} remote)"
+                } else {
+                    "Synced ${outcome.itemCount} existing games to $targetName"
+                }
+            LibrarySyncOutcome.UpToDate -> "Library is already up to date"
+            LibrarySyncOutcome.NotConfigured -> "Choose Google Drive or a sync folder first"
+        }
+    }
+
     private fun refreshLibrarySyncState() {
+        _librarySyncMode.value = librarySyncService.syncMode
         _librarySyncConfigured.value = librarySyncService.isConfigured
         _librarySyncTarget.value = librarySyncService.targetLabel()
         _librarySyncLastSyncedAt.value = librarySyncService.lastSyncedAt()
@@ -1422,7 +1624,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     /**
      * Pull-to-refresh action on the Games tab: re-scans installed apps, fills missing
-     * game posters, and pulls/pushes the configured library sync folder.
+     * game posters, and pulls/pushes the configured library sync target.
      */
     fun refreshGamesLibrary() {
         if (_gamesRefreshing.value) return
@@ -1435,23 +1637,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 repository.matchMissingGamePosters()
                 if (librarySyncService.isConfigured) {
                     lastResumeLibrarySyncMs = SystemClock.elapsedRealtime()
+                    val activeMode = librarySyncService.syncMode
                     runCatching { librarySyncService.syncNow() }
                         .onSuccess { outcome ->
-                            val status = when (outcome) {
-                                is LibrarySyncOutcome.Applied ->
-                                    "Restored ${outcome.itemCount} games and posters from sync folder"
-                                is LibrarySyncOutcome.WroteLocal ->
-                                    "Saved ${outcome.itemCount} games to sync folder"
-                                LibrarySyncOutcome.UpToDate ->
-                                    "Library is already up to date"
-                                LibrarySyncOutcome.NotConfigured -> null
-                            }
-                            if (status != null) {
-                                _librarySyncStatus.value = status
+                            _librarySyncNeedsReauth.value = false
+                            if (outcome != LibrarySyncOutcome.NotConfigured) {
+                                _librarySyncStatus.value = formatSyncOutcomeStatus(outcome, activeMode)
                             }
                             when (outcome) {
                                 is LibrarySyncOutcome.Applied ->
-                                    _gamesRefreshFeedback.value = "Synced ${outcome.itemCount} games from folder"
+                                    _gamesRefreshFeedback.value = "Synced ${outcome.itemCount} games"
+                                is LibrarySyncOutcome.Merged ->
+                                    _gamesRefreshFeedback.value = "Synced ${outcome.itemCount} games"
                                 is LibrarySyncOutcome.WroteLocal ->
                                     _gamesRefreshFeedback.value = "Saved library updates"
                                 LibrarySyncOutcome.UpToDate ->
@@ -1460,7 +1657,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                             }
                         }
                         .onFailure { error ->
-                            val msg = error.message ?: "Library folder sync failed"
+                            if (error is DriveAuthorizationRequiredException) {
+                                _librarySyncNeedsReauth.value = true
+                            }
+                            val msg = error.message ?: "Library sync failed"
                             _librarySyncStatus.value = msg
                             _gamesRefreshFeedback.value = msg
                         }
@@ -1536,11 +1736,76 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private companion object {
-        const val DEFAULT_APPS_OPACITY = 0.6f
-        const val RESUME_SYNC_INTERVAL_MS = 15_000L
+    private fun copyTvWallpaperImage(context: Context, uri: Uri): String? =
+        runCatching {
+            val dir = File(context.filesDir, TV_WALLPAPER_DIR).apply { mkdirs() }
+            val maxDimPx = 2560
+
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                BitmapFactory.decodeStream(input, null, bounds)
+            }
+
+            val target = File(dir, "wallpaper-${System.currentTimeMillis()}.jpg")
+            if (bounds.outWidth > maxDimPx || bounds.outHeight > maxDimPx) {
+                var sampleSize = 1
+                while (
+                    (bounds.outWidth / (sampleSize * 2)) >= maxDimPx ||
+                    (bounds.outHeight / (sampleSize * 2)) >= maxDimPx
+                ) {
+                    sampleSize *= 2
+                }
+                val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+                val sampled = context.contentResolver.openInputStream(uri)?.use { input ->
+                    BitmapFactory.decodeStream(input, null, decodeOpts)
+                }
+                if (sampled != null) {
+                    val longest = maxOf(sampled.width, sampled.height)
+                    val finalBitmap = if (longest > maxDimPx) {
+                        val scale = maxDimPx.toFloat() / longest.toFloat()
+                        val w = (sampled.width * scale).toInt().coerceAtLeast(1)
+                        val h = (sampled.height * scale).toInt().coerceAtLeast(1)
+                        Bitmap.createScaledBitmap(sampled, w, h, true).also {
+                            if (it !== sampled) sampled.recycle()
+                        }
+                    } else {
+                        sampled
+                    }
+                    target.outputStream().use { out ->
+                        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                    }
+                    finalBitmap.recycle()
+                } else {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        target.outputStream().use { output -> input.copyTo(output) }
+                    } ?: return null
+                }
+            } else {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                } ?: return null
+            }
+
+            if (!target.exists() || target.length() == 0L) {
+                target.delete()
+                return null
+            }
+            dir.listFiles()?.forEach { old ->
+                if (old.name != target.name) old.delete()
+            }
+            Uri.fromFile(target).toString()
+        }.getOrNull()
+
+    companion object {
+        const val MAX_APP_GRID_COLUMNS = 8
+        private const val DEFAULT_APPS_OPACITY = 0.6f
+        private const val RESUME_SYNC_INTERVAL_MS = 15_000L
+        private const val TV_WALLPAPER_DIR = "tv_wallpapers"
 
         /** One-time cleanup of the hardcoded library entries from early builds. */
-        const val KEY_LEGACY_CLEANUP_DONE = "legacy_prepopulated_cleanup_done"
+        private const val KEY_LEGACY_CLEANUP_DONE = "legacy_prepopulated_cleanup_done"
+        private const val KEY_STREAMING_CLIENTS_AS_APPS_DONE = "streaming_clients_as_apps_v1_done"
+        private const val KEY_TV_WALLPAPER_URL = "tv_wallpaper_url"
+        private const val KEY_APP_GRID_COLUMNS = "app_grid_columns"
     }
 }

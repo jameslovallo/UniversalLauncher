@@ -133,6 +133,7 @@ fun FavoritesHome(
     onNavigateDownToAppList: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     onFocusFavorite: (GameItem) -> Unit = {},
+    configuredColumns: Int = 0
 ) {
     val isTextLayout = layout == FavoritesLayout.TEXT
     val isTvLayout = layout == FavoritesLayout.TV_CARDS
@@ -288,23 +289,28 @@ fun FavoritesHome(
                 val hSpacing = 14.dp
                 val vSpacing = 12.dp
                 val gridPadding = 8.dp
-                val columns = favorites.size.coerceIn(1, TV_FAVORITES_MAX_COLUMNS)
+                val colDenominator = if (configuredColumns > 0) {
+                    configuredColumns
+                } else {
+                    TV_FAVORITES_MAX_COLUMNS
+                }
+                val columns = favorites.size.coerceIn(1, colDenominator)
                 val totalRows = (favorites.size + columns - 1) / columns
                 val visibleRows = totalRows.coerceAtMost(TV_FAVORITES_MAX_ROWS)
 
                 val maxUsableWidth = (availableHomeWidth - 32.dp - gridPadding * 2).coerceAtLeast(200.dp)
-                val fiveColCardWidth = ((maxUsableWidth - hSpacing * (TV_FAVORITES_MAX_COLUMNS - 1)) / TV_FAVORITES_MAX_COLUMNS)
-                    .coerceAtLeast(80.dp)
+                val maxColCardWidth = ((maxUsableWidth - hSpacing * (colDenominator - 1)) / colDenominator)
+                    .coerceAtLeast(if (colDenominator >= 6) 56.dp else 80.dp)
                 val clockReserve = 124.dp
                 val maxUsableGridHeight = (availableHomeHeight - clockReserve - gridPadding * 2)
                     .coerceAtLeast(100.dp)
                 val maxCardHeightForRows = ((maxUsableGridHeight - vSpacing * (visibleRows - 1)) / visibleRows)
                     .coerceAtLeast(48.dp)
                 val maxCardWidthFromHeight = maxCardHeightForRows * (16f / 9f)
-                val cardWidth = minOf(fiveColCardWidth, maxCardWidthFromHeight)
+                val cardWidth = minOf(maxColCardWidth, maxCardWidthFromHeight)
                 val cardHeight = cardWidth * (9f / 16f)
 
-                val visibleCount = minOf(favorites.size, TV_FAVORITES_MAX_COLUMNS * TV_FAVORITES_MAX_ROWS)
+                val visibleCount = minOf(favorites.size, colDenominator * TV_FAVORITES_MAX_ROWS)
                 val gridWidth = cardWidth * columns + hSpacing * (columns - 1) + gridPadding * 2
                 val gridHeight = cardHeight * visibleRows + vSpacing * (visibleRows - 1) + gridPadding * 2
 
@@ -364,10 +370,10 @@ fun FavoritesHome(
                         // target, so the whole favorites area is interactive.
                         val minColumnWidth = 170.dp
                         val isCompactPortrait = !isLandscape && maxWidth < 600.dp
-                        val columns = if (isCompactPortrait) {
-                            1
-                        } else {
-                            maxOf(
+                        val columns = when {
+                            configuredColumns > 0 -> configuredColumns
+                            isCompactPortrait -> 1
+                            else -> maxOf(
                                 2,
                                 ((maxWidth + spacing) / (minColumnWidth + spacing)).toInt()
                             )
@@ -420,20 +426,32 @@ fun FavoritesHome(
                             }
                         }
                     } else {
-                        // Icon tiles in as many columns as the screen width allows. Tiles are
-                        // sized to the full column pitch so every pixel of the grid, including
-                        // the visual spacing, belongs to a tile's clickable area.
+                        // Icon tiles in as many columns as the screen width allows (or configured).
+                        // Tiles are sized to the full column pitch so every pixel of the grid,
+                        // including the visual spacing, belongs to a tile's clickable area.
                         val tileWidth = 78.dp
                         val tileGap = spacing
                         val rowGap = 14.dp
-                        val tilePitch = tileWidth + tileGap
-                        val columns = maxOf(
-                            4,
-                            ((maxWidth + tileGap) / tilePitch).toInt()
-                        )
+                        val defaultPitch = tileWidth + tileGap
+                        val columns = if (configuredColumns > 0) {
+                            configuredColumns
+                        } else {
+                            maxOf(
+                                4,
+                                ((maxWidth + tileGap) / defaultPitch).toInt()
+                            )
+                        }
+                        val itemPitch = if (configuredColumns > 0) {
+                            maxWidth / columns
+                        } else {
+                            defaultPitch
+                        }
+                        val cellHorizontalPadding = if (itemPitch < 68.dp) 2.dp else tileGap / 2
 
                         FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("favorites_icons_grid"),
                             horizontalArrangement = Arrangement.spacedBy(
                                 0.dp,
                                 Alignment.CenterHorizontally
@@ -451,11 +469,11 @@ fun FavoritesHome(
                                     onLongClick = { onLongPressFavorite(app) },
                                     onFocus = { onFocusFavorite(app) },
                                     contentPadding = PaddingValues(
-                                        horizontal = tileGap / 2,
+                                        horizontal = cellHorizontalPadding,
                                         vertical = 6.dp + rowGap / 2
                                     ),
                                     modifier = Modifier
-                                        .width(tilePitch)
+                                        .width(itemPitch)
                                         .focusProperties { canFocus = focusEnabled }
                                         .focusRequester(rowFocusRequesters[index])
                                         .then(itemRequesterModifier(app.id))
@@ -504,19 +522,15 @@ private fun Modifier.favoriteDpadNavigation(
     } else {
         when (event.key) {
             Key.DirectionDown -> {
-                val below = index + columns
-                when {
-                    below < itemCount -> {
-                        runCatching { requesters.getOrNull(below)?.requestFocus() }
-                        true
-                    }
-                    // Only the last populated row hands off to the app list. A partial row
-                    // with no cell directly below simply keeps focus where it is.
-                    index / columns == (itemCount - 1) / columns -> {
-                        onNavigateDownToAppList?.invoke()
-                        true
-                    }
-                    else -> true
+                val currentRow = index / columns
+                val lastRow = (itemCount - 1) / columns
+                if (currentRow < lastRow) {
+                    val targetIndex = minOf(index + columns, itemCount - 1)
+                    runCatching { requesters.getOrNull(targetIndex)?.requestFocus() }
+                    true
+                } else {
+                    onNavigateDownToAppList?.invoke()
+                    true
                 }
             }
             Key.DirectionUp -> {

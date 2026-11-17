@@ -134,7 +134,10 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import coil.imageLoader
+import coil.request.ImageRequest
+import androidx.compose.ui.layout.ContentScale
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.service.IconPackOverridesStore
@@ -160,6 +163,7 @@ import com.example.ui.components.buildAppBannerImageRequest
 import com.example.ui.components.buildAppIconImageRequest
 import com.example.ui.components.buildPosterImageRequest
 import com.example.ui.components.buildPosterLogoImageRequest
+import com.example.ui.components.flatGridDownNextRowFallback
 import com.example.ui.components.hasCustomAppIconUrl
 import com.example.ui.components.isTelevisionMode
 import com.example.ui.components.resolveAppIconUrl
@@ -285,6 +289,8 @@ fun DashboardScreen(
     val controllerState by viewModel.controllerManager.controllerState.collectAsStateWithLifecycle()
 
     val appsBackgroundOpacity by viewModel.appsBackgroundOpacity.collectAsStateWithLifecycle()
+    val tvWallpaperUrl by viewModel.tvWallpaperUrl.collectAsStateWithLifecycle()
+    val appGridColumns by viewModel.appGridColumns.collectAsStateWithLifecycle()
     val themeStyle by viewModel.themeStyle.collectAsStateWithLifecycle()
     val weatherEnabled by viewModel.weatherEnabled.collectAsStateWithLifecycle()
     val weatherMode by viewModel.weatherMode.collectAsStateWithLifecycle()
@@ -298,8 +304,11 @@ fun DashboardScreen(
     val librarySyncBusy by viewModel.librarySyncBusy.collectAsStateWithLifecycle()
     val librarySyncStatus by viewModel.librarySyncStatus.collectAsStateWithLifecycle()
     val librarySyncConfigured by viewModel.librarySyncConfigured.collectAsStateWithLifecycle()
+    val librarySyncMode by viewModel.librarySyncMode.collectAsStateWithLifecycle()
     val librarySyncTarget by viewModel.librarySyncTarget.collectAsStateWithLifecycle()
     val librarySyncLastSyncedAt by viewModel.librarySyncLastSyncedAt.collectAsStateWithLifecycle()
+    val librarySyncNeedsReauth by viewModel.librarySyncNeedsReauth.collectAsStateWithLifecycle()
+    val pendingDriveAuthIntent by viewModel.pendingDriveAuthIntent.collectAsStateWithLifecycle()
     val gamesRefreshing by viewModel.gamesRefreshing.collectAsStateWithLifecycle()
     val gamesRefreshFeedback by viewModel.gamesRefreshFeedback.collectAsStateWithLifecycle()
 
@@ -674,22 +683,39 @@ fun DashboardScreen(
         LocalFolderPreviewItems provides folderMembersMap
     ) {
         Box(
-            modifier = modifier
-                .fillMaxSize()
-                // Read pagerState offset in the draw phase so horizontal swiping and
-                // overscroll fade the wallpaper scrim without recomposing DashboardScreen.
-                .drawBehind {
-                    val darkAmount = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
-                        .coerceIn(0f, 1f)
-                    val appsAlpha = appsBackgroundOpacity * (1f - darkAmount)
-                    if (appsAlpha > 0f) {
-                        drawRect(appsScrimColor.copy(alpha = appsAlpha))
-                    }
-                    if (darkAmount > 0f) {
-                        drawRect(gamesScrimColor.copy(alpha = darkAmount))
-                    }
-                }
+            modifier = modifier.fillMaxSize()
         ) {
+            if (isTelevision && !tvWallpaperUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(tvWallpaperUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("tv_wallpaper_image")
+                )
+            }
+
+            // Read pagerState offset in the draw phase so horizontal swiping and
+            // overscroll fade the wallpaper scrim without recomposing DashboardScreen.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .drawBehind {
+                        val darkAmount = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
+                            .coerceIn(0f, 1f)
+                        val appsAlpha = appsBackgroundOpacity * (1f - darkAmount)
+                        if (appsAlpha > 0f) {
+                            drawRect(appsScrimColor.copy(alpha = appsAlpha))
+                        }
+                        if (darkAmount > 0f) {
+                            drawRect(gamesScrimColor.copy(alpha = darkAmount))
+                        }
+                    }
+            )
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -967,6 +993,7 @@ fun DashboardScreen(
                                                                 }
                                                             },
                                                             onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
+                                                            configuredColumns = if (isTelevision) appGridColumns else 0
                                                         )
                                                     }
                                                 } else {
@@ -992,6 +1019,7 @@ fun DashboardScreen(
                                                                 }
                                                             )
                                                         } else {
+                                                            val effectiveAppGridColumns = if (isTelevision) appGridColumns else 0
                                                             AppsAlphabeticalList(
                                                                 entries = appListEntries,
                                                                 focusedItemId = focusedItemId,
@@ -1002,6 +1030,8 @@ fun DashboardScreen(
                                                                 firstItemFocusRequester = appsListFirstFocusRequester,
                                                                 itemFocusRequester = appsItemFocusRequester,
                                                                 focusEnabled = appDrawerCanFocus,
+                                                                configuredColumns = effectiveAppGridColumns,
+                                                                showAlphabetRail = !isTelevision,
                                                                 onAppClick = onAppClick,
                                                                 onAppLongClick = onAppLongClick,
                                                                 onAppFocus = onAppFocus,
@@ -1015,8 +1045,9 @@ fun DashboardScreen(
                                                                         it is AppListEntry.Letter && it.letter == letter
                                                                     }
                                                                     if (index >= 0) {
+                                                                        val usesAppsGrid = effectiveFavoritesLayout != FavoritesLayout.TEXT || effectiveAppGridColumns > 1
                                                                         scope.launch {
-                                                                            if (effectiveFavoritesLayout != FavoritesLayout.TEXT) {
+                                                                            if (usesAppsGrid) {
                                                                                 appsGridState.scrollToItem(index)
                                                                             } else {
                                                                                 appsListState.scrollToItem(index)
@@ -1052,7 +1083,8 @@ fun DashboardScreen(
                     onAppFocus = onAppFocus,
                     onCustomizeFolder = { viewModel.openEditCustomizer(openFolder) },
                     onManageFolderApps = { viewModel.openManageFolderApps(openFolder.id) },
-                    onDismiss = { viewModel.closeFolder() }
+                    onDismiss = { viewModel.closeFolder() },
+                    configuredColumns = if (isTelevision) appGridColumns else 0
                 )
             }
 
@@ -1234,8 +1266,11 @@ fun DashboardScreen(
                     librarySyncBusy = librarySyncBusy,
                     librarySyncStatus = librarySyncStatus,
                     librarySyncConfigured = librarySyncConfigured,
+                    librarySyncMode = librarySyncMode,
                     librarySyncTarget = librarySyncTarget,
                     librarySyncLastSyncedAt = librarySyncLastSyncedAt,
+                    librarySyncNeedsReauth = librarySyncNeedsReauth,
+                    pendingDriveAuthIntent = pendingDriveAuthIntent,
                     isDefaultLauncher = { viewModel.isDefaultLauncher() },
                     isHomeOverrideEnabled = { viewModel.isHomeOverrideEnabled() },
                     onSelectFavoritesLayout = { viewModel.setFavoritesLayout(it) },
@@ -1254,10 +1289,20 @@ fun DashboardScreen(
                     onSelectWeatherApp = { viewModel.setWeatherAppPackage(it) },
                     onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() },
                     onChooseSyncFolder = { viewModel.chooseSyncFolder(it) },
+                    onConnectGoogleDrive = { viewModel.connectGoogleDrive() },
+                    onGoogleDriveAuthorizationResult = { code, data ->
+                        viewModel.onGoogleDriveAuthorizationResult(code, data)
+                    },
+                    onConsumePendingDriveAuthIntent = { viewModel.consumePendingDriveAuthIntent() },
                     onSyncLibraryNow = { viewModel.syncLibraryNow() },
                     onDisconnectLibrarySync = { viewModel.disconnectLibrarySync() },
                     onDismiss = { viewModel.closeSettingsModal() },
-                    isTelevision = isTelevision
+                    isTelevision = isTelevision,
+                    tvWallpaperUrl = tvWallpaperUrl,
+                    appGridColumns = appGridColumns,
+                    onSetTvWallpaper = { viewModel.setTvWallpaper(it) },
+                    onClearTvWallpaper = { viewModel.clearTvWallpaper() },
+                    onSetAppGridColumns = { viewModel.setAppGridColumns(it) }
                 )
             }
 
@@ -1685,6 +1730,8 @@ private fun GamesPosterGrid(
             .coerceAtLeast(1.dp)
         val posterWidthPx = with(density) { cellWidthDp.roundToPx().coerceAtLeast(1) }
         val posterHeightPx = (posterWidthPx * 1.5f).roundToInt().coerceAtLeast(1)
+        val posterScope = rememberCoroutineScope()
+        val gameFocusRequesters = remember(games.size) { List(games.size) { FocusRequester() } }
 
         PrefetchPosterImages(
             games = games,
@@ -1744,9 +1791,18 @@ private fun GamesPosterGrid(
                         onFocus = handleFocus,
                         modifier = Modifier
                             .focusProperties { canFocus = focusEnabled }
+                            .focusRequester(gameFocusRequesters[index])
                             .then(firstItemModifier)
                             .then(itemRequesterModifier(game.id))
                             .then(if (isLeftmost) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
+                            .flatGridDownNextRowFallback(
+                                index = index,
+                                columns = columnCount,
+                                itemCount = games.size,
+                                gridState = gridState,
+                                requesters = gameFocusRequesters,
+                                scope = posterScope
+                            )
                             .navigateUpToNavFromTopRow(index < columnCount, onNavigateUpToNav)
                     )
                 }
@@ -1834,6 +1890,57 @@ internal fun buildAppListEntries(apps: List<GameItem>): List<AppListEntry> {
     return entries
 }
 
+internal data class SectionDownTarget(
+    val targetId: String,
+    val targetEntryIndex: Int
+)
+
+/**
+ * Maps each app item in a sectioned alphabetical list/grid to the app that should receive
+ * focus when pressing [Key.DirectionDown]. Stepping to row `r + 1` picks the same column when
+ * present, or falls back to the last item in row `r + 1` when row `r + 1` has fewer items
+ * (including across section headers). Returns no mapping for items on the final row.
+ */
+internal fun computeSectionedDownTargets(
+    entries: List<AppListEntry>,
+    columns: Int
+): Map<String, SectionDownTarget> {
+    if (entries.isEmpty() || columns <= 0) return emptyMap()
+    val rows = mutableListOf<List<Pair<String, Int>>>()
+    val currentRow = mutableListOf<Pair<String, Int>>()
+    entries.forEachIndexed { idx, entry ->
+        when (entry) {
+            is AppListEntry.Letter -> {
+                if (currentRow.isNotEmpty()) {
+                    rows += currentRow.toList()
+                    currentRow.clear()
+                }
+            }
+            is AppListEntry.App -> {
+                currentRow += (entry.item.id to idx)
+                if (currentRow.size == columns) {
+                    rows += currentRow.toList()
+                    currentRow.clear()
+                }
+            }
+        }
+    }
+    if (currentRow.isNotEmpty()) {
+        rows += currentRow.toList()
+    }
+    val targets = HashMap<String, SectionDownTarget>()
+    for (r in 0 until rows.lastIndex) {
+        val row = rows[r]
+        val nextRow = rows[r + 1]
+        for (c in row.indices) {
+            val (itemId, _) = row[c]
+            val (targetId, targetEntryIndex) = nextRow[minOf(c, nextRow.lastIndex)]
+            targets[itemId] = SectionDownTarget(targetId, targetEntryIndex)
+        }
+    }
+    return targets
+}
+
 @Composable
 internal fun AppsAlphabeticalList(
     entries: List<AppListEntry>,
@@ -1844,6 +1951,8 @@ internal fun AppsAlphabeticalList(
     gridState: LazyGridState,
     firstItemFocusRequester: FocusRequester? = null,
     focusEnabled: Boolean = true,
+    configuredColumns: Int = 0,
+    showAlphabetRail: Boolean = !isTelevisionMode(),
     onAppClick: (GameItem) -> Unit,
     onAppLongClick: (GameItem) -> Unit,
     onLetterSelected: (String) -> Unit,
@@ -1851,10 +1960,11 @@ internal fun AppsAlphabeticalList(
     onNavigateUpToFavorites: (() -> Unit)? = null,
     itemFocusRequester: ((String) -> FocusRequester)? = null,
 ) {
-    // Id-keyed requester per row/card so focus can return to the exact app after a sheet
-    // opened from it closes.
-    fun itemRequesterModifier(id: String): Modifier =
-        itemFocusRequester?.let { Modifier.focusRequester(it(id)) } ?: Modifier
+    val fallbackRequesters = remember { ItemFocusRequesters() }
+    fun requesterForId(id: String): FocusRequester =
+        itemFocusRequester?.invoke(id) ?: fallbackRequesters.requesterFor(id)
+    val drawerScope = rememberCoroutineScope()
+
     val letters = remember(entries) {
         entries.filterIsInstance<AppListEntry.Letter>().map { it.letter }
     }
@@ -1875,9 +1985,39 @@ internal fun AppsAlphabeticalList(
     PrefetchAppIcons(
         entries = entries,
         layout = layout,
+        configuredColumns = configuredColumns,
         listState = listState,
         gridState = gridState
     )
+
+    fun downNavigationModifier(
+        target: SectionDownTarget?,
+        useGrid: Boolean
+    ): Modifier = if (target == null) {
+        Modifier
+    } else {
+        Modifier.onPreviewKeyEvent { keyEvent ->
+            if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionDown) {
+                val movedNow = runCatching {
+                    requesterForId(target.targetId).requestFocus()
+                }.isSuccess
+                if (!movedNow) {
+                    drawerScope.launch {
+                        if (useGrid) {
+                            gridState.animateScrollToItem(target.targetEntryIndex)
+                        } else {
+                            listState.animateScrollToItem(target.targetEntryIndex)
+                        }
+                        withFrameNanos { }
+                        runCatching { requesterForId(target.targetId).requestFocus() }
+                    }
+                }
+                true
+            } else {
+                false
+            }
+        }
+    }
 
     Row(
         modifier = Modifier.fillMaxSize()
@@ -1888,15 +2028,22 @@ internal fun AppsAlphabeticalList(
                     .weight(1f)
                     .fillMaxHeight()
             ) {
-                val availableWidth = maxWidth - 24.dp
+                val availableWidth = maxWidth - if (showAlphabetRail) 24.dp else 32.dp
                 val spacing = 14.dp
                 val minCardWidth = 156.dp
-                val columns = minOf(
-                    TV_FAVORITES_MAX_COLUMNS,
-                    maxOf(3, ((availableWidth + spacing) / (minCardWidth + spacing)).toInt())
-                )
+                val columns = if (configuredColumns > 0) {
+                    configuredColumns
+                } else {
+                    minOf(
+                        TV_FAVORITES_MAX_COLUMNS,
+                        maxOf(3, ((availableWidth + spacing) / (minCardWidth + spacing)).toInt())
+                    )
+                }
                 val firstRowIds = remember(entries, columns) {
                     firstSectionTopRowIds(entries, columns)
+                }
+                val downTargets = remember(entries, columns) {
+                    computeSectionedDownTargets(entries, columns)
                 }
 
                 LazyVerticalGrid(
@@ -1904,7 +2051,7 @@ internal fun AppsAlphabeticalList(
                     state = gridState,
                     contentPadding = PaddingValues(
                         start = 16.dp,
-                        end = 8.dp,
+                        end = if (showAlphabetRail) 8.dp else 16.dp,
                         top = 8.dp,
                         bottom = 20.dp + navigationBarInset
                     ),
@@ -1967,7 +2114,7 @@ internal fun AppsAlphabeticalList(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .focusProperties { canFocus = focusEnabled }
-                                        .then(itemRequesterModifier(app.id))
+                                        .focusRequester(requesterForId(app.id))
                                         .then(
                                             if (app.id == firstAppId) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }
@@ -1977,6 +2124,7 @@ internal fun AppsAlphabeticalList(
                                             }
                                         )
                                         .then(upToFavoritesMod)
+                                        .then(downNavigationModifier(downTargets[app.id], useGrid = true))
                                 )
                             }
                         }
@@ -1989,11 +2137,18 @@ internal fun AppsAlphabeticalList(
                     .weight(1f)
                     .fillMaxHeight()
             ) {
-                val availableWidth = maxWidth - 12.dp
+                val availableWidth = maxWidth - if (showAlphabetRail) 12.dp else 24.dp
                 val tileMinSize = 78.dp
-                val columns = maxOf(3, (availableWidth / tileMinSize).toInt())
+                val columns = if (configuredColumns > 0) {
+                    configuredColumns
+                } else {
+                    maxOf(3, (availableWidth / tileMinSize).toInt())
+                }
                 val firstRowIds = remember(entries, columns) {
                     firstSectionTopRowIds(entries, columns)
+                }
+                val downTargets = remember(entries, columns) {
+                    computeSectionedDownTargets(entries, columns)
                 }
 
                 // Icon grid drawer: cells are packed edge to edge; gaps live inside each
@@ -2003,7 +2158,7 @@ internal fun AppsAlphabeticalList(
                     state = gridState,
                     contentPadding = PaddingValues(
                         start = 12.dp,
-                        end = 0.dp,
+                        end = if (showAlphabetRail) 0.dp else 12.dp,
                         top = 8.dp,
                         bottom = 16.dp + navigationBarInset
                     ),
@@ -2067,7 +2222,7 @@ internal fun AppsAlphabeticalList(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .focusProperties { canFocus = focusEnabled }
-                                        .then(itemRequesterModifier(app.id))
+                                        .focusRequester(requesterForId(app.id))
                                         .then(
                                             if (app.id == firstAppId) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }
@@ -2077,8 +2232,102 @@ internal fun AppsAlphabeticalList(
                                             }
                                         )
                                         .then(upToFavoritesMod)
+                                        .then(downNavigationModifier(downTargets[app.id], useGrid = true))
                                 )
                             }
+                        }
+                    }
+                }
+            }
+        } else if (configuredColumns > 1) {
+            val firstRowIds = remember(entries, configuredColumns) {
+                firstSectionTopRowIds(entries, configuredColumns)
+            }
+            val downTargets = remember(entries, configuredColumns) {
+                computeSectionedDownTargets(entries, configuredColumns)
+            }
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(configuredColumns),
+                state = gridState,
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = if (showAlphabetRail) 4.dp else 16.dp,
+                    top = 8.dp,
+                    bottom = 16.dp + navigationBarInset
+                ),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .testTag("apps_list")
+            ) {
+                items(
+                    items = entries,
+                    key = { entry ->
+                        when (entry) {
+                            is AppListEntry.Letter -> "section_${entry.letter}"
+                            is AppListEntry.App -> entry.item.id
+                        }
+                    },
+                    span = { entry ->
+                        when (entry) {
+                            is AppListEntry.Letter -> GridItemSpan(maxLineSpan)
+                            is AppListEntry.App -> GridItemSpan(1)
+                        }
+                    },
+                    contentType = { entry ->
+                        when (entry) {
+                            is AppListEntry.Letter -> "letter"
+                            is AppListEntry.App -> "app_row"
+                        }
+                    }
+                ) { entry ->
+                    when (entry) {
+                        is AppListEntry.Letter -> AppLetterHeader(letter = entry.letter)
+                        is AppListEntry.App -> {
+                            val app = entry.item
+                            val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
+                            val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
+                            val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
+                            val upToFavoritesMod = if (app.id in firstRowIds && onNavigateUpToFavorites != null) {
+                                Modifier.onPreviewKeyEvent { keyEvent ->
+                                    if (keyEvent.type == KeyEventType.KeyDown &&
+                                        keyEvent.key == Key.DirectionUp
+                                    ) {
+                                        onNavigateUpToFavorites()
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                            } else {
+                                Modifier
+                            }
+                            AppTextRow(
+                                app = app,
+                                isFocused = app.id == focusedItemId,
+                                showFocusEffects = showFocusEffects,
+                                testTag = "app_row_${app.id}",
+                                onClick = handleClick,
+                                onLongClick = handleLongClick,
+                                onFocus = handleFocus,
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusProperties { canFocus = focusEnabled }
+                                    .focusRequester(requesterForId(app.id))
+                                    .then(
+                                        if (app.id == firstAppId) {
+                                            firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                ?: Modifier
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
+                                    .then(upToFavoritesMod)
+                                    .then(downNavigationModifier(downTargets[app.id], useGrid = true))
+                            )
                         }
                     }
                 }
@@ -2091,7 +2340,7 @@ internal fun AppsAlphabeticalList(
                 state = listState,
                 contentPadding = PaddingValues(
                     start = 16.dp,
-                    end = 4.dp,
+                    end = if (showAlphabetRail) 4.dp else 16.dp,
                     top = 8.dp,
                     bottom = 16.dp + navigationBarInset
                 ),
@@ -2149,7 +2398,7 @@ internal fun AppsAlphabeticalList(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .focusProperties { canFocus = focusEnabled }
-                                    .then(itemRequesterModifier(app.id))
+                                    .focusRequester(requesterForId(app.id))
                                     .then(
                                         if (app.id == firstAppId) {
                                             firstItemFocusRequester?.let { Modifier.focusRequester(it) }
@@ -2166,11 +2415,13 @@ internal fun AppsAlphabeticalList(
             }
         }
 
-        AlphabetRail(
-            letters = letters,
-            activeLetter = activeLetter,
-            onLetterSelected = onLetterSelected
-        )
+        if (showAlphabetRail) {
+            AlphabetRail(
+                letters = letters,
+                activeLetter = activeLetter,
+                onLetterSelected = onLetterSelected
+            )
+        }
     }
 }
 
@@ -2193,6 +2444,7 @@ private fun firstSectionTopRowIds(entries: List<AppListEntry>, columns: Int): Se
 private fun PrefetchAppIcons(
     entries: List<AppListEntry>,
     layout: FavoritesLayout,
+    configuredColumns: Int,
     listState: LazyListState,
     gridState: LazyGridState,
 ) {
@@ -2211,12 +2463,13 @@ private fun PrefetchAppIcons(
     val miniIconSizePx = remember(iconSizePx) {
         (iconSizePx * 0.30f).roundToInt().coerceAtLeast(1)
     }
-    LaunchedEffect(entries, layout, themedIcons, folderMembers, iconSizePx) {
+    LaunchedEffect(entries, layout, configuredColumns, themedIcons, folderMembers, iconSizePx) {
         if (entries.isEmpty()) return@LaunchedEffect
         val loader = context.imageLoader
         val enqueuedUrls = HashSet<String>()
+        val usesGrid = layout != FavoritesLayout.TEXT || configuredColumns > 1
         snapshotFlow {
-            val visible = if (layout != FavoritesLayout.TEXT) {
+            val visible = if (usesGrid) {
                 gridState.layoutInfo.visibleItemsInfo.let { info ->
                     (info.firstOrNull()?.index ?: -1) to (info.lastOrNull()?.index ?: -1)
                 }

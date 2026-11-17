@@ -115,4 +115,106 @@ class GameRepositorySyncTest {
         assertEquals(1, all.size)
         assertEquals("app_com.example.demoapp", all.first().id)
     }
+
+    @Test
+    fun `streaming clients GeForce NOW Luna and Moonlight categorize as apps even when flagged CATEGORY_GAME`(): Unit = runBlocking {
+        val shadowPm = shadowOf(app.packageManager)
+        val streamingPackages = listOf(
+            "com.nvidia.geforcenow" to "GeForce NOW",
+            "com.amazon.spiderpork" to "Amazon Luna",
+            "com.limelight" to "Moonlight"
+        )
+        for ((pkg, title) in streamingPackages) {
+            val packageInfo = PackageInfo().apply {
+                packageName = pkg
+                lastUpdateTime = 2000L
+                applicationInfo = ApplicationInfo().apply {
+                    packageName = pkg
+                    category = ApplicationInfo.CATEGORY_GAME
+                }
+            }
+            shadowPm.installPackage(packageInfo)
+            val resolveInfo = ResolveInfo().apply {
+                activityInfo = ActivityInfo().apply {
+                    packageName = pkg
+                    name = "$pkg.MainActivity"
+                    applicationInfo = packageInfo.applicationInfo
+                }
+                nonLocalizedLabel = title
+            }
+            @Suppress("DEPRECATION")
+            shadowPm.addResolveInfoForIntent(
+                Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) },
+                resolveInfo
+            )
+        }
+
+        repository.syncInstalledApps()
+        val items = dao.getAllItemsNow().associateBy { it.packageName }
+
+        for ((pkg, _) in streamingPackages) {
+            val item = items[pkg]
+            requireNotNull(item)
+            assertEquals("Expected $pkg to be categorized as an app, not a game", false, item.isGame)
+            assertEquals("Installed,Android,App", item.tags)
+        }
+    }
+
+    @Test
+    fun `recategorizeStreamingClientsAsApps migrates existing installed client apps while keeping Moonlight shortcuts as games`(): Unit = runBlocking {
+        dao.insertGame(
+            GameItem(
+                id = "app_com.nvidia.geforcenow",
+                title = "GeForce NOW",
+                type = GameType.INSTALLED_APP,
+                isGame = true,
+                packageName = "com.nvidia.geforcenow",
+                genre = "Installed Game",
+                tags = "Installed,Game,Android"
+            )
+        )
+        dao.insertGame(
+            GameItem(
+                id = "app_com.amazon.spiderpork",
+                title = "Amazon Luna",
+                type = GameType.INSTALLED_APP,
+                isGame = true,
+                packageName = "com.amazon.spiderpork",
+                genre = "Installed Game",
+                tags = "Installed,Game,Android"
+            )
+        )
+        dao.insertGame(
+            GameItem(
+                id = "app_com.limelight",
+                title = "Moonlight",
+                type = GameType.INSTALLED_APP,
+                isGame = true,
+                packageName = "com.limelight",
+                genre = "Installed Game",
+                tags = "Installed,Game,Android"
+            )
+        )
+        dao.insertGame(
+            GameItem(
+                id = "moonlight_portal2",
+                title = "Portal 2",
+                type = GameType.MOONLIGHT,
+                isGame = true,
+                packageName = "com.limelight"
+            )
+        )
+
+        repository.recategorizeStreamingClientsAsApps(
+            setOf("com.nvidia.geforcenow", "com.amazon.spiderpork", "com.limelight")
+        )
+
+        val byId = dao.getAllItemsNow().associateBy { it.id }
+        assertEquals(false, byId.getValue("app_com.nvidia.geforcenow").isGame)
+        assertEquals(false, byId.getValue("app_com.amazon.spiderpork").isGame)
+        assertEquals(false, byId.getValue("app_com.limelight").isGame)
+        assertEquals("Installed Application", byId.getValue("app_com.nvidia.geforcenow").genre)
+        assertEquals("Installed,Android,App", byId.getValue("app_com.nvidia.geforcenow").tags)
+        assertEquals(true, byId.getValue("moonlight_portal2").isGame)
+    }
 }

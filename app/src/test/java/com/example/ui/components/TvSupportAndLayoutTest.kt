@@ -49,10 +49,15 @@ import com.example.R
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.service.AppIconStore
+import com.example.data.service.GeForceNowService
+import com.example.data.service.LibrarySyncMode
 import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherInfo
+import com.example.ui.screens.AppListEntry
 import com.example.ui.screens.AppsAlphabeticalList
+import com.example.ui.screens.SectionDownTarget
 import com.example.ui.screens.buildAppListEntries
+import com.example.ui.screens.computeSectionedDownTargets
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
 import com.example.ui.theme.resolveEffectiveFavoritesLayout
@@ -910,5 +915,476 @@ class TvSupportAndLayoutTest {
         }
         composeRule.waitForIdle()
         assertEquals(1, navigatedDown)
+    }
+
+    @Test
+    fun `settings modal on TV shows Wallpaper section and App Row Columns controls while phone hides Wallpaper`() {
+        var columns by mutableIntStateOf(0)
+        var wallpaperUrl by mutableStateOf<String?>("file:///tmp/wall.png")
+        var clearCount by mutableIntStateOf(0)
+
+        composeRule.setContent {
+            MaterialTheme {
+                SettingsModal(
+                    favoritesLayout = FavoritesLayout.TV_CARDS,
+                    steamGridDbApiKey = null,
+                    steamGridDbIncludeNsfw = false,
+                    iconPacks = emptyList(),
+                    selectedIconPack = null,
+                    hiddenItems = emptyList(),
+                    appsBackgroundOpacity = 0.7f,
+                    themeStyle = ThemeStyle.WALLPAPER,
+                    weatherEnabled = false,
+                    weatherMode = com.example.data.service.WeatherLocationMode.DEVICE_LOCATION,
+                    weatherZip = "",
+                    weatherInfo = null,
+                    weatherError = null,
+                    temperatureUnit = TemperatureUnit.FAHRENHEIT,
+                    weatherApps = emptyList(),
+                    weatherAppPackage = null,
+                    librarySyncBusy = false,
+                    librarySyncStatus = null,
+                    librarySyncConfigured = false,
+                    librarySyncTarget = null,
+                    librarySyncLastSyncedAt = null,
+                    isDefaultLauncher = { true },
+                    isHomeOverrideEnabled = { false },
+                    onSelectFavoritesLayout = {},
+                    onSaveApiKey = {},
+                    onSteamGridDbIncludeNsfwChange = {},
+                    onSelectIconPack = {},
+                    onSetDefaultLauncher = {},
+                    onSetAppsBackgroundOpacity = {},
+                    onSelectThemeStyle = {},
+                    onUnhideItem = {},
+                    onOpenHiddenItem = {},
+                    onWeatherEnabledChange = {},
+                    onWeatherModeChange = {},
+                    onWeatherZipChange = {},
+                    onTemperatureUnitChange = {},
+                    onSelectWeatherApp = {},
+                    onOpenAccessibilitySettings = {},
+                    onChooseSyncFolder = {},
+                    onSyncLibraryNow = {},
+                    onDisconnectLibrarySync = {},
+                    onDismiss = {},
+                    isTelevision = true,
+                    tvWallpaperUrl = wallpaperUrl,
+                    appGridColumns = columns,
+                    onClearTvWallpaper = {
+                        clearCount++
+                        wallpaperUrl = null
+                    },
+                    onSetAppGridColumns = { columns = it }
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("tv_wallpaper_preview").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("tv_wallpaper_choose_button").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("tv_wallpaper_clear_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, clearCount)
+        composeRule.onNodeWithTag("tv_wallpaper_preview").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("app_columns_auto_chip").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("app_columns_increase_button").performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, columns)
+        composeRule.onNodeWithTag("app_columns_increase_button").performClick()
+        composeRule.waitForIdle()
+        assertEquals(2, columns)
+        composeRule.onNodeWithTag("app_columns_auto_chip").performClick()
+        composeRule.waitForIdle()
+        assertEquals(0, columns)
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h915dp-xhdpi")
+    fun `settings modal on phone hides TV Wallpaper and App Row Columns controls`() {
+        composeRule.setContent {
+            MaterialTheme {
+                SettingsModal(
+                    favoritesLayout = FavoritesLayout.ICONS,
+                    steamGridDbApiKey = null,
+                    steamGridDbIncludeNsfw = false,
+                    iconPacks = emptyList(),
+                    selectedIconPack = null,
+                    hiddenItems = emptyList(),
+                    appsBackgroundOpacity = 0.7f,
+                    themeStyle = ThemeStyle.WALLPAPER,
+                    weatherEnabled = false,
+                    weatherMode = com.example.data.service.WeatherLocationMode.DEVICE_LOCATION,
+                    weatherZip = "",
+                    weatherInfo = null,
+                    weatherError = null,
+                    temperatureUnit = TemperatureUnit.FAHRENHEIT,
+                    weatherApps = emptyList(),
+                    weatherAppPackage = null,
+                    librarySyncBusy = false,
+                    librarySyncStatus = null,
+                    librarySyncConfigured = false,
+                    librarySyncTarget = null,
+                    librarySyncLastSyncedAt = null,
+                    isDefaultLauncher = { true },
+                    isHomeOverrideEnabled = { false },
+                    onSelectFavoritesLayout = {},
+                    onSaveApiKey = {},
+                    onSteamGridDbIncludeNsfwChange = {},
+                    onSelectIconPack = {},
+                    onSetDefaultLauncher = {},
+                    onSetAppsBackgroundOpacity = {},
+                    onSelectThemeStyle = {},
+                    onUnhideItem = {},
+                    onOpenHiddenItem = {},
+                    onWeatherEnabledChange = {},
+                    onWeatherModeChange = {},
+                    onWeatherZipChange = {},
+                    onTemperatureUnitChange = {},
+                    onSelectWeatherApp = {},
+                    onOpenAccessibilitySettings = {},
+                    onChooseSyncFolder = {},
+                    onSyncLibraryNow = {},
+                    onDisconnectLibrarySync = {},
+                    onDismiss = {},
+                    isTelevision = false,
+                    tvWallpaperUrl = "file:///tmp/wall.png",
+                    appGridColumns = 3
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("tv_wallpaper_choose_button").assertDoesNotExist()
+        composeRule.onNodeWithText("App Row Columns").assertDoesNotExist()
+        composeRule.onNodeWithTag("app_columns_auto_chip").assertDoesNotExist()
+        composeRule.onNodeWithTag("app_columns_value_text").assertDoesNotExist()
+    }
+
+    @Test
+    fun `AppsAlphabeticalList hides letter rail on TV and respects custom configuredColumns`() {
+        val apps = (0 until 5).map { i -> sampleApp("app_$i", "Alpha $i") }
+
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.size(width = 960.dp, height = 476.dp)) {
+                    AppsAlphabeticalList(
+                        entries = buildAppListEntries(apps),
+                        focusedItemId = "app_0",
+                        layout = FavoritesLayout.TV_CARDS,
+                        showFocusEffects = true,
+                        listState = rememberLazyListState(),
+                        gridState = rememberLazyGridState(),
+                        configuredColumns = 3,
+                        showAlphabetRail = false,
+                        onAppClick = {},
+                        onAppLongClick = {},
+                        onLetterSelected = {}
+                    )
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("apps_alphabet_rail").assertDoesNotExist()
+
+        val row0First = composeRule.onNodeWithTag("app_row_app_0").assertIsDisplayed().getUnclippedBoundsInRoot()
+        val row0Second = composeRule.onNodeWithTag("app_row_app_1").assertIsDisplayed().getUnclippedBoundsInRoot()
+        val row0Last = composeRule.onNodeWithTag("app_row_app_2").assertIsDisplayed().getUnclippedBoundsInRoot()
+        val row1First = composeRule.onNodeWithTag("app_row_app_3").assertIsDisplayed().getUnclippedBoundsInRoot()
+
+        assertTrue(abs(row0Second.top.value - row0Last.top.value) < 2f)
+        assertTrue("Expected app_3 wrapped onto row 2 with configuredColumns=3", row1First.top > row0Last.bottom)
+        assertTrue("Expected app_0 on same row as app_2", abs(row0First.top.value - row0Last.top.value) < 10f)
+    }
+
+    @Test
+    fun `FavoritesHome TV D-pad Down from partial row column with nothing directly below focuses last item on next row`() {
+        val favorites = (0 until 7).map { i -> sampleApp("fav_$i", "App $i", isFavorite = true) }
+
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.size(width = 960.dp, height = 476.dp)) {
+                    FavoritesHome(
+                        favorites = favorites,
+                        focusedItemId = "fav_3",
+                        layout = FavoritesLayout.TV_CARDS,
+                        showFocusEffects = true,
+                        onLaunchFavorite = {},
+                        onLongPressFavorite = {},
+                        onOpenClock = {},
+                        onOpenCalendar = {},
+                        onPullDown = {},
+                        onNavigateDownToAppList = {},
+                        configuredColumns = 5
+                    )
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_fav_3").performSemanticsAction(SemanticsActions.RequestFocus)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_fav_3").assertIsFocused()
+
+        composeRule.onNodeWithTag("favorite_app_fav_3").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_fav_6").assertIsFocused()
+    }
+
+    @Test
+    fun `computeSectionedDownTargets and AppsAlphabeticalList handle partial rows within sections and across letter headers`() {
+        val alphaApps = (0 until 7).map { i -> sampleApp("a_$i", "Alpha $i") }
+        val bravoApps = (0 until 2).map { i -> sampleApp("b_$i", "Bravo $i") }
+        val entries = buildAppListEntries(alphaApps + bravoApps)
+        val targets = computeSectionedDownTargets(entries, columns = 5)
+
+        // Section A row 0 col 4 -> Section A row 1 last index (a_6)
+        assertEquals("a_6", targets["a_4"]?.targetId)
+        // Section A row 1 col 1 -> Section B row 0 col 1 (b_1) across letter header
+        assertEquals("b_1", targets["a_6"]?.targetId)
+        // Final row has no downward target
+        assertNull(targets["b_0"])
+        assertNull(targets["b_1"])
+
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.size(width = 960.dp, height = 476.dp)) {
+                    AppsAlphabeticalList(
+                        entries = entries,
+                        focusedItemId = "a_4",
+                        layout = FavoritesLayout.TV_CARDS,
+                        showFocusEffects = true,
+                        listState = rememberLazyListState(),
+                        gridState = rememberLazyGridState(),
+                        configuredColumns = 5,
+                        showAlphabetRail = false,
+                        onAppClick = {},
+                        onAppLongClick = {},
+                        onLetterSelected = {}
+                    )
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("app_row_a_4").performSemanticsAction(SemanticsActions.RequestFocus)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("app_row_a_4").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("app_row_a_6").assertIsFocused()
+
+        composeRule.onNodeWithTag("app_row_a_6").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("app_row_b_1").assertIsFocused()
+    }
+
+    @Test
+    fun `AddGfnSearchView and AddLunaSearchView move Down to partial next row when nothing sits directly below`() {
+        val gfnGames = (0 until 7).map { i ->
+            GameItem(
+                id = "gfn_$i",
+                title = "Game $i",
+                type = GameType.GEFORCE_NOW,
+                isGame = true
+            )
+        }
+        val lunaGames = (0 until 7).map { i ->
+            GameItem(
+                id = "luna_$i",
+                title = "Luna $i",
+                type = GameType.AMAZON_LUNA,
+                isGame = true
+            )
+        }
+        var showLuna by mutableStateOf(false)
+
+        composeRule.setContent {
+            MaterialTheme {
+                Column(modifier = Modifier.size(width = 860.dp, height = 460.dp)) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        if (!showLuna) {
+                            AddGfnSearchView(
+                                onGameSelected = {},
+                                catalogLoader = {
+                                    GeForceNowService.GfnBrowseResult(
+                                        games = gfnGames,
+                                        classification = GeForceNowService.GfnDefaultClassification.CATALOG_FALLBACK
+                                    )
+                                }
+                            )
+                        } else {
+                            AddLunaSearchView(
+                                onGameSelected = {},
+                                catalogLoader = { Result.success(lunaGames) },
+                                posterResolver = { null }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        // At 860dp, columns = max(2, (860+12)/(120+12)) = 6 -> row 0 has 0..5, row 1 has 6.
+        composeRule.onNodeWithTag("gfn_game_gfn_4").performSemanticsAction(SemanticsActions.RequestFocus)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("gfn_game_gfn_4").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("gfn_game_gfn_6").assertIsFocused()
+
+        showLuna = true
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("luna_game_luna_4").performSemanticsAction(SemanticsActions.RequestFocus)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("luna_game_luna_4").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("luna_game_luna_6").assertIsFocused()
+    }
+
+    @Test
+    fun `FolderContentsSheet moves Down to partial next row when nothing sits directly below`() {
+        val folder = GameItem(
+            id = "folder_media",
+            title = "Media",
+            type = GameType.FOLDER,
+            isGame = false
+        )
+        val folderApps = (0 until 7).map { i -> sampleApp("fapp_$i", "Folder App $i") }
+
+        composeRule.setContent {
+            MaterialTheme {
+                FolderContentsSheet(
+                    folder = folder,
+                    apps = folderApps,
+                    layout = FavoritesLayout.TV_CARDS,
+                    focusedItemId = "fapp_3",
+                    showFocusEffects = true,
+                    configuredColumns = 5,
+                    onAppClick = {},
+                    onAppLongClick = {},
+                    onCustomizeFolder = {},
+                    onManageFolderApps = {},
+                    onDismiss = {}
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("folder_app_row_fapp_3").performSemanticsAction(SemanticsActions.RequestFocus)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("folder_app_row_fapp_3").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("folder_app_row_fapp_6").assertIsFocused()
+    }
+
+    @Test
+    fun `settings modal shows mutually exclusive Google Drive and Local Folder sync controls across all modes`() {
+        var syncMode by mutableStateOf(LibrarySyncMode.NONE)
+        var targetLabel by mutableStateOf<String?>(null)
+        var driveConnectClicks by mutableIntStateOf(0)
+        var disconnectClicks by mutableIntStateOf(0)
+
+        composeRule.setContent {
+            MaterialTheme {
+                SettingsModal(
+                    favoritesLayout = FavoritesLayout.TV_CARDS,
+                    steamGridDbApiKey = null,
+                    steamGridDbIncludeNsfw = false,
+                    iconPacks = emptyList(),
+                    selectedIconPack = null,
+                    hiddenItems = emptyList(),
+                    appsBackgroundOpacity = 0.7f,
+                    themeStyle = ThemeStyle.WALLPAPER,
+                    weatherEnabled = false,
+                    weatherMode = com.example.data.service.WeatherLocationMode.DEVICE_LOCATION,
+                    weatherZip = "",
+                    weatherInfo = null,
+                    weatherError = null,
+                    temperatureUnit = TemperatureUnit.FAHRENHEIT,
+                    weatherApps = emptyList(),
+                    weatherAppPackage = null,
+                    librarySyncBusy = false,
+                    librarySyncStatus = null,
+                    librarySyncConfigured = syncMode != LibrarySyncMode.NONE,
+                    librarySyncMode = syncMode,
+                    librarySyncTarget = targetLabel,
+                    librarySyncLastSyncedAt = null,
+                    isDefaultLauncher = { true },
+                    isHomeOverrideEnabled = { false },
+                    onSelectFavoritesLayout = {},
+                    onSaveApiKey = {},
+                    onSteamGridDbIncludeNsfwChange = {},
+                    onSelectIconPack = {},
+                    onSetDefaultLauncher = {},
+                    onSetAppsBackgroundOpacity = {},
+                    onSelectThemeStyle = {},
+                    onUnhideItem = {},
+                    onOpenHiddenItem = {},
+                    onWeatherEnabledChange = {},
+                    onWeatherModeChange = {},
+                    onWeatherZipChange = {},
+                    onTemperatureUnitChange = {},
+                    onSelectWeatherApp = {},
+                    onOpenAccessibilitySettings = {},
+                    onChooseSyncFolder = {},
+                    onConnectGoogleDrive = { driveConnectClicks++ },
+                    onSyncLibraryNow = {},
+                    onDisconnectLibrarySync = {
+                        disconnectClicks++
+                        syncMode = LibrarySyncMode.NONE
+                        targetLabel = null
+                    },
+                    onDismiss = {},
+                    isTelevision = true
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        // Disconnected state: offers Connect Google Drive OR Choose Local Folder Instead.
+        composeRule.onNodeWithTag("library_sync_google_drive_button")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, driveConnectClicks)
+        composeRule.onNodeWithTag("library_sync_pick_folder_button").performScrollTo().assertIsDisplayed()
+
+        // Active Google Drive mode: shows target, Sync Now, Disconnect, and Switch to Local Folder (no Drive switch button).
+        syncMode = LibrarySyncMode.GOOGLE_DRIVE
+        targetLabel = "Google Drive (player@example.com)"
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("library_sync_target").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("library_sync_now_button").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Switch to Local Folder").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("library_sync_google_drive_button").assertDoesNotExist()
+
+        // Active Local Folder mode: shows Change Folder AND Switch to Google Drive.
+        syncMode = LibrarySyncMode.LOCAL_FOLDER
+        targetLabel = "NexusBackup"
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("library_sync_target").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Change Folder").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Switch to Google Drive").performScrollTo().assertIsDisplayed()
+
+        // Disconnect returns to unconfigured without removing anything.
+        composeRule.onNodeWithTag("library_sync_disconnect_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, disconnectClicks)
+        assertEquals(LibrarySyncMode.NONE, syncMode)
     }
 }

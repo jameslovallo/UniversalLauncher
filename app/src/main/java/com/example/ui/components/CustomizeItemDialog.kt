@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -15,6 +16,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,11 +32,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Check
@@ -74,12 +79,14 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -254,6 +261,10 @@ fun CustomizeItemDialog(
     }
 
     val isTv = isTelevisionMode()
+    val configuration = LocalConfiguration.current
+    val isWideSheetScreen = isTv ||
+        configuration.orientation == Configuration.ORIENTATION_LANDSCAPE ||
+        configuration.screenWidthDp >= 600
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val closeFocusRequester = remember { FocusRequester() }
     LaunchedEffect(item.id) {
@@ -263,7 +274,7 @@ fun CustomizeItemDialog(
     ModalBottomSheet(
         onDismissRequest = commitTitleAndDismiss,
         sheetState = sheetState,
-        sheetMaxWidth = if (isTv) 760.dp else BottomSheetDefaults.SheetMaxWidth,
+        sheetMaxWidth = if (isWideSheetScreen) 900.dp else BottomSheetDefaults.SheetMaxWidth,
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
@@ -271,9 +282,9 @@ fun CustomizeItemDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.88f)
+                .fillMaxHeight(if (isWideSheetScreen) 0.94f else 0.88f)
                 .consumeOrphanedSelectKeyEvents()
-                .padding(20.dp)
+                .padding(horizontal = 20.dp, vertical = 14.dp)
         ) {
             // Header
             Row(
@@ -324,121 +335,86 @@ fun CustomizeItemDialog(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Title editing field
-            OutlinedTextField(
-                value = title,
-                onValueChange = { title = it },
-                label = { Text("Display Name") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(
-                    onDone = {
-                        onApplyTitle(item.id, title)
-                        keyboardController?.hide()
-                    }
-                ),
-                modifier = Modifier.fillMaxWidth().testTag("customize_name_input")
-            )
-
-            if (item.isGame) {
-                Spacer(modifier = Modifier.height(6.dp))
-                val overlayRowInteraction = remember { MutableInteractionSource() }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .tvFocusBorder(overlayRowInteraction, shape = RoundedCornerShape(12.dp))
-                        .clickable(interactionSource = overlayRowInteraction, indication = null) {
-                            onSetOverlayLogo(item.id, title, isNsfwSlot, !activeOverlay)
-                        }
-                        .padding(horizontal = 4.dp)
-                        .testTag("customize_overlay_logo_row"),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = activeOverlay,
-                        onCheckedChange = { checked ->
-                            onSetOverlayLogo(item.id, title, isNsfwSlot, checked)
-                        },
-                        modifier = Modifier
-                            .focusProperties { canFocus = false }
-                            .testTag("customize_overlay_logo_checkbox")
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Overlay logo",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            } else {
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = { onResetIcon(item.id) },
-                    enabled = canResetIcon,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp)
-                        .testTag("customize_reset_icon_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.RestartAlt,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Reset icon to default",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Source Tabs: SteamGridDB (games/posters only), Local Photo, Custom URL
-            val selectedIndex = tabs.indexOf(selectedTab).coerceAtLeast(0)
-            ScrollableTabRow(
-                selectedTabIndex = selectedIndex,
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                contentColor = MaterialTheme.colorScheme.primary,
-                edgePadding = 0.dp,
-                divider = {},
-                modifier = Modifier.clip(RoundedCornerShape(12.dp))
-            ) {
-                tabs.forEach { tab ->
-                    val isSelected = selectedTab == tab
-                    Tab(
-                        selected = isSelected,
-                        onClick = { selectedTab = tab },
-                        text = {
-                            Text(
-                                text = tab.label,
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                            )
+            val renderDisplayNameAndAction: @Composable () -> Unit = {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Display Name") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            onApplyTitle(item.id, title)
+                            keyboardController?.hide()
                         }
-                    )
+                    ),
+                    modifier = Modifier.fillMaxWidth().testTag("customize_name_input")
+                )
+
+                if (item.isGame) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    val overlayRowInteraction = remember { MutableInteractionSource() }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .tvFocusBorder(overlayRowInteraction, shape = RoundedCornerShape(12.dp))
+                            .clickable(interactionSource = overlayRowInteraction, indication = null) {
+                                onSetOverlayLogo(item.id, title, isNsfwSlot, !activeOverlay)
+                            }
+                            .padding(horizontal = 4.dp)
+                            .testTag("customize_overlay_logo_row"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = activeOverlay,
+                            onCheckedChange = { checked ->
+                                onSetOverlayLogo(item.id, title, isNsfwSlot, checked)
+                            },
+                            modifier = Modifier
+                                .focusProperties { canFocus = false }
+                                .testTag("customize_overlay_logo_checkbox")
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Overlay logo",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                } else {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { onResetIcon(item.id) },
+                        enabled = canResetIcon,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("customize_reset_icon_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.RestartAlt,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Reset icon to default",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Full-width picker container (tap an option to apply immediately)
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                    .padding(12.dp)
-            ) {
+            val renderTabContent: @Composable () -> Unit = {
                 when (selectedTab) {
                     CustomizeArtworkTab.STEAMGRIDDB -> { // SteamGridDB (games only)
                         Column(modifier = Modifier.fillMaxSize()) {
@@ -485,72 +461,111 @@ fun CustomizeItemDialog(
                                     }
                                 }
 
-                                LazyVerticalGrid(
-                                    columns = GridCells.Adaptive(minSize = 104.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.fillMaxSize().testTag("customize_poster_grid")
-                                ) {
-                                    if (hasAssignedPoster) {
-                                        item(key = "assigned_poster") {
-                                            PosterOptionCard(
-                                                imageUrl = activeSlotUrl!!,
-                                                contentDescription = "Assigned poster (tap to unassign)",
-                                                isSelected = true,
-                                                logoOverlayUrl = if (showLogoOverlay) activeLogoUrl else null,
-                                                onClick = {
-                                                    onApplyPoster(item.id, title, isNsfwSlot, null)
-                                                },
-                                                modifier = Modifier.testTag("assigned_poster_card")
-                                            )
-                                        }
+                                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                                    val spacing = 8.dp
+                                    val columns = maxOf(2, ((maxWidth + spacing) / (104.dp + spacing)).toInt())
+                                    val gridState = rememberLazyGridState()
+                                    val gridScope = rememberCoroutineScope()
+                                    val assignedCount = if (hasAssignedPoster) 1 else 0
+                                    val resultItemsCount = if (!isSearching && remainingResults.isNotEmpty()) {
+                                        remainingResults.size
+                                    } else {
+                                        0
+                                    }
+                                    val totalCards = assignedCount + resultItemsCount
+                                    val posterRequesters = remember(totalCards) {
+                                        List(totalCards) { FocusRequester() }
                                     }
 
-                                    if (isSearching) {
-                                        item(
-                                            key = "loading_results",
-                                            span = { GridItemSpan(maxLineSpan) }
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 24.dp),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                CircularProgressIndicator()
+                                    LazyVerticalGrid(
+                                        columns = GridCells.Fixed(columns),
+                                        state = gridState,
+                                        verticalArrangement = Arrangement.spacedBy(spacing),
+                                        horizontalArrangement = Arrangement.spacedBy(spacing),
+                                        modifier = Modifier.fillMaxSize().testTag("customize_poster_grid")
+                                    ) {
+                                        if (hasAssignedPoster) {
+                                            item(key = "assigned_poster") {
+                                                PosterOptionCard(
+                                                    imageUrl = activeSlotUrl!!,
+                                                    contentDescription = "Assigned poster (tap to unassign)",
+                                                    isSelected = true,
+                                                    logoOverlayUrl = if (showLogoOverlay) activeLogoUrl else null,
+                                                    onClick = {
+                                                        onApplyPoster(item.id, title, isNsfwSlot, null)
+                                                    },
+                                                    modifier = Modifier
+                                                        .focusRequester(posterRequesters[0])
+                                                        .flatGridDownNextRowFallback(
+                                                            index = 0,
+                                                            columns = columns,
+                                                            itemCount = totalCards,
+                                                            gridState = gridState,
+                                                            requesters = posterRequesters,
+                                                            scope = gridScope
+                                                        )
+                                                        .testTag("assigned_poster_card")
+                                                )
                                             }
                                         }
-                                    } else if (remainingResults.isEmpty() && !hasAssignedPoster) {
-                                        item(
-                                            key = "empty_results",
-                                            span = { GridItemSpan(maxLineSpan) }
-                                        ) {
-                                            Text(
-                                                text = "No artwork found",
-                                                fontSize = 13.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                textAlign = TextAlign.Center,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 16.dp)
-                                            )
-                                        }
-                                    } else {
-                                        items(remainingResults, key = { it.id }) { option ->
-                                            PosterOptionCard(
-                                                imageUrl = option.thumbnailUrl,
-                                                contentDescription = option.title,
-                                                isSelected = false,
-                                                logoOverlayUrl = if (showLogoOverlay) activeLogoUrl else null,
-                                                onClick = {
-                                                    onApplyPoster(
-                                                        item.id,
-                                                        title,
-                                                        isNsfwSlot,
-                                                        option.fullUrl
-                                                    )
+
+                                        if (isSearching) {
+                                            item(
+                                                key = "loading_results",
+                                                span = { GridItemSpan(maxLineSpan) }
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(vertical = 24.dp),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    CircularProgressIndicator()
                                                 }
-                                            )
+                                            }
+                                        } else if (remainingResults.isEmpty() && !hasAssignedPoster) {
+                                            item(
+                                                key = "empty_results",
+                                                span = { GridItemSpan(maxLineSpan) }
+                                            ) {
+                                                Text(
+                                                    text = "No artwork found",
+                                                    fontSize = 13.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    textAlign = TextAlign.Center,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(vertical = 16.dp)
+                                                )
+                                            }
+                                        } else {
+                                            itemsIndexed(remainingResults, key = { _, opt -> opt.id }) { index, option ->
+                                                val logicalIdx = assignedCount + index
+                                                PosterOptionCard(
+                                                    imageUrl = option.thumbnailUrl,
+                                                    contentDescription = option.title,
+                                                    isSelected = false,
+                                                    logoOverlayUrl = if (showLogoOverlay) activeLogoUrl else null,
+                                                    onClick = {
+                                                        onApplyPoster(
+                                                            item.id,
+                                                            title,
+                                                            isNsfwSlot,
+                                                            option.fullUrl
+                                                        )
+                                                    },
+                                                    modifier = Modifier
+                                                        .focusRequester(posterRequesters[logicalIdx])
+                                                        .flatGridDownNextRowFallback(
+                                                            index = logicalIdx,
+                                                            columns = columns,
+                                                            itemCount = totalCards,
+                                                            gridState = gridState,
+                                                            requesters = posterRequesters,
+                                                            scope = gridScope
+                                                        )
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -635,31 +650,55 @@ fun CustomizeItemDialog(
                                         )
                                     }
                                 } else {
-                                    LazyVerticalGrid(
-                                        columns = GridCells.Adaptive(minSize = 72.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    BoxWithConstraints(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .weight(1f)
-                                            .testTag("customize_icon_pack_grid")
                                     ) {
-                                        items(
-                                            filteredIconPackIcons,
-                                            key = { it.drawableName }
-                                        ) { icon ->
-                                            IconPackOptionCard(
-                                                packPackage = iconPack.packageName,
-                                                icon = icon,
-                                                isSelected = icon.drawableName == selectedPackDrawable,
-                                                onClick = {
-                                                    onSelectIconPackIcon(
-                                                        item.id,
-                                                        title,
-                                                        icon.drawableName
-                                                    )
-                                                }
-                                            )
+                                        val spacing = 8.dp
+                                        val columns = maxOf(3, ((maxWidth + spacing) / (72.dp + spacing)).toInt())
+                                        val gridState = rememberLazyGridState()
+                                        val gridScope = rememberCoroutineScope()
+                                        val iconRequesters = remember(filteredIconPackIcons.size) {
+                                            List(filteredIconPackIcons.size) { FocusRequester() }
+                                        }
+
+                                        LazyVerticalGrid(
+                                            columns = GridCells.Fixed(columns),
+                                            state = gridState,
+                                            verticalArrangement = Arrangement.spacedBy(spacing),
+                                            horizontalArrangement = Arrangement.spacedBy(spacing),
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .testTag("customize_icon_pack_grid")
+                                        ) {
+                                            itemsIndexed(
+                                                filteredIconPackIcons,
+                                                key = { _, icon -> icon.drawableName }
+                                            ) { index, icon ->
+                                                IconPackOptionCard(
+                                                    packPackage = iconPack.packageName,
+                                                    icon = icon,
+                                                    isSelected = icon.drawableName == selectedPackDrawable,
+                                                    onClick = {
+                                                        onSelectIconPackIcon(
+                                                            item.id,
+                                                            title,
+                                                            icon.drawableName
+                                                        )
+                                                    },
+                                                    modifier = Modifier
+                                                        .focusRequester(iconRequesters[index])
+                                                        .flatGridDownNextRowFallback(
+                                                            index = index,
+                                                            columns = columns,
+                                                            itemCount = filteredIconPackIcons.size,
+                                                            gridState = gridState,
+                                                            requesters = iconRequesters,
+                                                            scope = gridScope
+                                                        )
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -667,67 +706,78 @@ fun CustomizeItemDialog(
                         }
                     }
                     CustomizeArtworkTab.LOCAL_PHOTO -> { // Local Photo / File
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.Center,
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Folder,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(54.dp)
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Text(
-                                text = "Pick Local Image",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "Choose an image file from device folders, Drive, or your gallery",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(modifier = Modifier.height(14.dp))
-                            Button(
-                                onClick = {
-                                    filePickerLauncher.launch(arrayOf("image/*"))
-                                },
+                        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                            Column(
                                 modifier = Modifier
-                                    .heightIn(min = 48.dp)
-                                    .testTag("customize_pick_file_button")
+                                    .fillMaxWidth()
+                                    .heightIn(min = maxHeight)
+                                    .verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Icon(Icons.Default.Folder, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Choose Image File")
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedButton(
-                                onClick = {
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
-                                },
-                                modifier = Modifier
-                                    .heightIn(min = 48.dp)
-                                    .testTag("customize_pick_gallery_button")
-                            ) {
-                                Icon(Icons.Default.Image, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Browse Photos")
+                                Icon(
+                                    imageVector = Icons.Default.Folder,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(48.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Pick Local Image",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Choose an image file from device folders, Drive, or your gallery",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Button(
+                                    onClick = {
+                                        filePickerLauncher.launch(arrayOf("image/*"))
+                                    },
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .testTag("customize_pick_file_button")
+                                ) {
+                                    Icon(Icons.Default.Folder, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Choose Image File")
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        photoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .testTag("customize_pick_gallery_button")
+                                ) {
+                                    Icon(Icons.Default.Image, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Browse Photos")
+                                }
                             }
                         }
                     }
                     CustomizeArtworkTab.CUSTOM_URL -> { // Custom URL
-                        Column(modifier = Modifier.fillMaxSize()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                        ) {
                             OutlinedTextField(
                                 value = customUrlInput,
                                 onValueChange = { customUrlInput = it },
                                 label = { Text("https://example.com/poster.jpg") },
                                 singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("customize_custom_url_input")
                             )
                             Spacer(modifier = Modifier.height(10.dp))
                             Button(
@@ -741,12 +791,163 @@ fun CustomizeItemDialog(
                                         )
                                     }
                                 },
-                                enabled = customUrlInput.isNotBlank()
+                                enabled = customUrlInput.isNotBlank(),
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("customize_apply_url_button")
                             ) {
                                 Icon(Icons.Default.Link, contentDescription = null)
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Apply Image URL")
                             }
+                        }
+                    }
+                }
+            }
+
+            BoxWithConstraints(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                val useTwoColumnLayout = maxWidth >= 520.dp
+                if (useTwoColumnLayout) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("customize_two_column_layout"),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .weight(0.42f)
+                                .fillMaxHeight()
+                                .verticalScroll(rememberScrollState())
+                                .testTag("customize_left_column")
+                        ) {
+                            renderDisplayNameAndAction()
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                tabs.forEach { tab ->
+                                    val isSelected = selectedTab == tab
+                                    val tabInteraction = remember { MutableInteractionSource() }
+                                    val tabFocused by tabInteraction.collectIsFocusedAsState()
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 48.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(
+                                                when {
+                                                    isSelected -> MaterialTheme.colorScheme.primaryContainer
+                                                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                                }
+                                            )
+                                            .border(
+                                                width = if (tabFocused || isSelected) 2.dp else 1.dp,
+                                                color = when {
+                                                    tabFocused -> MaterialTheme.colorScheme.primary
+                                                    isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+                                                    else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                                                },
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            .clickable(
+                                                interactionSource = tabInteraction,
+                                                indication = null
+                                            ) { selectedTab = tab }
+                                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                                            .testTag("customize_tab_${tab.name.lowercase()}"),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = tab.label,
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                                            else MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Selected",
+                                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .weight(0.58f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                                .padding(12.dp)
+                                .testTag("customize_right_column")
+                        ) {
+                            renderTabContent()
+                        }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("customize_single_column_layout")
+                    ) {
+                        renderDisplayNameAndAction()
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        val selectedIndex = tabs.indexOf(selectedTab).coerceAtLeast(0)
+                        ScrollableTabRow(
+                            selectedTabIndex = selectedIndex,
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            contentColor = MaterialTheme.colorScheme.primary,
+                            edgePadding = 0.dp,
+                            divider = {},
+                            modifier = Modifier.clip(RoundedCornerShape(12.dp))
+                        ) {
+                            tabs.forEach { tab ->
+                                val isSelected = selectedTab == tab
+                                Tab(
+                                    selected = isSelected,
+                                    onClick = { selectedTab = tab },
+                                    modifier = Modifier.testTag("customize_tab_${tab.name.lowercase()}"),
+                                    text = {
+                                        Text(
+                                            text = tab.label,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    }
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                                .padding(12.dp)
+                                .testTag("customize_right_column")
+                        ) {
+                            renderTabContent()
                         }
                     }
                 }
@@ -760,7 +961,8 @@ private fun IconPackOptionCard(
     packPackage: String,
     icon: IconPackIcon,
     isSelected: Boolean = false,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     // Previews are rendered on demand and cached, so a large theme does not block the
@@ -775,7 +977,7 @@ private fun IconPackOptionCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .aspectRatio(1f)
             .clip(RoundedCornerShape(12.dp))
