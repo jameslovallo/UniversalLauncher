@@ -105,6 +105,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
@@ -218,6 +219,9 @@ private class VisibleAwareBringIntoViewSpec(
     }
 }
 
+/** The library views that can own D-pad focus. Exactly one is focusable at a time. */
+private enum class LibraryFocusTarget { FAVORITES, APP_LIST, GAMES }
+
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun DashboardScreen(
@@ -325,6 +329,7 @@ fun DashboardScreen(
     val favoritesFirstFocusRequester = remember { FocusRequester() }
     val appsListFirstFocusRequester = remember { FocusRequester() }
     val gamesFirstFocusRequester = remember { FocusRequester() }
+    val navFirstFocusRequester = remember { FocusRequester() }
 
     // Filter each page by the search query. Keeping both lists separate means swiping
     // between pages shows the correct results even before the tab state catches up.
@@ -431,11 +436,28 @@ fun DashboardScreen(
     // Focusing mid-transition would make BringIntoView fight the pager animation, which is
     // what caused the left/right shake on TV at first open.
     var focusedViewKey by remember { mutableStateOf<Triple<Int, Int, String?>?>(null) }
+    // Which library view owns focus. Exactly one view is focusable once the pagers are idle.
+    var focusedLibraryView by remember { mutableStateOf(LibraryFocusTarget.FAVORITES) }
+    // The view that is giving up focus ownership. It stays focusable until the incoming view
+    // actually holds focus, otherwise the focus system has no valid target for one frame and
+    // falls back to the top navigation bar.
+    var handingOffFrom by remember { mutableStateOf<LibraryFocusTarget?>(null) }
     // Any pager motion invalidates the current view's focus claim. Focus is re-requested by
     // the settle effect below once both pagers are idle again.
     LaunchedEffect(pagerState.isScrollInProgress, appsPagerState.isScrollInProgress) {
         if (pagerState.isScrollInProgress || appsPagerState.isScrollInProgress) {
             focusedViewKey = null
+            // While a pager moves, focusability follows focusedLibraryView, so a pending
+            // handoff is no longer needed.
+            handingOffFrom = null
+        }
+    }
+    // Switch focus ownership between library views. The outgoing view stays focusable until
+    // the incoming view reports focus, so focus is never orphaned onto the top navigation bar.
+    fun handFocusTo(target: LibraryFocusTarget) {
+        if (focusedLibraryView != target) {
+            handingOffFrom = focusedLibraryView
+            focusedLibraryView = target
         }
     }
     LaunchedEffect(
@@ -463,6 +485,7 @@ fun DashboardScreen(
             val key = Triple(1, 0, firstGame.id)
             if (key == focusedViewKey) return@LaunchedEffect
             focusedViewKey = key
+            handFocusTo(LibraryFocusTarget.GAMES)
             viewModel.setFocusedItem(firstGame.id)
             withFrameNanos { }
             if (pagerState.isScrollInProgress || appsPagerState.isScrollInProgress) {
@@ -474,6 +497,7 @@ fun DashboardScreen(
             val key = Triple(0, 0, firstFavorite?.id)
             if (key == focusedViewKey) return@LaunchedEffect
             focusedViewKey = key
+            handFocusTo(LibraryFocusTarget.FAVORITES)
             if (firstFavorite != null) {
                 viewModel.setFocusedItem(firstFavorite.id)
             } else {
@@ -490,6 +514,7 @@ fun DashboardScreen(
             val key = Triple(0, 1, firstApp.item.id)
             if (key == focusedViewKey) return@LaunchedEffect
             focusedViewKey = key
+            handFocusTo(LibraryFocusTarget.APP_LIST)
             viewModel.setFocusedItem(firstApp.item.id)
             withFrameNanos { }
             if (pagerState.isScrollInProgress || appsPagerState.isScrollInProgress) {
@@ -498,6 +523,17 @@ fun DashboardScreen(
             runCatching { appsListFirstFocusRequester.requestFocus() }
         }
     }
+
+    // Exactly one library view may accept focus. A pending handoff also keeps the outgoing
+    // view focusable until the incoming view has taken focus, so the focus system always has
+    // a valid target and never falls back to the top navigation bar.
+    val pagerIdle = !pagerState.isScrollInProgress && !appsPagerState.isScrollInProgress
+    val favoritesCanFocus = focusedLibraryView == LibraryFocusTarget.FAVORITES ||
+        (pagerIdle && handingOffFrom == LibraryFocusTarget.FAVORITES)
+    val appDrawerCanFocus = focusedLibraryView == LibraryFocusTarget.APP_LIST ||
+        (pagerIdle && handingOffFrom == LibraryFocusTarget.APP_LIST)
+    val gamesCanFocus = focusedLibraryView == LibraryFocusTarget.GAMES ||
+        (pagerIdle && handingOffFrom == LibraryFocusTarget.GAMES)
 
     val disablePagerSwipeInCompactGames by remember(isCompactLandscape, gamesDisplay.isEmpty()) {
         derivedStateOf {
@@ -584,8 +620,16 @@ fun DashboardScreen(
                     onTabSelected = { viewModel.setTab(it) },
                     onOpenAddModal = { viewModel.openAddModal() },
                     onOpenSettings = { viewModel.openSettingsModal() },
+                    firstItemFocusRequester = navFirstFocusRequester,
                     onNavigateDown = {
-                        runCatching { favoritesFirstFocusRequester.requestFocus() }
+                        // Down from the bar returns to the first item of whichever library
+                        // view is on screen, so the bar never traps focus on the Games tab.
+                        val target = when {
+                            pagerState.settledPage == 1 -> gamesFirstFocusRequester
+                            appsPagerState.settledPage == 1 -> appsListFirstFocusRequester
+                            else -> favoritesFirstFocusRequester
+                        }
+                        runCatching { target.requestFocus() }
                     },
                     modifier = if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
                 )
@@ -641,15 +685,12 @@ fun DashboardScreen(
                                 // Confine left/previous navigation so D-pad Left cannot jump to Apps,
                                 // while allowing Up from row 0 to reach the top navigation bar.
                                 val pullToRefreshState = rememberPullToRefreshState()
-                                // Never let focus land in a page while either pager is moving.
-                                // settledPage only changes once a transition finishes, so focus is
-                                // requested only after the active page is fully stable.
-                                val gamesCanFocus = !pagerState.isScrollInProgress &&
-                                    !appsPagerState.isScrollInProgress &&
-                                    pagerState.settledPage == 1
                                 BoxWithConstraints(
                                     modifier = Modifier
                                         .fillMaxSize()
+                                        // Once this page holds focus the handoff is complete, so
+                                        // the page that lost focus can stop accepting it.
+                                        .onFocusChanged { if (it.hasFocus) handingOffFrom = null }
                                         .focusGroup()
                                         .focusProperties {
                                             exit = { direction ->
@@ -721,6 +762,9 @@ fun DashboardScreen(
                                                 onSwipeToApps = {
                                                     scope.launch { pagerState.animateScrollToPage(0) }
                                                 },
+                                                onNavigateUpToNav = {
+                                                    runCatching { navFirstFocusRequester.requestFocus() }
+                                                },
                                                 onGameClick = onGameClick,
                                                 onGameLongClick = onGameLongClick,
                                                 onGameFocus = onGameFocus
@@ -740,9 +784,6 @@ fun DashboardScreen(
                             } else {
                                 // Apps View: a full-height favorites home. Swiping up or pressing Down
                                 // reveals the complete app list, which excludes favorites and games.
-                                val appsTabCanFocus = !pagerState.isScrollInProgress &&
-                                    !appsPagerState.isScrollInProgress &&
-                                    pagerState.settledPage == 0
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -784,10 +825,13 @@ fun DashboardScreen(
                                                 }
                                             ) {
                                                 if (appsPage == 0) {
-                                                    val favoritesCanFocus = appsTabCanFocus &&
-                                                        appsPagerState.settledPage == 0
                                                     Box(
-                                                        modifier = Modifier.fillMaxSize()
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .onFocusChanged {
+                                                                if (it.hasFocus) handingOffFrom = null
+                                                            }
+                                                            .focusGroup()
                                                     ) {
                                                         FavoritesHome(
                                                             favorites = favoriteApps,
@@ -819,10 +863,13 @@ fun DashboardScreen(
                                                         )
                                                     }
                                                 } else {
-                                                    val appDrawerCanFocus = appsTabCanFocus &&
-                                                        appsPagerState.settledPage == 1
                                                     Box(
-                                                        modifier = Modifier.fillMaxSize()
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .onFocusChanged {
+                                                                if (it.hasFocus) handingOffFrom = null
+                                                            }
+                                                            .focusGroup()
                                                     ) {
                                                         if (libraryDisplay.isEmpty()) {
                                                             EmptyAppDrawerState(
@@ -1277,6 +1324,26 @@ internal fun BindLibraryPagerAndScrollEffects(
     }
 }
 
+/**
+ * Up from the first poster row leaves the Games grid for the top navigation bar. Lower rows
+ * keep the implicit vertical move, so focus still steps up one row at a time.
+ */
+private fun Modifier.navigateUpToNavFromTopRow(
+    isTopRow: Boolean,
+    onNavigateUpToNav: (() -> Unit)?
+): Modifier = if (isTopRow && onNavigateUpToNav != null) {
+    onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
+            onNavigateUpToNav()
+            true
+        } else {
+            false
+        }
+    }
+} else {
+    this
+}
+
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun GamesPosterGrid(
@@ -1291,6 +1358,7 @@ private fun GamesPosterGrid(
     compactLandscape: Boolean,
     compactViewportHeight: Dp = 0.dp,
     onSwipeToApps: () -> Unit = {},
+    onNavigateUpToNav: (() -> Unit)? = null,
     onGameClick: (GameItem) -> Unit,
     onGameLongClick: (GameItem) -> Unit,
     onGameFocus: (GameItem) -> Unit = {}
@@ -1472,6 +1540,7 @@ private fun GamesPosterGrid(
                             .focusProperties { canFocus = focusEnabled }
                             .then(firstItemModifier)
                             .then(if (index == 0) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
+                            .navigateUpToNavFromTopRow(true, onNavigateUpToNav)
                             .width(if (isFocused) 168.dp else 112.dp)
                     )
                 }
@@ -1559,6 +1628,7 @@ private fun GamesPosterGrid(
                             .focusProperties { canFocus = focusEnabled }
                             .then(firstItemModifier)
                             .then(if (isLeftmost) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
+                            .navigateUpToNavFromTopRow(index < columnCount, onNavigateUpToNav)
                     )
                 }
             }

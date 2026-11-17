@@ -32,6 +32,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -68,6 +70,7 @@ fun TopNavBar(
     onOpenAddModal: () -> Unit,
     onOpenSettings: () -> Unit,
     onNavigateDown: (() -> Unit)? = null,
+    firstItemFocusRequester: FocusRequester? = null,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -106,7 +109,11 @@ fun TopNavBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AddButton(onOpenAddModal, showFocusEffects)
+                AddButton(
+                    onClick = onOpenAddModal,
+                    showFocusEffects = showFocusEffects,
+                    focusRequester = firstItemFocusRequester
+                )
                 NavTabs(currentTab, showFocusEffects, onTabSelected)
                 SettingsButton(onOpenSettings, showFocusEffects)
             }
@@ -118,12 +125,20 @@ fun TopNavBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AddButton(onOpenAddModal, showFocusEffects)
+                AddButton(
+                    onClick = onOpenAddModal,
+                    showFocusEffects = showFocusEffects,
+                    focusRequester = firstItemFocusRequester
+                )
                 NavTabs(currentTab, showFocusEffects, onTabSelected)
                 SettingsButton(onOpenSettings, showFocusEffects)
             }
         } else {
-            AddButton(onOpenAddModal, showFocusEffects)
+            AddButton(
+                onClick = onOpenAddModal,
+                showFocusEffects = showFocusEffects,
+                focusRequester = firstItemFocusRequester
+            )
             NavTabs(currentTab, showFocusEffects, onTabSelected)
             SettingsButton(onOpenSettings, showFocusEffects)
         }
@@ -133,7 +148,8 @@ fun TopNavBar(
 @Composable
 private fun AddButton(
     onClick: () -> Unit,
-    showFocusEffects: Boolean
+    showFocusEffects: Boolean,
+    focusRequester: FocusRequester? = null
 ) {
     // Material3's IconButton does not reliably emit focus interactions for its supplied
     // interaction source, so the focus ring is driven by the focus state directly.
@@ -144,6 +160,9 @@ private fun AddButton(
         modifier = Modifier
             .size(48.dp)
             .clip(CircleShape)
+            .then(
+                if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
+            )
             .onFocusChanged { isFocused = it.isFocused }
             .then(
                 if (focused) {
@@ -342,7 +361,9 @@ private fun TabLabel(
     testTag: String
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
+    // Focus visuals come from the focus state directly: the clickable interaction source is
+    // not a reliable focus signal when focus is moved programmatically onto the bar.
+    var isFocused by remember { mutableStateOf(false) }
     val focused = isFocused && showFocusEffects
     val textColor by animateColorAsState(
         targetValue = when {
@@ -372,6 +393,7 @@ private fun TabLabel(
                     Modifier
                 }
             )
+            .onFocusChanged { isFocused = it.isFocused }
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,

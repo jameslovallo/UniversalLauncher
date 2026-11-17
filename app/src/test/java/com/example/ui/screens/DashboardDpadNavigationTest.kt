@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.app.Application
 import android.content.Context
+import android.os.Looper
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
@@ -9,6 +10,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ApplicationProvider
@@ -26,6 +28,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
@@ -33,7 +36,8 @@ import org.robolectric.annotation.Config
  *
  * Remote and controller D-pad both arrive as Compose key events, so these tests exercise the
  * shared focus wiring: favorites rows move explicitly, Up escapes to the clock and top bar,
- * and only the last row hands off to the app list.
+ * only the last row hands off to the app list, and the top bar is only reachable from a top
+ * row and never steals focus back from the library.
  */
 @OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -172,6 +176,75 @@ class DashboardDpadNavigationTest {
             .getUnclippedBoundsInRoot().top.value
         assertTrue("App list did not open: drawer top=$drawerTop", drawerTop < 400f)
     }
+
+    @Test
+    fun `up from the games top row reaches the top navigation bar`() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
+
+        composeRule.onNodeWithTag("tab_games").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("game_poster_game_test_1").assertIsFocused()
+
+        composeRule.onRoot().performKeyInput {
+            pressKey(Key.DirectionUp)
+        }
+        composeRule.waitForIdle()
+
+        assertTrue(
+            "Up from the first games row should focus the top navigation bar",
+            topBarTags().any { tag -> isFocused(tag) }
+        )
+    }
+
+    @Test
+    fun `closing the app list never hands focus to the top navigation bar`() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        composeRule.mainClock.autoAdvance = false
+        settleFrames()
+
+        composeRule.onNodeWithTag("favorite_app_app_test_1").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        settleFrames(5)
+        composeRule.onNodeWithTag("favorite_app_app_test_6").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        settleFrames()
+        composeRule.onNodeWithTag("app_row_app_test_7").assertIsFocused()
+
+        // Close the app list again; the drawer slides away while the favorites page settles.
+        composeRule.onRoot().performKeyInput {
+            pressKey(Key.DirectionUp)
+        }
+        var stoleFocus: String? = null
+        repeat(45) {
+            composeRule.mainClock.advanceTimeByFrame()
+            shadowOf(Looper.getMainLooper()).idle()
+            if (stoleFocus == null) {
+                stoleFocus = topBarTags().firstOrNull { tag -> isFocused(tag) }
+            }
+        }
+
+        composeRule.mainClock.autoAdvance = true
+        assertTrue("The top bar stole focus while closing the app list: $stoleFocus", stoleFocus == null)
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
+    }
+
+    private fun settleFrames(frames: Int = 40) {
+        repeat(frames) {
+            composeRule.mainClock.advanceTimeByFrame()
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+    }
+
+    private fun topBarTags() = listOf(
+        "topbar_add_button",
+        "tab_apps",
+        "tab_games",
+        "topbar_settings_button"
+    )
 
     private fun isFocused(tag: String): Boolean =
         runCatching { composeRule.onNodeWithTag(tag).assertIsFocused() }.isSuccess
