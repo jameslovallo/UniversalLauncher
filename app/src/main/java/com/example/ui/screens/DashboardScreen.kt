@@ -191,6 +191,33 @@ private val NoOpBringIntoViewSpec = object : BringIntoViewSpec {
     ): Float = 0f
 }
 
+/**
+ * The TV default spec pivots a focused item to 30% of its container even when that item is
+ * already fully visible. In the app list that produces a pointless scroll on every focus
+ * change, and because the list is at its top the leftover scroll is dispatched as a nested
+ * scroll that the vertical pager consumes by flipping back a page. Only scroll when the item
+ * actually needs to be revealed.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private class VisibleAwareBringIntoViewSpec(
+    private val delegate: BringIntoViewSpec
+) : BringIntoViewSpec {
+    override val scrollAnimationSpec get() = delegate.scrollAnimationSpec
+
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float
+    ): Float {
+        val alreadyVisible = offset >= 0f && offset + size <= containerSize
+        return if (alreadyVisible) {
+            0f
+        } else {
+            delegate.calculateScrollDistance(offset, size, containerSize)
+        }
+    }
+}
+
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun DashboardScreen(
@@ -339,6 +366,9 @@ fun DashboardScreen(
     // Captured before the pagers override it with [NoOpBringIntoViewSpec] so each page can
     // hand the real focus-scrolling behaviour back to its inner lists.
     val ambientBringIntoViewSpec = LocalBringIntoViewSpec.current
+    val drawerBringIntoViewSpec = remember(ambientBringIntoViewSpec) {
+        VisibleAwareBringIntoViewSpec(ambientBringIntoViewSpec)
+    }
 
     // Dismiss the drawer with a much shorter downward drag than the default half-page.
     val appsPagerFling = PagerDefaults.flingBehavior(
@@ -530,9 +560,6 @@ fun DashboardScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .focusProperties {
-                        canFocus = noOverlayOpen
-                    }
                     .statusBarsPadding()
                     // In the compact landscape game row the cutout inset is handled inside
                     // the row, so the row can draw the previous poster underneath the camera.
@@ -557,6 +584,9 @@ fun DashboardScreen(
                     onTabSelected = { viewModel.setTab(it) },
                     onOpenAddModal = { viewModel.openAddModal() },
                     onOpenSettings = { viewModel.openSettingsModal() },
+                    onNavigateDown = {
+                        runCatching { favoritesFirstFocusRequester.requestFocus() }
+                    },
                     modifier = if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
                 )
 
@@ -739,7 +769,20 @@ fun DashboardScreen(
                                                 .fillMaxSize()
                                                 .testTag("apps_vertical_pager")
                                         ) { appsPage ->
-                                            CompositionLocalProvider(LocalBringIntoViewSpec provides ambientBringIntoViewSpec) {
+                                            CompositionLocalProvider(
+                                                // The favorites page never scrolls (its grid is
+                                                // sized to fit and its layouts are FlowRows), so
+                                                // it keeps the no-op spec. The app list still
+                                                // needs focus scrolling, but the plain TV pivot
+                                                // spec scrolls even for visible rows and the
+                                                // leftover nested scroll pulls the pager back a
+                                                // page, so it uses a visible-aware variant.
+                                                LocalBringIntoViewSpec provides if (appsPage == 0) {
+                                                    NoOpBringIntoViewSpec
+                                                } else {
+                                                    drawerBringIntoViewSpec
+                                                }
+                                            ) {
                                                 if (appsPage == 0) {
                                                     val favoritesCanFocus = appsTabCanFocus &&
                                                         appsPagerState.settledPage == 0

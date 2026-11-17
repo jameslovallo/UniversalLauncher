@@ -142,6 +142,13 @@ fun FavoritesHome(
     // need the same inset to line up with the icons.
     val textRowInset = 6.dp + favoritesSpacing / 2
 
+    // Stable requesters for row-to-row D-pad movement. The implicit 2D focus search used to
+    // escape the favorites page (and scroll the apps pager open), so vertical moves inside the
+    // grid are wired explicitly instead.
+    val rowFocusRequesters = remember(favorites.size) {
+        List(favorites.size) { FocusRequester() }
+    }
+
     // The clock and date are hidden only on small screens in landscape (phones held
     // sideways); landscape tablets and TV devices always keep them.
     val configuration = LocalConfiguration.current
@@ -151,11 +158,6 @@ fun FavoritesHome(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            // The clock, date, and weather shortcuts are direct descendants, so this
-            // keeps them out of the focus tree while another view owns focus. Cards in
-            // the lazy grid are gated individually because a scrollable's internal
-            // focus target blocks properties applied above it.
-            .focusProperties { canFocus = focusEnabled }
             // Before the padding, so the whole home screen is a pull-down surface.
             .pointerInput(onPullDown) {
                 // A short downward drag on the home screen expands the notification
@@ -239,6 +241,7 @@ fun FavoritesHome(
                     weatherEnabled = weatherEnabled,
                     weather = weather,
                     temperatureUnit = temperatureUnit,
+                    focusEnabled = focusEnabled,
                     onOpenClock = onOpenClock,
                     onOpenCalendar = onOpenCalendar,
                     onOpenWeather = onOpenWeather,
@@ -298,7 +301,6 @@ fun FavoritesHome(
                 val visibleCount = minOf(favorites.size, TV_FAVORITES_MAX_COLUMNS * TV_FAVORITES_MAX_ROWS)
                 val gridWidth = cardWidth * columns + hSpacing * (columns - 1) + gridPadding * 2
                 val gridHeight = cardHeight * visibleRows + vSpacing * (visibleRows - 1) + gridPadding * 2
-                val lastRowStartIndex = ((visibleCount - 1) / columns) * columns
 
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(columns),
@@ -315,7 +317,6 @@ fun FavoritesHome(
                         items = favorites,
                         key = { _, app -> app.id }
                     ) { index, app ->
-                        val isLastRow = index >= lastRowStartIndex
                         AppTvCard(
                             app = app,
                             isFocused = app.id == focusedItemId,
@@ -326,26 +327,18 @@ fun FavoritesHome(
                             onFocus = { onFocusFavorite(app) },
                             modifier = Modifier
                                 .focusProperties { canFocus = focusEnabled }
+                                .focusRequester(rowFocusRequesters[index])
+                                .favoriteDpadNavigation(
+                                    index = index,
+                                    columns = columns,
+                                    itemCount = visibleCount,
+                                    requesters = rowFocusRequesters,
+                                    onNavigateDownToAppList = onNavigateDownToAppList
+                                )
                                 .then(
                                     if (index == 0) {
                                         firstItemFocusRequester?.let { Modifier.focusRequester(it) }
                                             ?: Modifier
-                                    } else {
-                                        Modifier
-                                    }
-                                )
-                                .then(
-                                    if (isLastRow && onNavigateDownToAppList != null) {
-                                        Modifier.onPreviewKeyEvent { keyEvent ->
-                                            if (keyEvent.type == KeyEventType.KeyDown &&
-                                                keyEvent.key == Key.DirectionDown
-                                            ) {
-                                                onNavigateDownToAppList()
-                                                true
-                                            } else {
-                                                false
-                                            }
-                                        }
                                     } else {
                                         Modifier
                                     }
@@ -374,7 +367,6 @@ fun FavoritesHome(
                         }
                         val rowGap = 2.dp
                         val itemWidth = maxWidth / columns
-                        val lastRowStartIndex = ((favorites.size - 1) / columns) * columns
 
                         FlowRow(
                             modifier = Modifier
@@ -385,7 +377,6 @@ fun FavoritesHome(
                             maxItemsInEachRow = columns
                         ) {
                             favorites.forEachIndexed { index, app ->
-                                val isLastRow = index >= lastRowStartIndex
                                 AppTextRow(
                                     app = app,
                                     isFocused = app.id == focusedItemId,
@@ -401,26 +392,18 @@ fun FavoritesHome(
                                     modifier = Modifier
                                         .width(itemWidth)
                                         .focusProperties { canFocus = focusEnabled }
+                                        .focusRequester(rowFocusRequesters[index])
+                                        .favoriteDpadNavigation(
+                                            index = index,
+                                            columns = columns,
+                                            itemCount = favorites.size,
+                                            requesters = rowFocusRequesters,
+                                            onNavigateDownToAppList = onNavigateDownToAppList
+                                        )
                                         .then(
                                             if (index == 0) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }
                                                     ?: Modifier
-                                            } else {
-                                                Modifier
-                                            }
-                                        )
-                                        .then(
-                                            if (isLastRow && onNavigateDownToAppList != null) {
-                                                Modifier.onPreviewKeyEvent { keyEvent ->
-                                                    if (keyEvent.type == KeyEventType.KeyDown &&
-                                                        keyEvent.key == Key.DirectionDown
-                                                    ) {
-                                                        onNavigateDownToAppList()
-                                                        true
-                                                    } else {
-                                                        false
-                                                    }
-                                                }
                                             } else {
                                                 Modifier
                                             }
@@ -440,7 +423,6 @@ fun FavoritesHome(
                             4,
                             ((maxWidth + tileGap) / tilePitch).toInt()
                         )
-                        val lastRowStartIndex = ((favorites.size - 1) / columns) * columns
 
                         FlowRow(
                             modifier = Modifier.fillMaxWidth(),
@@ -452,7 +434,6 @@ fun FavoritesHome(
                             maxItemsInEachRow = columns
                         ) {
                             favorites.forEachIndexed { index, app ->
-                                val isLastRow = index >= lastRowStartIndex
                                 AppIconTile(
                                     app = app,
                                     isFocused = app.id == focusedItemId,
@@ -468,26 +449,18 @@ fun FavoritesHome(
                                     modifier = Modifier
                                         .width(tilePitch)
                                         .focusProperties { canFocus = focusEnabled }
+                                        .focusRequester(rowFocusRequesters[index])
+                                        .favoriteDpadNavigation(
+                                            index = index,
+                                            columns = columns,
+                                            itemCount = favorites.size,
+                                            requesters = rowFocusRequesters,
+                                            onNavigateDownToAppList = onNavigateDownToAppList
+                                        )
                                         .then(
                                             if (index == 0) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }
                                                     ?: Modifier
-                                            } else {
-                                                Modifier
-                                            }
-                                        )
-                                        .then(
-                                            if (isLastRow && onNavigateDownToAppList != null) {
-                                                Modifier.onPreviewKeyEvent { keyEvent ->
-                                                    if (keyEvent.type == KeyEventType.KeyDown &&
-                                                        keyEvent.key == Key.DirectionDown
-                                                    ) {
-                                                        onNavigateDownToAppList()
-                                                        true
-                                                    } else {
-                                                        false
-                                                    }
-                                                }
                                             } else {
                                                 Modifier
                                             }
@@ -502,6 +475,55 @@ fun FavoritesHome(
     }
 }
 
+/**
+ * Explicit vertical D-pad handling for favorites.
+ *
+ * Compose's implicit 2D search can leave the favorites page when the apps pager is
+ * already composed, which both steals focus and scrolls the pager open. Moving between
+ * rows is therefore wired to stable [FocusRequester]s. Moving Up from the first row is
+ * deliberately left unhandled so focus can continue to the clock/date and the top bar.
+ */
+private fun Modifier.favoriteDpadNavigation(
+    index: Int,
+    columns: Int,
+    itemCount: Int,
+    requesters: List<FocusRequester>,
+    onNavigateDownToAppList: (() -> Unit)?
+): Modifier = onPreviewKeyEvent { event ->
+    if (event.type != KeyEventType.KeyDown) {
+        false
+    } else {
+        when (event.key) {
+            Key.DirectionDown -> {
+                val below = index + columns
+                when {
+                    below < itemCount -> {
+                        runCatching { requesters.getOrNull(below)?.requestFocus() }
+                        true
+                    }
+                    // Only the last populated row hands off to the app list. A partial row
+                    // with no cell directly below simply keeps focus where it is.
+                    index / columns == (itemCount - 1) / columns -> {
+                        onNavigateDownToAppList?.invoke()
+                        true
+                    }
+                    else -> true
+                }
+            }
+            Key.DirectionUp -> {
+                val above = index - columns
+                if (above >= 0) {
+                    runCatching { requesters.getOrNull(above)?.requestFocus() }
+                    true
+                } else {
+                    false
+                }
+            }
+            else -> false
+        }
+    }
+}
+
 @Composable
 private fun FavoritesClockAndDate(
     isTextLayout: Boolean,
@@ -512,6 +534,7 @@ private fun FavoritesClockAndDate(
     weatherEnabled: Boolean,
     weather: WeatherInfo?,
     temperatureUnit: TemperatureUnit,
+    focusEnabled: Boolean,
     onOpenClock: () -> Unit,
     onOpenCalendar: () -> Unit,
     onOpenWeather: () -> Unit,
@@ -562,6 +585,7 @@ private fun FavoritesClockAndDate(
                     Modifier
                 }
             )
+            .focusProperties { canFocus = focusEnabled }
             .clickable(
                 interactionSource = clockInteraction,
                 indication = null,
@@ -586,6 +610,7 @@ private fun FavoritesClockAndDate(
                     Modifier
                 }
             )
+            .focusProperties { canFocus = focusEnabled }
             .clickable(
                 interactionSource = dateInteraction,
                 indication = null,
@@ -621,6 +646,7 @@ private fun FavoritesClockAndDate(
                             Modifier
                         }
                     )
+                    .focusProperties { canFocus = focusEnabled }
                     .clickable(
                         interactionSource = weatherInteraction,
                         indication = null,

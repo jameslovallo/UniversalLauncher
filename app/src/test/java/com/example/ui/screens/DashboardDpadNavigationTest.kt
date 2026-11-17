@@ -1,0 +1,178 @@
+package com.example.ui.screens
+
+import android.app.Application
+import android.content.Context
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.platform.app.InstrumentationRegistry
+import com.example.MainActivity
+import com.example.TvTestApplication
+import com.example.data.local.AppDatabase
+import com.example.data.model.GameItem
+import com.example.data.model.GameType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+/**
+ * D-pad / TV remote navigation across the Apps tab.
+ *
+ * Remote and controller D-pad both arrive as Compose key events, so these tests exercise the
+ * shared focus wiring: favorites rows move explicitly, Up escapes to the clock and top bar,
+ * and only the last row hands off to the app list.
+ */
+@OptIn(ExperimentalTestApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(
+    sdk = [34],
+    qualifiers = "w960dp-h540dp-television-xhdpi",
+    application = TvTestApplication::class
+)
+class DashboardDpadNavigationTest {
+
+    @get:Rule
+    val composeRule = createAndroidComposeRule<MainActivity>()
+
+    @Before
+    fun seedDatabase() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        app.getSharedPreferences("nexus_launcher_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
+        val db = AppDatabase.getDatabase(app)
+        runBlocking(Dispatchers.IO) {
+            db.clearAllTables()
+            val dao = db.gameDao()
+            // Six favorites with five columns gives a full first row plus one second-row item.
+            for (i in 1..15) {
+                dao.insertGame(
+                    GameItem(
+                        id = "app_test_$i",
+                        title = "App ${('A'.code + (i % 26)).toChar()} $i",
+                        type = GameType.INSTALLED_APP,
+                        isGame = false,
+                        isFavorite = i <= 6,
+                        favoriteOrder = if (i <= 6) i - 1 else 0,
+                        packageName = "com.example.app$i"
+                    )
+                )
+            }
+            for (i in 1..8) {
+                dao.insertGame(
+                    GameItem(
+                        id = "game_test_$i",
+                        title = "Game $i",
+                        type = GameType.GEFORCE_NOW,
+                        isGame = true,
+                        gfnCmsId = "cms_$i"
+                    )
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `up from favorites reaches the clock and then the top navigation bar`() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
+
+        composeRule.onRoot().performKeyInput {
+            pressKey(Key.DirectionUp)
+        }
+        composeRule.waitForIdle()
+
+        // The first Up leaves the favorites grid for the clock/date block above it.
+        val clockOrDateTags = listOf("favorites_clock", "favorites_date_row")
+        assertTrue(
+            "Up from the grid should focus the clock/date block",
+            clockOrDateTags.any { tag -> isFocused(tag) }
+        )
+
+        // Keep going Up until the top navigation bar owns focus.
+        val topBarTags = listOf(
+            "topbar_add_button",
+            "tab_apps",
+            "tab_games",
+            "topbar_settings_button"
+        )
+        var reachedTopBar = false
+        repeat(4) {
+            if (!reachedTopBar) {
+                composeRule.onRoot().performKeyInput {
+                    pressKey(Key.DirectionUp)
+                }
+                composeRule.waitForIdle()
+                reachedTopBar = topBarTags.any { tag -> isFocused(tag) }
+            }
+        }
+        assertTrue("Up from the clock/date block should reach the top navigation bar", reachedTopBar)
+    }
+
+    @Test
+    fun `down from the top favorites row moves within the grid and keeps the app list closed`() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
+
+        composeRule.onNodeWithTag("favorite_app_app_test_1").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+
+        // app_test_6 is the only item on the second row.
+        composeRule.onNodeWithTag("favorite_app_app_test_6").assertIsFocused()
+
+        // The favorites page must still be the settled page: the app drawer stays below it.
+        val drawerTop = composeRule.onNodeWithTag("app_row_app_test_7")
+            .getUnclippedBoundsInRoot().top.value
+        assertTrue(
+            "Down from the top row opened the app list: drawer top=$drawerTop",
+            drawerTop > 400f
+        )
+    }
+
+    @Test
+    fun `down from the last favorites row opens the app list`() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
+
+        // Move to the only second-row favorite first.
+        composeRule.onNodeWithTag("favorite_app_app_test_1").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_6").assertIsFocused()
+
+        composeRule.onNodeWithTag("favorite_app_app_test_6").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.waitForIdle()
+        composeRule.waitForIdle()
+
+        // The drawer page settles and focus moves to the first app in the alphabetical list.
+        composeRule.onNodeWithTag("app_row_app_test_7").assertIsFocused()
+        val drawerTop = composeRule.onNodeWithTag("app_row_app_test_7")
+            .getUnclippedBoundsInRoot().top.value
+        assertTrue("App list did not open: drawer top=$drawerTop", drawerTop < 400f)
+    }
+
+    private fun isFocused(tag: String): Boolean =
+        runCatching { composeRule.onNodeWithTag(tag).assertIsFocused() }.isSuccess
+}

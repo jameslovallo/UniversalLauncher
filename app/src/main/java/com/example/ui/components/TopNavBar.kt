@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -134,15 +135,16 @@ private fun AddButton(
     onClick: () -> Unit,
     showFocusEffects: Boolean
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
+    // Material3's IconButton does not reliably emit focus interactions for its supplied
+    // interaction source, so the focus ring is driven by the focus state directly.
+    var isFocused by remember { mutableStateOf(false) }
     val focused = isFocused && showFocusEffects
     IconButton(
         onClick = onClick,
-        interactionSource = interactionSource,
         modifier = Modifier
             .size(48.dp)
             .clip(CircleShape)
+            .onFocusChanged { isFocused = it.isFocused }
             .then(
                 if (focused) {
                     Modifier
@@ -196,15 +198,14 @@ private fun SettingsButton(
     onClick: () -> Unit,
     showFocusEffects: Boolean
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
+    var isFocused by remember { mutableStateOf(false) }
     val focused = isFocused && showFocusEffects
     IconButton(
         onClick = onClick,
-        interactionSource = interactionSource,
         modifier = Modifier
             .size(48.dp)
             .clip(CircleShape)
+            .onFocusChanged { isFocused = it.isFocused }
             .then(
                 if (focused) {
                     Modifier
