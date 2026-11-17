@@ -108,6 +108,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -118,6 +119,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -678,6 +680,11 @@ fun DashboardScreen(
     val appsScrimColor = MaterialTheme.colorScheme.background
     val gamesScrimColor = MaterialTheme.colorScheme.surfaceContainerHighest
 
+    // Bottom edge of the top bar in root coordinates. The Apps list fades its background in
+    // behind the bar, and that fade has to start at the very top of the screen so the
+    // status-bar strip joins the bar instead of showing the wallpaper above it.
+    var topBarBottomPx by remember { mutableStateOf(0f) }
+
     CompositionLocalProvider(
         LocalThemedAppIcons provides themedAppIcons,
         LocalFolderPreviewItems provides folderMembersMap
@@ -713,6 +720,20 @@ fun DashboardScreen(
                         }
                         if (darkAmount > 0f) {
                             drawRect(gamesScrimColor.copy(alpha = darkAmount))
+                        }
+                        // As the app list scrolls in, fade the same surface the Games screen
+                        // uses behind the top bar. Painting from y = 0 keeps the status-bar
+                        // strip the same color instead of leaving the wallpaper visible.
+                        if (currentTab == MainLibraryTab.APPS) {
+                            val reveal = (
+                                appsPagerState.currentPage +
+                                    appsPagerState.currentPageOffsetFraction
+                                ).coerceIn(0f, 1f)
+                            if (reveal > 0f && topBarBottomPx > 0f) {
+                                clipRect(right = size.width, bottom = topBarBottomPx) {
+                                    drawRect(gamesScrimColor.copy(alpha = reveal))
+                                }
+                            }
                         }
                     }
             )
@@ -755,19 +776,11 @@ fun DashboardScreen(
                         runCatching { target.requestFocus() }
                     },
                     modifier = Modifier
-                        // The bar sits above the vertical pager, so it does not move with the
-                        // app list. As that page scrolls into view, fade its background color
-                        // in behind the bar so the list reads as one surface with it.
-                        .drawBehind {
-                            if (currentTab == MainLibraryTab.APPS) {
-                                val reveal = (
-                                    appsPagerState.currentPage +
-                                        appsPagerState.currentPageOffsetFraction
-                                    ).coerceIn(0f, 1f)
-                                if (reveal > 0f) {
-                                    drawRect(appsScrimColor.copy(alpha = reveal))
-                                }
-                            }
+                        // Measure where the bar ends so the Apps background fade can start at
+                        // the top of the screen and stop exactly at the bar's bottom edge.
+                        .onGloballyPositioned { coordinates ->
+                            topBarBottomPx =
+                                coordinates.positionInRoot().y + coordinates.size.height
                         }
                         .then(if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier)
                 )
