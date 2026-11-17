@@ -29,9 +29,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -106,6 +104,31 @@ internal const val TV_FAVORITES_MAX_COLUMNS = 5
 internal const val TV_FAVORITES_MAX_ROWS = 3
 
 /**
+ * Splits [itemCount] favorites into rows that are as even as possible while never exceeding
+ * [columns] per row. Extra items go to the earlier rows, so an odd two-row split puts one more
+ * card on the top row and the narrower row sits underneath it.
+ *
+ * With the TV maximum of five columns, 6–10 favorites become two centered rows (3/3, 4/3,
+ * 4/4, 5/4, 5/5) instead of a full row followed by a nearly empty one.
+ */
+internal fun balancedFavoriteRows(itemCount: Int, columns: Int): List<Int> {
+    if (itemCount <= 0 || columns <= 0) return emptyList()
+    val rowCount = (itemCount + columns - 1) / columns
+    val base = itemCount / rowCount
+    val extra = itemCount % rowCount
+    return List(rowCount) { row -> base + if (row < extra) 1 else 0 }
+}
+
+private fun rowStartsFor(rowSizes: List<Int>): List<Int> {
+    var next = 0
+    return rowSizes.map { size ->
+        val start = next
+        next += size
+        start
+    }
+}
+
+/**
  * Full-height favorites home shown on the Apps tab. Favorites are laid out in as many
  * columns as fit, in text-list, icon-grid, or TV 16:9 card-grid style. Swiping up or
  * pressing Down from the bottom row (handled via [onNavigateDownToAppList]) reveals the
@@ -150,6 +173,9 @@ fun FavoritesHome(
     val rowFocusRequesters = remember(favorites.size) {
         List(favorites.size) { FocusRequester() }
     }
+    // The TV favorites grid is laid out as explicit balanced rows, so it scrolls a list of
+    // rows rather than a uniform grid.
+    val tvRowsListState = rememberLazyListState()
     // A second, id-keyed requester per card lets the dashboard return focus to a specific
     // favorite after a sheet opened from it closes.
     fun itemRequesterModifier(id: String): Modifier =
@@ -289,35 +315,64 @@ fun FavoritesHome(
                 val hSpacing = 14.dp
                 val vSpacing = 12.dp
                 val gridPadding = 8.dp
-                val colDenominator = if (configuredColumns > 0) {
-                    configuredColumns
+                val maxColumns = TV_FAVORITES_MAX_COLUMNS
+                val columnLimit = if (configuredColumns > 0) {
+                    configuredColumns.coerceIn(1, maxColumns)
                 } else {
-                    TV_FAVORITES_MAX_COLUMNS
+                    maxColumns
                 }
-                val columns = favorites.size.coerceIn(1, colDenominator)
-                val totalRows = (favorites.size + columns - 1) / columns
-                val visibleRows = totalRows.coerceAtMost(TV_FAVORITES_MAX_ROWS)
 
-                val maxUsableWidth = (availableHomeWidth - 32.dp - gridPadding * 2).coerceAtLeast(200.dp)
-                val maxColCardWidth = ((maxUsableWidth - hSpacing * (colDenominator - 1)) / colDenominator)
-                    .coerceAtLeast(if (colDenominator >= 6) 56.dp else 80.dp)
+                // Cards are always sized from the full five-column layout. Choosing fewer
+                // columns may add rows, but it must never make the cards themselves smaller.
+                val maxUsableWidth = (availableHomeWidth - 32.dp - gridPadding * 2)
+                    .coerceAtLeast(200.dp)
+                val maxColCardWidth = ((maxUsableWidth - hSpacing * (maxColumns - 1)) / maxColumns)
+                    .coerceAtLeast(56.dp)
                 val clockReserve = 124.dp
                 val maxUsableGridHeight = (availableHomeHeight - clockReserve - gridPadding * 2)
                     .coerceAtLeast(100.dp)
-                val maxCardHeightForRows = ((maxUsableGridHeight - vSpacing * (visibleRows - 1)) / visibleRows)
-                    .coerceAtLeast(48.dp)
+                val baseRows = ((favorites.size + maxColumns - 1) / maxColumns).coerceAtLeast(1)
+                val baseVisibleRows = baseRows.coerceAtMost(TV_FAVORITES_MAX_ROWS)
+                val maxCardHeightForRows =
+                    ((maxUsableGridHeight - vSpacing * (baseVisibleRows - 1)) / baseVisibleRows)
+                        .coerceAtLeast(48.dp)
                 val maxCardWidthFromHeight = maxCardHeightForRows * (16f / 9f)
                 val cardWidth = minOf(maxColCardWidth, maxCardWidthFromHeight)
                 val cardHeight = cardWidth * (9f / 16f)
 
-                val visibleCount = minOf(favorites.size, colDenominator * TV_FAVORITES_MAX_ROWS)
-                val gridWidth = cardWidth * columns + hSpacing * (columns - 1) + gridPadding * 2
-                val gridHeight = cardHeight * visibleRows + vSpacing * (visibleRows - 1) + gridPadding * 2
+                // More than five favorites split into balanced, horizontally centered rows
+                // instead of a full row with a single card underneath.
+                val rowSizes = remember(favorites.size, columnLimit) {
+                    balancedFavoriteRows(favorites.size, columnLimit)
+                }
+                val rowStarts = remember(rowSizes) { rowStartsFor(rowSizes) }
+                val rowIndexByItem = remember(rowSizes) {
+                    IntArray(favorites.size).also { rows ->
+                        rowStarts.forEachIndexed { rowIndex, start ->
+                            repeat(rowSizes[rowIndex]) { offset ->
+                                val index = start + offset
+                                if (index < rows.size) rows[index] = rowIndex
+                            }
+                        }
+                    }
+                }
+                val widestRow = rowSizes.maxOrNull()?.coerceAtLeast(1) ?: 1
+                val visibleRows = rowSizes.size
+                    .coerceAtMost(TV_FAVORITES_MAX_ROWS)
+                    .coerceAtLeast(1)
+                val gridWidth =
+                    cardWidth * widestRow + hSpacing * (widestRow - 1) + gridPadding * 2
+                // Fewer configured columns can force more than the usual row count. Keep the
+                // card size fixed and cap the viewport instead, so the extra rows scroll
+                // beneath the clock rather than spilling past the available height.
+                val maxGridHeight = maxUsableGridHeight + gridPadding * 2
+                val gridHeight = (
+                    cardHeight * visibleRows + vSpacing * (visibleRows - 1) + gridPadding * 2
+                    ).coerceAtMost(maxGridHeight)
 
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(columns),
+                LazyColumn(
+                    state = tvRowsListState,
                     contentPadding = PaddingValues(gridPadding),
-                    horizontalArrangement = Arrangement.spacedBy(hSpacing),
                     verticalArrangement = Arrangement.spacedBy(vSpacing),
                     modifier = Modifier
                         .width(gridWidth)
@@ -325,38 +380,55 @@ fun FavoritesHome(
                         .align(Alignment.CenterHorizontally)
                         .testTag("favorites_tv_grid")
                 ) {
-                    gridItemsIndexed(
-                        items = favorites,
-                        key = { _, app -> app.id }
-                    ) { index, app ->
-                        AppTvCard(
-                            app = app,
-                            isFocused = app.id == focusedItemId,
-                            showFocusEffects = showFocusEffects,
-                            testTag = "favorite_app_${app.id}",
-                            onClick = { onLaunchFavorite(app) },
-                            onLongClick = { onLongPressFavorite(app) },
-                            onFocus = { onFocusFavorite(app) },
-                            modifier = Modifier
-                                .focusProperties { canFocus = focusEnabled }
-                                .focusRequester(rowFocusRequesters[index])
-                                .then(itemRequesterModifier(app.id))
-                                .favoriteDpadNavigation(
-                                    index = index,
-                                    columns = columns,
-                                    itemCount = visibleCount,
-                                    requesters = rowFocusRequesters,
-                                    onNavigateDownToAppList = onNavigateDownToAppList
+                    itemsIndexed(
+                        items = rowSizes,
+                        key = { rowIndex, _ -> rowIndex }
+                    ) { rowIndex, rowSize ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(
+                                hSpacing,
+                                Alignment.CenterHorizontally
+                            )
+                        ) {
+                            val rowStart = rowStarts[rowIndex]
+                            repeat(rowSize) { offset ->
+                                val index = rowStart + offset
+                                val app = favorites[index]
+                                AppTvCard(
+                                    app = app,
+                                    isFocused = app.id == focusedItemId,
+                                    showFocusEffects = showFocusEffects,
+                                    testTag = "favorite_app_${app.id}",
+                                    onClick = { onLaunchFavorite(app) },
+                                    onLongClick = { onLongPressFavorite(app) },
+                                    onFocus = { onFocusFavorite(app) },
+                                    modifier = Modifier
+                                        .width(cardWidth)
+                                        .focusProperties { canFocus = focusEnabled }
+                                        .focusRequester(rowFocusRequesters[index])
+                                        .then(itemRequesterModifier(app.id))
+                                        .favoriteRowDpadNavigation(
+                                            index = index,
+                                            rowIndex = rowIndexByItem[index],
+                                            lastVisibleRow = visibleRows - 1,
+                                            rowStarts = rowStarts,
+                                            rowSizes = rowSizes,
+                                            requesters = rowFocusRequesters,
+                                            onNavigateDownToAppList = onNavigateDownToAppList
+                                        )
+                                        .then(
+                                            if (index == 0) {
+                                                firstItemFocusRequester?.let {
+                                                    Modifier.focusRequester(it)
+                                                } ?: Modifier
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
                                 )
-                                .then(
-                                    if (index == 0) {
-                                        firstItemFocusRequester?.let { Modifier.focusRequester(it) }
-                                            ?: Modifier
-                                    } else {
-                                        Modifier
-                                    }
-                                )
-                        )
+                            }
+                        }
                     }
                 }
             } else {
@@ -498,6 +570,53 @@ fun FavoritesHome(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * D-pad handling for the TV favorites rows, which can have different sizes per row.
+ * Down/Up keep the horizontal position where possible and clamp to the shorter row's end.
+ */
+private fun Modifier.favoriteRowDpadNavigation(
+    index: Int,
+    rowIndex: Int,
+    lastVisibleRow: Int,
+    rowStarts: List<Int>,
+    rowSizes: List<Int>,
+    requesters: List<FocusRequester>,
+    onNavigateDownToAppList: (() -> Unit)?
+): Modifier = onPreviewKeyEvent { event ->
+    if (event.type != KeyEventType.KeyDown) {
+        false
+    } else {
+        when (event.key) {
+            Key.DirectionDown -> {
+                if (rowIndex < lastVisibleRow) {
+                    val targetRow = rowIndex + 1
+                    val column = index - rowStarts[rowIndex]
+                    val targetIndex = rowStarts[targetRow] +
+                        column.coerceAtMost(rowSizes[targetRow] - 1)
+                    runCatching { requesters.getOrNull(targetIndex)?.requestFocus() }
+                    true
+                } else {
+                    onNavigateDownToAppList?.invoke()
+                    true
+                }
+            }
+            Key.DirectionUp -> {
+                if (rowIndex > 0) {
+                    val targetRow = rowIndex - 1
+                    val column = index - rowStarts[rowIndex]
+                    val targetIndex = rowStarts[targetRow] +
+                        column.coerceAtMost(rowSizes[targetRow] - 1)
+                    runCatching { requesters.getOrNull(targetIndex)?.requestFocus() }
+                    true
+                } else {
+                    false
+                }
+            }
+            else -> false
         }
     }
 }

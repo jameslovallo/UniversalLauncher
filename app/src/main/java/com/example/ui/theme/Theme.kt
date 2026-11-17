@@ -12,6 +12,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.graphics.ColorUtils
 
@@ -21,24 +22,30 @@ fun MyApplicationTheme(
     // Games view fades to a dark background instead of a light one.
     darkTheme: Boolean = true,
     style: ThemeStyle = ThemeStyle.WALLPAPER,
+    /**
+     * Accent sampled from the user-picked TV wallpaper. Android TV has no system live
+     * wallpaper, so the [ThemeStyle.WALLPAPER] style cannot read one from WallpaperManager;
+     * the launcher's own wallpaper file supplies the seed instead.
+     */
+    wallpaperSeed: Color? = null,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
 
-    val colorScheme: ColorScheme = remember(style, darkTheme) {
+    val colorScheme: ColorScheme = remember(style, darkTheme, wallpaperSeed) {
         when {
-            style == ThemeStyle.WALLPAPER &&
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+            style != ThemeStyle.WALLPAPER -> paletteColorScheme(style, darkTheme)
+            wallpaperSeed != null -> schemeFromSeedColor(wallpaperSeed, darkTheme)
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
                 // System-level Material You.
                 if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
             }
-            style == ThemeStyle.WALLPAPER -> {
+            else -> {
                 // No system Monet below Android 12: build a scheme from the wallpaper
                 // color instead, falling back to monochrome when unavailable.
                 wallpaperColorScheme(context, darkTheme)
                     ?: schemeFromHue(hue = 0f, saturation = 0f, dark = darkTheme)
             }
-            else -> paletteColorScheme(style, darkTheme)
         }
     }
 
@@ -66,9 +73,14 @@ private fun wallpaperColorScheme(context: Context, darkTheme: Boolean): ColorSch
             ?.toArgb()
     }.getOrNull() ?: return null
 
+    return schemeFromSeedColor(Color(wallpaperColor), darkTheme)
+}
+
+/** Builds the dynamic palette from an arbitrary accent color (e.g. a TV wallpaper sample). */
+private fun schemeFromSeedColor(seed: Color, darkTheme: Boolean): ColorScheme {
     val hsl = FloatArray(3)
-    ColorUtils.colorToHSL(wallpaperColor, hsl)
-    // Tame very saturated or nearly grey wallpapers so text contrast stays readable.
+    ColorUtils.colorToHSL(seed.toArgb(), hsl)
+    // Tame very saturated or nearly grey accents so text contrast stays readable.
     return schemeFromHue(
         hue = hsl[0],
         saturation = hsl[1].coerceIn(0.18f, 0.65f),

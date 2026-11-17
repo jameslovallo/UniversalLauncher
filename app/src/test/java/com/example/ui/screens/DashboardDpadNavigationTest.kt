@@ -72,7 +72,7 @@ class DashboardDpadNavigationTest {
         runBlocking(Dispatchers.IO) {
             db.clearAllTables()
             val dao = db.gameDao()
-            // Six favorites with five columns gives a full first row plus one second-row item.
+            // Six favorites split evenly across two centered rows of three.
             for (i in 1..15) {
                 dao.insertGame(
                     GameItem(
@@ -139,8 +139,8 @@ class DashboardDpadNavigationTest {
         }
         composeRule.waitForIdle()
 
-        // app_test_6 is the only item on the second row.
-        composeRule.onNodeWithTag("favorite_app_app_test_6").assertIsFocused()
+        // app_test_4 is the first item on the second row of a 3/3 split.
+        composeRule.onNodeWithTag("favorite_app_app_test_4").assertIsFocused()
 
         // The favorites page must still be the settled page: the app drawer stays below it.
         val drawerTop = composeRule.onNodeWithTag("app_row_app_test_7")
@@ -157,14 +157,14 @@ class DashboardDpadNavigationTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
 
-        // Move to the only second-row favorite first.
+        // Move to the second row of the 3/3 split first.
         composeRule.onNodeWithTag("favorite_app_app_test_1").performKeyInput {
             pressKey(Key.DirectionDown)
         }
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("favorite_app_app_test_6").assertIsFocused()
+        composeRule.onNodeWithTag("favorite_app_app_test_4").assertIsFocused()
 
-        composeRule.onNodeWithTag("favorite_app_app_test_6").performKeyInput {
+        composeRule.onNodeWithTag("favorite_app_app_test_4").performKeyInput {
             pressKey(Key.DirectionDown)
         }
         composeRule.waitForIdle()
@@ -208,7 +208,7 @@ class DashboardDpadNavigationTest {
             pressKey(Key.DirectionDown)
         }
         settleFrames(5)
-        composeRule.onNodeWithTag("favorite_app_app_test_6").performKeyInput {
+        composeRule.onNodeWithTag("favorite_app_app_test_4").performKeyInput {
             pressKey(Key.DirectionDown)
         }
         settleFrames()
@@ -242,7 +242,7 @@ class DashboardDpadNavigationTest {
             pressKey(Key.DirectionDown)
         }
         settleFrames(5)
-        composeRule.onNodeWithTag("favorite_app_app_test_6").performKeyInput {
+        composeRule.onNodeWithTag("favorite_app_app_test_4").performKeyInput {
             pressKey(Key.DirectionDown)
         }
         settleFrames()
@@ -277,7 +277,7 @@ class DashboardDpadNavigationTest {
             pressKey(Key.DirectionDown)
         }
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("favorite_app_app_test_6").performKeyInput {
+        composeRule.onNodeWithTag("favorite_app_app_test_4").performKeyInput {
             pressKey(Key.DirectionDown)
         }
         composeRule.waitForIdle()

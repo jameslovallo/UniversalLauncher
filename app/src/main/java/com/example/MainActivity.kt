@@ -18,8 +18,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.components.isTelevisionMode
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.theme.rememberWallpaperSeedColor
 import com.example.ui.viewmodel.LauncherViewModel
 
 class MainActivity : ComponentActivity() {
@@ -46,7 +48,14 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val themeStyle by viewModel.themeStyle.collectAsStateWithLifecycle()
-            MyApplicationTheme(style = themeStyle) {
+            val tvWallpaperUrl by viewModel.tvWallpaperUrl.collectAsStateWithLifecycle()
+            val isTelevision = isTelevisionMode()
+            // On TV the system has no live wallpaper, so the dynamic "Wallpaper" palette
+            // follows the image the user picked inside the launcher instead.
+            val wallpaperSeed = rememberWallpaperSeedColor(
+                tvWallpaperUrl.takeIf { isTelevision }
+            )
+            MyApplicationTheme(style = themeStyle, wallpaperSeed = wallpaperSeed) {
                 NexusApp(viewModel = viewModel)
             }
         }

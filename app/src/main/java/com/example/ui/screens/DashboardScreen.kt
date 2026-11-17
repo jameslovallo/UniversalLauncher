@@ -754,7 +754,22 @@ fun DashboardScreen(
                         }
                         runCatching { target.requestFocus() }
                     },
-                    modifier = if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier
+                    modifier = Modifier
+                        // The bar sits above the vertical pager, so it does not move with the
+                        // app list. As that page scrolls into view, fade its background color
+                        // in behind the bar so the list reads as one surface with it.
+                        .drawBehind {
+                            if (currentTab == MainLibraryTab.APPS) {
+                                val reveal = (
+                                    appsPagerState.currentPage +
+                                        appsPagerState.currentPageOffsetFraction
+                                    ).coerceIn(0f, 1f)
+                                if (reveal > 0f) {
+                                    drawRect(appsScrimColor.copy(alpha = reveal))
+                                }
+                            }
+                        }
+                        .then(if (isCompactLandscape) Modifier.displayCutoutPadding() else Modifier)
                 )
 
                 // Optional Search Bar
@@ -2019,154 +2034,261 @@ internal fun AppsAlphabeticalList(
         }
     }
 
-    Row(
-        modifier = Modifier.fillMaxSize()
-    ) {
-        if (layout == FavoritesLayout.TV_CARDS) {
-            BoxWithConstraints(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-            ) {
-                val availableWidth = maxWidth - if (showAlphabetRail) 24.dp else 32.dp
-                val spacing = 14.dp
-                val minCardWidth = 156.dp
-                val columns = if (configuredColumns > 0) {
-                    configuredColumns
-                } else {
-                    minOf(
-                        TV_FAVORITES_MAX_COLUMNS,
-                        maxOf(3, ((availableWidth + spacing) / (minCardWidth + spacing)).toInt())
-                    )
-                }
-                val firstRowIds = remember(entries, columns) {
-                    firstSectionTopRowIds(entries, columns)
-                }
-                val downTargets = remember(entries, columns) {
-                    computeSectionedDownTargets(entries, columns)
-                }
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        // The rail is a fixed-height column of letters parked above the gesture bar.
+        // In landscape a short window cannot fit the full A–Z column, so hide it rather
+        // than letting it overflow or squeeze the app grid.
+        val isLandscape =
+            LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val letterLineHeight = with(LocalDensity.current) { 13.sp.toDp() }
+        val letterPitch = letterLineHeight + 6.dp
+        val requiredRailHeight = letterPitch * (letters.size.coerceAtLeast(1) + 5) + 8.dp
+        val railVisible = showAlphabetRail &&
+            letters.isNotEmpty() &&
+            (!isLandscape || maxHeight >= requiredRailHeight)
 
+        Row(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            if (layout == FavoritesLayout.TV_CARDS) {
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    val availableWidth = maxWidth - if (railVisible) 24.dp else 32.dp
+                    val spacing = 14.dp
+                    val minCardWidth = 156.dp
+                    val columns = if (configuredColumns > 0) {
+                        configuredColumns
+                    } else {
+                        minOf(
+                            TV_FAVORITES_MAX_COLUMNS,
+                            maxOf(3, ((availableWidth + spacing) / (minCardWidth + spacing)).toInt())
+                        )
+                    }
+                    val firstRowIds = remember(entries, columns) {
+                        firstSectionTopRowIds(entries, columns)
+                    }
+                    val downTargets = remember(entries, columns) {
+                        computeSectionedDownTargets(entries, columns)
+                    }
+
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(columns),
+                        state = gridState,
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            end = if (railVisible) 8.dp else 16.dp,
+                            top = 20.dp,
+                            bottom = 20.dp + navigationBarInset
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(spacing),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("apps_tv_grid")
+                    ) {
+                        items(
+                            items = entries,
+                            key = { entry ->
+                                when (entry) {
+                                    is AppListEntry.Letter -> "section_${entry.letter}"
+                                    is AppListEntry.App -> entry.item.id
+                                }
+                            },
+                            span = { entry ->
+                                when (entry) {
+                                    is AppListEntry.Letter -> GridItemSpan(maxLineSpan)
+                                    is AppListEntry.App -> GridItemSpan(1)
+                                }
+                            },
+                            contentType = { entry ->
+                                when (entry) {
+                                    is AppListEntry.Letter -> "letter"
+                                    is AppListEntry.App -> "app_tv_card"
+                                }
+                            }
+                        ) { entry ->
+                            when (entry) {
+                                is AppListEntry.Letter -> AppLetterHeader(letter = entry.letter)
+                                is AppListEntry.App -> {
+                                    val app = entry.item
+                                    val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
+                                    val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
+                                    val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
+                                    val upToFavoritesMod = if (app.id in firstRowIds && onNavigateUpToFavorites != null) {
+                                        Modifier.onPreviewKeyEvent { keyEvent ->
+                                            if (keyEvent.type == KeyEventType.KeyDown &&
+                                                keyEvent.key == Key.DirectionUp
+                                            ) {
+                                                onNavigateUpToFavorites()
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        }
+                                    } else {
+                                        Modifier
+                                    }
+                                    AppTvCard(
+                                        app = app,
+                                        isFocused = app.id == focusedItemId,
+                                        showFocusEffects = showFocusEffects,
+                                        testTag = "app_row_${app.id}",
+                                        onClick = handleClick,
+                                        onLongClick = handleLongClick,
+                                        onFocus = handleFocus,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .focusProperties { canFocus = focusEnabled }
+                                            .focusRequester(requesterForId(app.id))
+                                            .then(
+                                                if (app.id == firstAppId) {
+                                                    firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                        ?: Modifier
+                                                } else {
+                                                    Modifier
+                                                }
+                                            )
+                                            .then(upToFavoritesMod)
+                                            .then(downNavigationModifier(downTargets[app.id], useGrid = true))
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (layout == FavoritesLayout.ICONS) {
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    val availableWidth = maxWidth - if (railVisible) 12.dp else 24.dp
+                    val tileMinSize = 78.dp
+                    val columns = if (configuredColumns > 0) {
+                        configuredColumns
+                    } else {
+                        maxOf(3, (availableWidth / tileMinSize).toInt())
+                    }
+                    val firstRowIds = remember(entries, columns) {
+                        firstSectionTopRowIds(entries, columns)
+                    }
+                    val downTargets = remember(entries, columns) {
+                        computeSectionedDownTargets(entries, columns)
+                    }
+
+                    // Icon grid drawer: cells are packed edge to edge; gaps live inside each
+                    // tile's clickable content padding so the whole cell is an easy touch target.
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(columns),
+                        state = gridState,
+                        contentPadding = PaddingValues(
+                            start = 12.dp,
+                            end = if (railVisible) 0.dp else 12.dp,
+                            top = 20.dp,
+                            bottom = 16.dp + navigationBarInset
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(0.dp),
+                        horizontalArrangement = Arrangement.spacedBy(0.dp),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("apps_grid")
+                    ) {
+                        items(
+                            items = entries,
+                            key = { entry ->
+                                when (entry) {
+                                    is AppListEntry.Letter -> "section_${entry.letter}"
+                                    is AppListEntry.App -> entry.item.id
+                                }
+                            },
+                            span = { entry ->
+                                when (entry) {
+                                    is AppListEntry.Letter -> GridItemSpan(maxLineSpan)
+                                    is AppListEntry.App -> GridItemSpan(1)
+                                }
+                            },
+                            contentType = { entry ->
+                                when (entry) {
+                                    is AppListEntry.Letter -> "letter"
+                                    is AppListEntry.App -> "app_tile"
+                                }
+                            }
+                        ) { entry ->
+                            when (entry) {
+                                is AppListEntry.Letter -> AppLetterHeader(letter = entry.letter)
+                                is AppListEntry.App -> {
+                                    val app = entry.item
+                                    val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
+                                    val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
+                                    val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
+                                    val upToFavoritesMod = if (app.id in firstRowIds && onNavigateUpToFavorites != null) {
+                                        Modifier.onPreviewKeyEvent { keyEvent ->
+                                            if (keyEvent.type == KeyEventType.KeyDown &&
+                                                keyEvent.key == Key.DirectionUp
+                                            ) {
+                                                onNavigateUpToFavorites()
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        }
+                                    } else {
+                                        Modifier
+                                    }
+                                    AppIconTile(
+                                        app = app,
+                                        isFocused = app.id == focusedItemId,
+                                        showFocusEffects = showFocusEffects,
+                                        testTag = "app_row_${app.id}",
+                                        onClick = handleClick,
+                                        onLongClick = handleLongClick,
+                                        onFocus = handleFocus,
+                                        contentPadding = PaddingValues(horizontal = 5.dp, vertical = 10.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .focusProperties { canFocus = focusEnabled }
+                                            .focusRequester(requesterForId(app.id))
+                                            .then(
+                                                if (app.id == firstAppId) {
+                                                    firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                        ?: Modifier
+                                                } else {
+                                                    Modifier
+                                                }
+                                            )
+                                            .then(upToFavoritesMod)
+                                            .then(downNavigationModifier(downTargets[app.id], useGrid = true))
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (configuredColumns > 1) {
+                val firstRowIds = remember(entries, configuredColumns) {
+                    firstSectionTopRowIds(entries, configuredColumns)
+                }
+                val downTargets = remember(entries, configuredColumns) {
+                    computeSectionedDownTargets(entries, configuredColumns)
+                }
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(columns),
+                    columns = GridCells.Fixed(configuredColumns),
                     state = gridState,
                     contentPadding = PaddingValues(
                         start = 16.dp,
-                        end = if (showAlphabetRail) 8.dp else 16.dp,
-                        top = 8.dp,
-                        bottom = 20.dp + navigationBarInset
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(spacing),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .testTag("apps_tv_grid")
-                ) {
-                    items(
-                        items = entries,
-                        key = { entry ->
-                            when (entry) {
-                                is AppListEntry.Letter -> "section_${entry.letter}"
-                                is AppListEntry.App -> entry.item.id
-                            }
-                        },
-                        span = { entry ->
-                            when (entry) {
-                                is AppListEntry.Letter -> GridItemSpan(maxLineSpan)
-                                is AppListEntry.App -> GridItemSpan(1)
-                            }
-                        },
-                        contentType = { entry ->
-                            when (entry) {
-                                is AppListEntry.Letter -> "letter"
-                                is AppListEntry.App -> "app_tv_card"
-                            }
-                        }
-                    ) { entry ->
-                        when (entry) {
-                            is AppListEntry.Letter -> AppLetterHeader(letter = entry.letter)
-                            is AppListEntry.App -> {
-                                val app = entry.item
-                                val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
-                                val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
-                                val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
-                                val upToFavoritesMod = if (app.id in firstRowIds && onNavigateUpToFavorites != null) {
-                                    Modifier.onPreviewKeyEvent { keyEvent ->
-                                        if (keyEvent.type == KeyEventType.KeyDown &&
-                                            keyEvent.key == Key.DirectionUp
-                                        ) {
-                                            onNavigateUpToFavorites()
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    }
-                                } else {
-                                    Modifier
-                                }
-                                AppTvCard(
-                                    app = app,
-                                    isFocused = app.id == focusedItemId,
-                                    showFocusEffects = showFocusEffects,
-                                    testTag = "app_row_${app.id}",
-                                    onClick = handleClick,
-                                    onLongClick = handleLongClick,
-                                    onFocus = handleFocus,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .focusProperties { canFocus = focusEnabled }
-                                        .focusRequester(requesterForId(app.id))
-                                        .then(
-                                            if (app.id == firstAppId) {
-                                                firstItemFocusRequester?.let { Modifier.focusRequester(it) }
-                                                    ?: Modifier
-                                            } else {
-                                                Modifier
-                                            }
-                                        )
-                                        .then(upToFavoritesMod)
-                                        .then(downNavigationModifier(downTargets[app.id], useGrid = true))
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        } else if (layout == FavoritesLayout.ICONS) {
-            BoxWithConstraints(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-            ) {
-                val availableWidth = maxWidth - if (showAlphabetRail) 12.dp else 24.dp
-                val tileMinSize = 78.dp
-                val columns = if (configuredColumns > 0) {
-                    configuredColumns
-                } else {
-                    maxOf(3, (availableWidth / tileMinSize).toInt())
-                }
-                val firstRowIds = remember(entries, columns) {
-                    firstSectionTopRowIds(entries, columns)
-                }
-                val downTargets = remember(entries, columns) {
-                    computeSectionedDownTargets(entries, columns)
-                }
-
-                // Icon grid drawer: cells are packed edge to edge; gaps live inside each
-                // tile's clickable content padding so the whole cell is an easy touch target.
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(columns),
-                    state = gridState,
-                    contentPadding = PaddingValues(
-                        start = 12.dp,
-                        end = if (showAlphabetRail) 0.dp else 12.dp,
-                        top = 8.dp,
+                        end = if (railVisible) 4.dp else 16.dp,
+                        top = 20.dp,
                         bottom = 16.dp + navigationBarInset
                     ),
                     verticalArrangement = Arrangement.spacedBy(0.dp),
-                    horizontalArrangement = Arrangement.spacedBy(0.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier
-                        .fillMaxSize()
-                        .testTag("apps_grid")
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .testTag("apps_list")
                 ) {
                     items(
                         items = entries,
@@ -2185,7 +2307,7 @@ internal fun AppsAlphabeticalList(
                         contentType = { entry ->
                             when (entry) {
                                 is AppListEntry.Letter -> "letter"
-                                is AppListEntry.App -> "app_tile"
+                                is AppListEntry.App -> "app_row"
                             }
                         }
                     ) { entry ->
@@ -2210,7 +2332,7 @@ internal fun AppsAlphabeticalList(
                                 } else {
                                     Modifier
                                 }
-                                AppIconTile(
+                                AppTextRow(
                                     app = app,
                                     isFocused = app.id == focusedItemId,
                                     showFocusEffects = showFocusEffects,
@@ -2218,7 +2340,7 @@ internal fun AppsAlphabeticalList(
                                     onClick = handleClick,
                                     onLongClick = handleLongClick,
                                     onFocus = handleFocus,
-                                    contentPadding = PaddingValues(horizontal = 5.dp, vertical = 10.dp),
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .focusProperties { canFocus = focusEnabled }
@@ -2238,189 +2360,96 @@ internal fun AppsAlphabeticalList(
                         }
                     }
                 }
-            }
-        } else if (configuredColumns > 1) {
-            val firstRowIds = remember(entries, configuredColumns) {
-                firstSectionTopRowIds(entries, configuredColumns)
-            }
-            val downTargets = remember(entries, configuredColumns) {
-                computeSectionedDownTargets(entries, configuredColumns)
-            }
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(configuredColumns),
-                state = gridState,
-                contentPadding = PaddingValues(
-                    start = 16.dp,
-                    end = if (showAlphabetRail) 4.dp else 16.dp,
-                    top = 8.dp,
-                    bottom = 16.dp + navigationBarInset
-                ),
-                verticalArrangement = Arrangement.spacedBy(0.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .testTag("apps_list")
-            ) {
-                items(
-                    items = entries,
-                    key = { entry ->
-                        when (entry) {
-                            is AppListEntry.Letter -> "section_${entry.letter}"
-                            is AppListEntry.App -> entry.item.id
-                        }
-                    },
-                    span = { entry ->
-                        when (entry) {
-                            is AppListEntry.Letter -> GridItemSpan(maxLineSpan)
-                            is AppListEntry.App -> GridItemSpan(1)
-                        }
-                    },
-                    contentType = { entry ->
-                        when (entry) {
-                            is AppListEntry.Letter -> "letter"
-                            is AppListEntry.App -> "app_row"
-                        }
-                    }
-                ) { entry ->
-                    when (entry) {
-                        is AppListEntry.Letter -> AppLetterHeader(letter = entry.letter)
-                        is AppListEntry.App -> {
-                            val app = entry.item
-                            val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
-                            val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
-                            val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
-                            val upToFavoritesMod = if (app.id in firstRowIds && onNavigateUpToFavorites != null) {
-                                Modifier.onPreviewKeyEvent { keyEvent ->
-                                    if (keyEvent.type == KeyEventType.KeyDown &&
-                                        keyEvent.key == Key.DirectionUp
-                                    ) {
-                                        onNavigateUpToFavorites()
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                            } else {
-                                Modifier
+            } else {
+                val firstRowIds = remember(entries) {
+                    firstSectionTopRowIds(entries, columns = 1)
+                }
+                LazyColumn(
+                    state = listState,
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = if (railVisible) 4.dp else 16.dp,
+                        top = 20.dp,
+                        bottom = 16.dp + navigationBarInset
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .testTag("apps_list")
+                ) {
+                    items(
+                        items = entries,
+                        key = { entry ->
+                            when (entry) {
+                                is AppListEntry.Letter -> "section_${entry.letter}"
+                                is AppListEntry.App -> entry.item.id
                             }
-                            AppTextRow(
-                                app = app,
-                                isFocused = app.id == focusedItemId,
-                                showFocusEffects = showFocusEffects,
-                                testTag = "app_row_${app.id}",
-                                onClick = handleClick,
-                                onLongClick = handleLongClick,
-                                onFocus = handleFocus,
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusProperties { canFocus = focusEnabled }
-                                    .focusRequester(requesterForId(app.id))
-                                    .then(
-                                        if (app.id == firstAppId) {
-                                            firstItemFocusRequester?.let { Modifier.focusRequester(it) }
-                                                ?: Modifier
+                        },
+                        contentType = { entry ->
+                            when (entry) {
+                                is AppListEntry.Letter -> "letter"
+                                is AppListEntry.App -> "app_row"
+                            }
+                        }
+                    ) { entry ->
+                        when (entry) {
+                            is AppListEntry.Letter -> AppLetterHeader(letter = entry.letter)
+                            is AppListEntry.App -> {
+                                val app = entry.item
+                                val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
+                                val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
+                                val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
+                                val upToFavoritesMod = if (app.id in firstRowIds && onNavigateUpToFavorites != null) {
+                                    Modifier.onPreviewKeyEvent { keyEvent ->
+                                        if (keyEvent.type == KeyEventType.KeyDown &&
+                                            keyEvent.key == Key.DirectionUp
+                                        ) {
+                                            onNavigateUpToFavorites()
+                                            true
                                         } else {
-                                            Modifier
+                                            false
                                         }
-                                    )
-                                    .then(upToFavoritesMod)
-                                    .then(downNavigationModifier(downTargets[app.id], useGrid = true))
-                            )
+                                    }
+                                } else {
+                                    Modifier
+                                }
+                                AppTextRow(
+                                    app = app,
+                                    isFocused = app.id == focusedItemId,
+                                    showFocusEffects = showFocusEffects,
+                                    testTag = "app_row_${app.id}",
+                                    onClick = handleClick,
+                                    onLongClick = handleLongClick,
+                                    onFocus = handleFocus,
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .focusProperties { canFocus = focusEnabled }
+                                        .focusRequester(requesterForId(app.id))
+                                        .then(
+                                            if (app.id == firstAppId) {
+                                                firstItemFocusRequester?.let { Modifier.focusRequester(it) }
+                                                    ?: Modifier
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
+                                        .then(upToFavoritesMod)
+                                )
+                            }
                         }
                     }
                 }
             }
-        } else {
-            val firstRowIds = remember(entries) {
-                firstSectionTopRowIds(entries, columns = 1)
-            }
-            LazyColumn(
-                state = listState,
-                contentPadding = PaddingValues(
-                    start = 16.dp,
-                    end = if (showAlphabetRail) 4.dp else 16.dp,
-                    top = 8.dp,
-                    bottom = 16.dp + navigationBarInset
-                ),
-                verticalArrangement = Arrangement.spacedBy(0.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .testTag("apps_list")
-            ) {
-                items(
-                    items = entries,
-                    key = { entry ->
-                        when (entry) {
-                            is AppListEntry.Letter -> "section_${entry.letter}"
-                            is AppListEntry.App -> entry.item.id
-                        }
-                    },
-                    contentType = { entry ->
-                        when (entry) {
-                            is AppListEntry.Letter -> "letter"
-                            is AppListEntry.App -> "app_row"
-                        }
-                    }
-                ) { entry ->
-                    when (entry) {
-                        is AppListEntry.Letter -> AppLetterHeader(letter = entry.letter)
-                        is AppListEntry.App -> {
-                            val app = entry.item
-                            val handleClick = remember(app, onAppClick) { { onAppClick(app) } }
-                            val handleLongClick = remember(app, onAppLongClick) { { onAppLongClick(app) } }
-                            val handleFocus = remember(app, onAppFocus) { { onAppFocus(app) } }
-                            val upToFavoritesMod = if (app.id in firstRowIds && onNavigateUpToFavorites != null) {
-                                Modifier.onPreviewKeyEvent { keyEvent ->
-                                    if (keyEvent.type == KeyEventType.KeyDown &&
-                                        keyEvent.key == Key.DirectionUp
-                                    ) {
-                                        onNavigateUpToFavorites()
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                            } else {
-                                Modifier
-                            }
-                            AppTextRow(
-                                app = app,
-                                isFocused = app.id == focusedItemId,
-                                showFocusEffects = showFocusEffects,
-                                testTag = "app_row_${app.id}",
-                                onClick = handleClick,
-                                onLongClick = handleLongClick,
-                                onFocus = handleFocus,
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusProperties { canFocus = focusEnabled }
-                                    .focusRequester(requesterForId(app.id))
-                                    .then(
-                                        if (app.id == firstAppId) {
-                                            firstItemFocusRequester?.let { Modifier.focusRequester(it) }
-                                                ?: Modifier
-                                        } else {
-                                            Modifier
-                                        }
-                                    )
-                                    .then(upToFavoritesMod)
-                            )
-                        }
-                    }
-                }
-            }
-        }
 
-        if (showAlphabetRail) {
-            AlphabetRail(
-                letters = letters,
-                activeLetter = activeLetter,
-                onLetterSelected = onLetterSelected
-            )
+            if (railVisible) {
+                AlphabetRail(
+                    letters = letters,
+                    activeLetter = activeLetter,
+                    onLetterSelected = onLetterSelected
+                )
+            }
         }
     }
 }
