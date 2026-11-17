@@ -105,6 +105,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -221,6 +222,26 @@ private class VisibleAwareBringIntoViewSpec(
 
 /** The library views that can own D-pad focus. Exactly one is focusable at a time. */
 private enum class LibraryFocusTarget { FAVORITES, APP_LIST, GAMES }
+
+/** The library item an overlay was opened from, with its position when it opened. */
+private data class LibraryFocusReturn(val itemId: String, val index: Int)
+
+/**
+ * Focus requesters for individual library cards, keyed by item id. They let focus return to
+ * the card an overlay was opened from, or to a neighbouring card when that item left the
+ * view (for example after "Add to favorites").
+ */
+private class ItemFocusRequesters {
+    private val requesters = mutableMapOf<String, FocusRequester>()
+
+    fun requesterFor(id: String): FocusRequester = requesters.getOrPut(id) { FocusRequester() }
+
+    /** Requests focus for [id]; false when that card is not composed or not focusable. */
+    fun requestFocus(id: String): Boolean {
+        val requester = requesters[id] ?: return false
+        return runCatching { requester.requestFocus() }.isSuccess
+    }
+}
 
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -431,6 +452,82 @@ fun DashboardScreen(
         !showAddModal &&
         !showSettingsModal &&
         weatherAppChooser == null
+
+    // Per-card focus requesters, so focus can return to the item an overlay was opened from.
+    val favoritesItemRequesters = remember { ItemFocusRequesters() }
+    val appsItemRequesters = remember { ItemFocusRequesters() }
+    val gamesItemRequesters = remember { ItemFocusRequesters() }
+    val favoritesItemFocusRequester = remember {
+        { id: String -> favoritesItemRequesters.requesterFor(id) }
+    }
+    val appsItemFocusRequester = remember {
+        { id: String -> appsItemRequesters.requesterFor(id) }
+    }
+    val gamesItemFocusRequester = remember {
+        { id: String -> gamesItemRequesters.requesterFor(id) }
+    }
+
+    val activeLibraryItems = when {
+        pagerState.settledPage == 1 -> gamesDisplay
+        appsPagerState.settledPage == 1 -> libraryDisplay
+        else -> favoriteApps
+    }
+
+    // The item an overlay was opened from, plus its position at that time. When the overlay
+    // closes, focus returns to that item, or to its neighbour when the item left the view
+    // (for example after "Add to favorites"). Without this the focus system falls back to the
+    // first focusable node in the tree, which is the top bar's Add button.
+    val overlaySourceItemId = manageFolderId
+        ?: openFolderId
+        ?: folderPickerTargetItem?.id
+        ?: editingItem?.id
+        ?: contextMenuItem?.id
+        ?: favoriteActionItem?.id
+    var focusReturn by remember { mutableStateOf<LibraryFocusReturn?>(null) }
+    LaunchedEffect(overlaySourceItemId) {
+        val id = overlaySourceItemId ?: return@LaunchedEffect
+        focusReturn = LibraryFocusReturn(id, activeLibraryItems.indexOfFirst { it.id == id })
+    }
+
+    fun requestLibraryFocus(target: LibraryFocusReturn): Boolean {
+        val requesters = when {
+            pagerState.settledPage == 1 -> gamesItemRequesters
+            appsPagerState.settledPage == 1 -> appsItemRequesters
+            else -> favoritesItemRequesters
+        }
+        val candidates = buildList {
+            // The item itself, then the previous item, the one that moved into its slot, and
+            // finally the first item of the view.
+            if (activeLibraryItems.any { it.id == target.itemId }) add(target.itemId)
+            activeLibraryItems.getOrNull(target.index - 1)?.let { add(it.id) }
+            activeLibraryItems.getOrNull(target.index)?.let { add(it.id) }
+            activeLibraryItems.firstOrNull()?.let { add(it.id) }
+        }
+        if (candidates.any { requesters.requestFocus(it) }) return true
+        val fallback = when {
+            pagerState.settledPage == 1 -> gamesFirstFocusRequester
+            appsPagerState.settledPage == 1 -> appsListFirstFocusRequester
+            else -> favoritesFirstFocusRequester
+        }
+        return runCatching { fallback.requestFocus() }.isSuccess
+    }
+
+    // Room writes are asynchronous, so the list may still show the old contents when the
+    // overlay closes. Repeat the request briefly until a card in the active view reports
+    // focus (the page containers clear the pending target when that happens).
+    LaunchedEffect(noOverlayOpen, focusReturn, activeLibraryItems) {
+        val target = focusReturn ?: return@LaunchedEffect
+        if (!noOverlayOpen) return@LaunchedEffect
+        // Ask straight away: the frame that removes the sheet and the item must already show
+        // the neighbour focused, otherwise that frame falls back to the top bar's Add button.
+        requestLibraryFocus(target)
+        repeat(7) {
+            withFrameNanos { }
+            if (focusReturn !== target) return@LaunchedEffect
+            requestLibraryFocus(target)
+        }
+        if (focusReturn === target) focusReturn = null
+    }
 
     // Move focus to the first item of the active view once the pager transition is complete.
     // Focusing mid-transition would make BringIntoView fight the pager animation, which is
@@ -690,7 +787,12 @@ fun DashboardScreen(
                                         .fillMaxSize()
                                         // Once this page holds focus the handoff is complete, so
                                         // the page that lost focus can stop accepting it.
-                                        .onFocusChanged { if (it.hasFocus) handingOffFrom = null }
+                                        .onFocusChanged {
+                                            if (it.hasFocus) {
+                                                handingOffFrom = null
+                                                focusReturn = null
+                                            }
+                                        }
                                         .focusGroup()
                                         .focusProperties {
                                             exit = { direction ->
@@ -754,6 +856,7 @@ fun DashboardScreen(
                                                 showFocusEffects = showFocusEffects,
                                                 showNsfwPoster = steamGridDbIncludeNsfw,
                                                 firstItemFocusRequester = gamesFirstFocusRequester,
+                                                itemFocusRequester = gamesItemFocusRequester,
                                                 focusEnabled = gamesCanFocus,
                                                 gridState = gridState,
                                                 rowState = gamesRowState,
@@ -829,7 +932,10 @@ fun DashboardScreen(
                                                         modifier = Modifier
                                                             .fillMaxSize()
                                                             .onFocusChanged {
-                                                                if (it.hasFocus) handingOffFrom = null
+                                                                if (it.hasFocus) {
+                                                                    handingOffFrom = null
+                                                                    focusReturn = null
+                                                                }
                                                             }
                                                             .focusGroup()
                                                     ) {
@@ -842,6 +948,7 @@ fun DashboardScreen(
                                                             weather = weatherInfo,
                                                             temperatureUnit = temperatureUnit,
                                                             firstItemFocusRequester = favoritesFirstFocusRequester,
+                                                            itemFocusRequester = favoritesItemFocusRequester,
                                                             focusEnabled = favoritesCanFocus,
                                                             onLaunchFavorite = { app ->
                                                                 viewModel.setFocusedItem(app.id)
@@ -867,7 +974,10 @@ fun DashboardScreen(
                                                         modifier = Modifier
                                                             .fillMaxSize()
                                                             .onFocusChanged {
-                                                                if (it.hasFocus) handingOffFrom = null
+                                                                if (it.hasFocus) {
+                                                                    handingOffFrom = null
+                                                                    focusReturn = null
+                                                                }
                                                             }
                                                             .focusGroup()
                                                     ) {
@@ -890,6 +1000,7 @@ fun DashboardScreen(
                                                                 listState = appsListState,
                                                                 gridState = appsGridState,
                                                                 firstItemFocusRequester = appsListFirstFocusRequester,
+                                                                itemFocusRequester = appsItemFocusRequester,
                                                                 focusEnabled = appDrawerCanFocus,
                                                                 onAppClick = onAppClick,
                                                                 onAppLongClick = onAppLongClick,
@@ -1352,6 +1463,7 @@ private fun GamesPosterGrid(
     showFocusEffects: Boolean,
     showNsfwPoster: Boolean,
     firstItemFocusRequester: FocusRequester? = null,
+    itemFocusRequester: ((String) -> FocusRequester)? = null,
     focusEnabled: Boolean = true,
     gridState: LazyGridState,
     rowState: LazyListState,
@@ -1400,6 +1512,11 @@ private fun GamesPosterGrid(
             }
         }
     }
+
+    // Id-keyed requester per poster so focus can come back to the exact game after a sheet
+    // opened from it closes.
+    fun itemRequesterModifier(id: String): Modifier =
+        itemFocusRequester?.let { Modifier.focusRequester(it(id)) } ?: Modifier
 
     LaunchedEffect(focusedItemId, compactLandscape) {
         val idx = focusedItemId?.let { id -> games.indexOfFirst { it.id == id } } ?: -1
@@ -1539,6 +1656,7 @@ private fun GamesPosterGrid(
                         modifier = Modifier
                             .focusProperties { canFocus = focusEnabled }
                             .then(firstItemModifier)
+                            .then(itemRequesterModifier(game.id))
                             .then(if (index == 0) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
                             .navigateUpToNavFromTopRow(true, onNavigateUpToNav)
                             .width(if (isFocused) 168.dp else 112.dp)
@@ -1627,6 +1745,7 @@ private fun GamesPosterGrid(
                         modifier = Modifier
                             .focusProperties { canFocus = focusEnabled }
                             .then(firstItemModifier)
+                            .then(itemRequesterModifier(game.id))
                             .then(if (isLeftmost) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
                             .navigateUpToNavFromTopRow(index < columnCount, onNavigateUpToNav)
                     )
@@ -1730,7 +1849,12 @@ internal fun AppsAlphabeticalList(
     onLetterSelected: (String) -> Unit,
     onAppFocus: (GameItem) -> Unit = {},
     onNavigateUpToFavorites: (() -> Unit)? = null,
+    itemFocusRequester: ((String) -> FocusRequester)? = null,
 ) {
+    // Id-keyed requester per row/card so focus can return to the exact app after a sheet
+    // opened from it closes.
+    fun itemRequesterModifier(id: String): Modifier =
+        itemFocusRequester?.let { Modifier.focusRequester(it(id)) } ?: Modifier
     val letters = remember(entries) {
         entries.filterIsInstance<AppListEntry.Letter>().map { it.letter }
     }
@@ -1843,6 +1967,7 @@ internal fun AppsAlphabeticalList(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .focusProperties { canFocus = focusEnabled }
+                                        .then(itemRequesterModifier(app.id))
                                         .then(
                                             if (app.id == firstAppId) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }
@@ -1942,6 +2067,7 @@ internal fun AppsAlphabeticalList(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .focusProperties { canFocus = focusEnabled }
+                                        .then(itemRequesterModifier(app.id))
                                         .then(
                                             if (app.id == firstAppId) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }
@@ -2023,6 +2149,7 @@ internal fun AppsAlphabeticalList(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .focusProperties { canFocus = focusEnabled }
+                                    .then(itemRequesterModifier(app.id))
                                     .then(
                                         if (app.id == firstAppId) {
                                             firstItemFocusRequester?.let { Modifier.focusRequester(it) }

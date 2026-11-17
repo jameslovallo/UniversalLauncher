@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.os.Looper
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -12,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
@@ -22,6 +24,7 @@ import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -35,9 +38,9 @@ import org.robolectric.annotation.Config
  * D-pad / TV remote navigation across the Apps tab.
  *
  * Remote and controller D-pad both arrive as Compose key events, so these tests exercise the
- * shared focus wiring: favorites rows move explicitly, Up escapes to the clock and top bar,
- * only the last row hands off to the app list, and the top bar is only reachable from a top
- * row and never steals focus back from the library.
+ * shared focus wiring: favorites rows move explicitly, Up escapes to the top bar (the clock,
+ * date and weather are display-only on TV), only the last row hands off to the app list, and
+ * the top bar is only reachable from a top row and never steals focus back from the library.
  */
 @OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -91,41 +94,31 @@ class DashboardDpadNavigationTest {
     }
 
     @Test
-    fun `up from favorites reaches the clock and then the top navigation bar`() {
+    fun `up from favorites skips the clock and reaches the top navigation bar`() {
         InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
 
+        // On TV the clock, date and weather are display-only, so Up from the grid goes
+        // straight to the top navigation bar instead of stepping through them.
         composeRule.onRoot().performKeyInput {
             pressKey(Key.DirectionUp)
         }
         composeRule.waitForIdle()
 
-        // The first Up leaves the favorites grid for the clock/date block above it.
-        val clockOrDateTags = listOf("favorites_clock", "favorites_date_row")
         assertTrue(
-            "Up from the grid should focus the clock/date block",
-            clockOrDateTags.any { tag -> isFocused(tag) }
+            "Up from the grid should reach the top navigation bar, skipping the clock",
+            topBarTags().any { tag -> isFocused(tag) }
         )
+        assertFalse("The clock must not be focusable on TV", isFocused("favorites_clock"))
+        assertFalse("The date row must not be focusable on TV", isFocused("favorites_date_row"))
 
-        // Keep going Up until the top navigation bar owns focus.
-        val topBarTags = listOf(
-            "topbar_add_button",
-            "tab_apps",
-            "tab_games",
-            "topbar_settings_button"
-        )
-        var reachedTopBar = false
-        repeat(4) {
-            if (!reachedTopBar) {
-                composeRule.onRoot().performKeyInput {
-                    pressKey(Key.DirectionUp)
-                }
-                composeRule.waitForIdle()
-                reachedTopBar = topBarTags.any { tag -> isFocused(tag) }
-            }
+        // The bar stays reachable: Down returns to the favorites grid.
+        composeRule.onRoot().performKeyInput {
+            pressKey(Key.DirectionDown)
         }
-        assertTrue("Up from the clock/date block should reach the top navigation bar", reachedTopBar)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
     }
 
     @Test
@@ -230,6 +223,41 @@ class DashboardDpadNavigationTest {
         composeRule.mainClock.autoAdvance = true
         assertTrue("The top bar stole focus while closing the app list: $stoleFocus", stoleFocus == null)
         composeRule.onNodeWithTag("favorite_app_app_test_1").assertIsFocused()
+    }
+
+    @Test
+    fun `add to favorites from the context menu returns focus to the app list`() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        composeRule.mainClock.autoAdvance = false
+        settleFrames()
+
+        composeRule.onNodeWithTag("favorite_app_app_test_1").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        settleFrames(5)
+        composeRule.onNodeWithTag("favorite_app_app_test_6").performKeyInput {
+            pressKey(Key.DirectionDown)
+        }
+        settleFrames()
+        composeRule.onNodeWithTag("app_row_app_test_7").assertIsFocused()
+
+        composeRule.onNodeWithTag("app_row_app_test_7")
+            .performSemanticsAction(SemanticsActions.OnLongClick)
+        settleFrames()
+        composeRule.onNodeWithTag("context_menu_favorite").performClick()
+
+        // Adding the item to favorites removes it from this list, so focus must land on the
+        // item that shifted into its slot on the very frame the sheet disappears.
+        var topBar: String? = null
+        repeat(60) {
+            composeRule.mainClock.advanceTimeByFrame()
+            shadowOf(Looper.getMainLooper()).idle()
+            if (topBar == null) topBar = topBarTags().firstOrNull { tag -> isFocused(tag) }
+        }
+
+        composeRule.mainClock.autoAdvance = true
+        assertTrue("The top bar stole focus after adding a favorite: $topBar", topBar == null)
+        composeRule.onNodeWithTag("app_row_app_test_8").assertIsFocused()
     }
 
     private fun settleFrames(frames: Int = 40) {

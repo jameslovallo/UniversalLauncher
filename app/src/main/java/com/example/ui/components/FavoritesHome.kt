@@ -122,6 +122,7 @@ fun FavoritesHome(
     weather: WeatherInfo? = null,
     temperatureUnit: TemperatureUnit = TemperatureUnit.defaultForLocale(),
     firstItemFocusRequester: FocusRequester? = null,
+    itemFocusRequester: ((String) -> FocusRequester)? = null,
     focusEnabled: Boolean = true,
     onLaunchFavorite: (GameItem) -> Unit,
     onLongPressFavorite: (GameItem) -> Unit,
@@ -148,6 +149,10 @@ fun FavoritesHome(
     val rowFocusRequesters = remember(favorites.size) {
         List(favorites.size) { FocusRequester() }
     }
+    // A second, id-keyed requester per card lets the dashboard return focus to a specific
+    // favorite after a sheet opened from it closes.
+    fun itemRequesterModifier(id: String): Modifier =
+        itemFocusRequester?.let { Modifier.focusRequester(it(id)) } ?: Modifier
 
     // The clock and date are hidden only on small screens in landscape (phones held
     // sideways); landscape tablets and TV devices always keep them.
@@ -242,6 +247,7 @@ fun FavoritesHome(
                     weather = weather,
                     temperatureUnit = temperatureUnit,
                     focusEnabled = focusEnabled,
+                    emptyStateAnchor = favorites.isEmpty(),
                     onOpenClock = onOpenClock,
                     onOpenCalendar = onOpenCalendar,
                     onOpenWeather = onOpenWeather,
@@ -328,6 +334,7 @@ fun FavoritesHome(
                             modifier = Modifier
                                 .focusProperties { canFocus = focusEnabled }
                                 .focusRequester(rowFocusRequesters[index])
+                                .then(itemRequesterModifier(app.id))
                                 .favoriteDpadNavigation(
                                     index = index,
                                     columns = columns,
@@ -393,6 +400,7 @@ fun FavoritesHome(
                                         .width(itemWidth)
                                         .focusProperties { canFocus = focusEnabled }
                                         .focusRequester(rowFocusRequesters[index])
+                                        .then(itemRequesterModifier(app.id))
                                         .favoriteDpadNavigation(
                                             index = index,
                                             columns = columns,
@@ -450,6 +458,7 @@ fun FavoritesHome(
                                         .width(tilePitch)
                                         .focusProperties { canFocus = focusEnabled }
                                         .focusRequester(rowFocusRequesters[index])
+                                        .then(itemRequesterModifier(app.id))
                                         .favoriteDpadNavigation(
                                             index = index,
                                             columns = columns,
@@ -535,6 +544,7 @@ private fun FavoritesClockAndDate(
     weather: WeatherInfo?,
     temperatureUnit: TemperatureUnit,
     focusEnabled: Boolean,
+    emptyStateAnchor: Boolean = false,
     onOpenClock: () -> Unit,
     onOpenCalendar: () -> Unit,
     onOpenWeather: () -> Unit,
@@ -552,6 +562,13 @@ private fun FavoritesClockAndDate(
     }
 
     val is24Hour = remember(context) { DateFormat.is24HourFormat(context) }
+    // On TV the clock, date and weather are display-only: D-pad Up from the favorites grid
+    // goes straight to the top navigation bar instead of stepping through them. The one
+    // exception is an empty favorites page, where the date row is the only target on the
+    // page; it keeps focus there so the page still has a focus anchor and Down can open the
+    // app list.
+    val clockCanFocus = focusEnabled && !isTelevisionMode()
+    val dateRowCanFocus = clockCanFocus || (emptyStateAnchor && focusEnabled)
     val timeFormatter = remember(is24Hour) {
         SimpleDateFormat(if (is24Hour) "HH:mm" else "h:mm", Locale.getDefault())
     }
@@ -585,7 +602,7 @@ private fun FavoritesClockAndDate(
                     Modifier
                 }
             )
-            .focusProperties { canFocus = focusEnabled }
+            .focusProperties { canFocus = clockCanFocus }
             .clickable(
                 interactionSource = clockInteraction,
                 indication = null,
@@ -610,7 +627,7 @@ private fun FavoritesClockAndDate(
                     Modifier
                 }
             )
-            .focusProperties { canFocus = focusEnabled }
+            .focusProperties { canFocus = dateRowCanFocus }
             .clickable(
                 interactionSource = dateInteraction,
                 indication = null,
@@ -646,7 +663,7 @@ private fun FavoritesClockAndDate(
                             Modifier
                         }
                     )
-                    .focusProperties { canFocus = focusEnabled }
+                    .focusProperties { canFocus = clockCanFocus }
                     .clickable(
                         interactionSource = weatherInteraction,
                         indication = null,

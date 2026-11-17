@@ -866,7 +866,8 @@ class TvSupportAndLayoutTest {
             clockBounds.bottom <= dateRowBounds.top
         )
 
-        // Focus the date row so pressing Down immediately opens all apps.
+        // Focus the date row so pressing Down immediately opens all apps. With no favorites
+        // it is the empty page's focus anchor, so it stays focusable on TV.
         composeRule.onNodeWithTag("favorites_date_row").performSemanticsAction(SemanticsActions.RequestFocus)
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("favorites_date_row").assertIsFocused()
