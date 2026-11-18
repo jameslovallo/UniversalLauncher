@@ -4,10 +4,14 @@ import android.accounts.Account
 import android.accounts.AccountManager
 import android.app.Activity
 import android.app.PendingIntent
+import android.app.UiModeManager
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
+import com.example.BuildConfig
 import com.example.NexusApplication
 import com.google.android.gms.auth.GoogleAuthException
 import com.google.android.gms.auth.GoogleAuthUtil
@@ -22,6 +26,7 @@ import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Scope
 import com.google.android.gms.tasks.Task
 import java.io.IOException
+import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -29,7 +34,10 @@ import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -39,6 +47,38 @@ data class DriveAuthAccount(
     val email: String? = null,
     val displayName: String? = null
 )
+
+data class DriveDeviceCodeSession(
+    val deviceCode: String,
+    val userCode: String,
+    val verificationUrl: String,
+    val verificationUrlComplete: String? = null,
+    val expiresInSeconds: Int = 1800,
+    val intervalSeconds: Int = 5
+) {
+    val qrTargetUrl: String
+        get() = verificationUrlComplete?.takeIf { it.isNotBlank() }
+            ?: run {
+                val encodedCode = URLEncoder.encode(userCode, "UTF-8")
+                if (verificationUrl.contains('?')) {
+                    "$verificationUrl&user_code=$encodedCode"
+                } else {
+                    "$verificationUrl?user_code=$encodedCode"
+                }
+            }
+}
+
+sealed interface DriveDevicePollResult {
+    data class Authorized(
+        val accessToken: String,
+        val account: DriveAuthAccount? = null
+    ) : DriveDevicePollResult
+
+    data object Pending : DriveDevicePollResult
+    data object SlowDown : DriveDevicePollResult
+    data object Denied : DriveDevicePollResult
+    data object Expired : DriveDevicePollResult
+}
 
 sealed interface DriveAuthorizationStep {
     data class Authorized(
@@ -54,6 +94,10 @@ sealed interface DriveAuthorizationStep {
         val intent: Intent,
         val accountEmail: String? = null,
         val isAccountPicker: Boolean = false
+    ) : DriveAuthorizationStep
+
+    data class NeedsDeviceCodeVerification(
+        val session: DriveDeviceCodeSession
     ) : DriveAuthorizationStep
 }
 
@@ -84,6 +128,9 @@ interface DriveAccessTokenProvider {
         isAccountPicker: Boolean
     ): DriveAuthorizationStep? = null
 
+    suspend fun pollDeviceAuthorization(deviceCode: String): DriveDevicePollResult =
+        DriveDevicePollResult.Expired
+
     fun inspectFailedAuthorizationIntent(data: Intent?): Throwable? = null
 
     fun diagnosticConfigurationMessage(reason: String): String = reason
@@ -91,17 +138,36 @@ interface DriveAccessTokenProvider {
 
 /**
  * Authenticates the user for the least-privilege `https://www.googleapis.com/auth/drive.file`
- * scope using Google Play Services [AuthorizationClient] with a live [Activity] context, and
- * automatically falls back to Android's TV-compatible [AccountManager] + [GoogleAuthUtil] flow
- * when [AuthorizationClient] aborts or is unsupported on the device (common on Android TV).
+ * scope.
+ *
+ * - On phones/tablets: uses Google Play Services [AuthorizationClient] with a live [Activity]
+ *   context and falls back to [AccountManager] + [GoogleAuthUtil] if needed.
+ * - On Android TV: Google blocks Play Services' embedded consent webview with Error 400
+ *   (`invalid_request`), so TV devices use Google's OAuth 2.0 Device Authorization Grant
+ *   (`https://oauth2.googleapis.com/device/code` -> `google.com/device` QR/code) whenever TV
+ *   OAuth credentials are configured, avoiding the broken webview consent prompt.
  */
 class PlayServicesDriveAuthManager(
     context: Context,
     private val httpClient: OkHttpClient = defaultAuthHttpClient(),
-    private val activityProvider: () -> Activity? = { NexusApplication.currentForegroundActivity() }
+    private val activityProvider: () -> Activity? = { NexusApplication.currentForegroundActivity() },
+    private val isTelevisionDevice: Boolean = detectTelevisionDevice(context.applicationContext),
+    tvClientId: String = BuildConfig.GOOGLE_TV_OAUTH_CLIENT_ID,
+    tvClientSecret: String = BuildConfig.GOOGLE_TV_OAUTH_CLIENT_SECRET,
+    private val deviceAuthBaseUrl: String = DEFAULT_OAUTH_BASE_URL,
+    private val clockMillis: () -> Long = { System.currentTimeMillis() }
 ) : DriveAccessTokenProvider {
 
     private val appContext = context.applicationContext
+    private val resolvedTvClientId = sanitizeSecretValue(tvClientId)
+    private val resolvedTvClientSecret = sanitizeSecretValue(tvClientSecret)
+    private val devicePrefs: SharedPreferences by lazy {
+        appContext.getSharedPreferences(DEVICE_AUTH_PREFS, Context.MODE_PRIVATE)
+    }
+    private val deviceTokenMutex = Mutex()
+
+    private val hasDeviceFlowCredentials: Boolean
+        get() = !resolvedTvClientId.isNullOrBlank() && !resolvedTvClientSecret.isNullOrBlank()
 
     private fun authorizationClient(): AuthorizationClient =
         activityProvider()?.let { Identity.getAuthorizationClient(it) }
@@ -110,9 +176,22 @@ class PlayServicesDriveAuthManager(
     override suspend fun beginInteractiveAuthorization(
         preferredEmail: String?
     ): DriveAuthorizationStep {
+        if (hasStoredDeviceRefreshToken() && hasDeviceFlowCredentials) {
+            val token = runCatching { getDeviceAccessToken(forceRefresh = false) }.getOrNull()
+            if (!token.isNullOrBlank()) {
+                val account = fetchAccountInfo(token)
+                    ?: storedDeviceAccount()
+                    ?: preferredEmail?.let { DriveAuthAccount(email = it) }
+                return DriveAuthorizationStep.Authorized(token, account)
+            }
+        }
+
         val result = try {
             authorizeSilently()
         } catch (error: Throwable) {
+            if (isTelevisionDevice) {
+                return beginTvDeviceOrExplain()
+            }
             if (shouldFallbackToAccountAuth(error)) {
                 return beginFallbackAccountAuthorization(preferredEmail)
                     ?: throw error
@@ -121,6 +200,9 @@ class PlayServicesDriveAuthManager(
         }
 
         if (result.hasResolution()) {
+            if (isTelevisionDevice) {
+                return beginTvDeviceOrExplain()
+            }
             val pendingIntent = result.pendingIntent
                 ?: return beginFallbackAccountAuthorization(preferredEmail)
                     ?: throw IllegalStateException("Google Drive consent prompt could not be opened.")
@@ -133,9 +215,131 @@ class PlayServicesDriveAuthManager(
         return DriveAuthorizationStep.Authorized(token, account)
     }
 
+    private suspend fun beginTvDeviceOrExplain(): DriveAuthorizationStep {
+        if (!hasDeviceFlowCredentials) {
+            throw DriveOAuthConfigurationException(tvConfigurationMissingMessage())
+        }
+        val session = startDeviceCodeSession()
+        return DriveAuthorizationStep.NeedsDeviceCodeVerification(session)
+    }
+
+    override suspend fun pollDeviceAuthorization(deviceCode: String): DriveDevicePollResult =
+        withContext(Dispatchers.IO) {
+            val clientId = resolvedTvClientId
+                ?: throw DriveOAuthConfigurationException(tvConfigurationMissingMessage())
+            val clientSecret = resolvedTvClientSecret
+                ?: throw DriveOAuthConfigurationException(tvConfigurationMissingMessage())
+
+            val body = FormBody.Builder()
+                .add("client_id", clientId)
+                .add("client_secret", clientSecret)
+                .add("device_code", deviceCode)
+                .add("grant_type", GRANT_TYPE_DEVICE_CODE)
+                .build()
+            val request = Request.Builder()
+                .url("${deviceAuthBaseUrl.trimEnd('/')}/token")
+                .post(body)
+                .build()
+
+            httpClient.newCall(request).execute().use { response ->
+                val raw = response.body?.string().orEmpty()
+                val json = runCatching { JSONObject(raw) }.getOrNull() ?: JSONObject()
+                if (response.isSuccessful) {
+                    val accessToken = json.optString("access_token").takeIf { it.isNotBlank() }
+                        ?: throw IllegalStateException("Google OAuth did not return an access token.")
+                    val refreshToken = json.optString("refresh_token").takeIf { it.isNotBlank() }
+                    val expiresIn = json.optInt("expires_in", 3600).coerceAtLeast(60)
+                    val account = fetchAccountInfo(accessToken)
+                    saveDeviceTokens(
+                        accessToken = accessToken,
+                        refreshToken = refreshToken,
+                        expiresInSeconds = expiresIn,
+                        account = account
+                    )
+                    return@withContext DriveDevicePollResult.Authorized(accessToken, account)
+                }
+
+                when (val error = json.optString("error")) {
+                    "authorization_pending" -> DriveDevicePollResult.Pending
+                    "slow_down" -> DriveDevicePollResult.SlowDown
+                    "access_denied" -> DriveDevicePollResult.Denied
+                    "expired_token" -> DriveDevicePollResult.Expired
+                    "invalid_client", "unauthorized_client" -> throw DriveOAuthConfigurationException(
+                        "Google rejected the TV OAuth client ($error). Verify GOOGLE_TV_OAUTH_CLIENT_ID " +
+                            "and GOOGLE_TV_OAUTH_CLIENT_SECRET come from a 'TVs and Limited Input devices' " +
+                            "OAuth client in Google Cloud Console."
+                    )
+                    "invalid_scope" -> throw DriveOAuthConfigurationException(
+                        "Google Drive scope was rejected for TV device sign-in. Ensure Google Drive API " +
+                            "is enabled and drive.file is configured on your OAuth consent screen."
+                    )
+                    else -> {
+                        val description = json.optString("error_description").takeIf { it.isNotBlank() }
+                            ?: error.takeIf { it.isNotBlank() }
+                            ?: "HTTP ${response.code}"
+                        throw IllegalStateException("Google Drive sign-in failed: $description")
+                    }
+                }
+            }
+        }
+
+    private suspend fun startDeviceCodeSession(): DriveDeviceCodeSession = withContext(Dispatchers.IO) {
+        val clientId = resolvedTvClientId
+            ?: throw DriveOAuthConfigurationException(tvConfigurationMissingMessage())
+        val body = FormBody.Builder()
+            .add("client_id", clientId)
+            .add("scope", DRIVE_FILE_SCOPE)
+            .build()
+        val request = Request.Builder()
+            .url("${deviceAuthBaseUrl.trimEnd('/')}/device/code")
+            .post(body)
+            .build()
+
+        httpClient.newCall(request).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            val json = runCatching { JSONObject(raw) }.getOrNull() ?: JSONObject()
+            if (!response.isSuccessful) {
+                val err = json.optString("error")
+                val desc = json.optString("error_description").takeIf { it.isNotBlank() } ?: err
+                if (err == "invalid_client" || err == "unauthorized_client" || response.code in 400..401) {
+                    throw DriveOAuthConfigurationException(
+                        "Google rejected the TV OAuth client (${desc.ifBlank { "HTTP ${response.code}" }}). " +
+                            "Ensure GOOGLE_TV_OAUTH_CLIENT_ID is an OAuth client of type 'TVs and Limited Input devices' " +
+                            "in Google Cloud Console."
+                    )
+                }
+                throw IllegalStateException(
+                    "Unable to start Google Drive device sign-in (${desc.ifBlank { "HTTP ${response.code}" }})."
+                )
+            }
+            val deviceCode = json.optString("device_code").takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("Google device sign-in response omitted device_code.")
+            val userCode = json.optString("user_code").takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("Google device sign-in response omitted user_code.")
+            val verificationUrl = json.optString("verification_url").takeIf { it.isNotBlank() }
+                ?: json.optString("verification_uri").takeIf { it.isNotBlank() }
+                ?: DEFAULT_VERIFICATION_URL
+            val verificationUrlComplete = json.optString("verification_url_complete").takeIf { it.isNotBlank() }
+                ?: json.optString("verification_uri_complete").takeIf { it.isNotBlank() }
+            val expiresIn = json.optInt("expires_in", 1800).coerceAtLeast(60)
+            val interval = json.optInt("interval", 5).coerceAtLeast(5)
+            DriveDeviceCodeSession(
+                deviceCode = deviceCode,
+                userCode = userCode,
+                verificationUrl = verificationUrl,
+                verificationUrlComplete = verificationUrlComplete,
+                expiresInSeconds = expiresIn,
+                intervalSeconds = interval
+            )
+        }
+    }
+
     override suspend fun beginFallbackAccountAuthorization(
         preferredEmail: String?
     ): DriveAuthorizationStep? {
+        if (isTelevisionDevice) {
+            return beginTvDeviceOrExplain()
+        }
         val trimmedEmail = preferredEmail?.trim()?.takeIf { it.isNotBlank() }
         if (trimmedEmail != null) {
             return resolveTokenForEmail(trimmedEmail)
@@ -215,13 +419,32 @@ class PlayServicesDriveAuthManager(
         }
     }
 
+    private fun tvConfigurationMissingMessage(): String =
+        "Android TV requires Google's QR/Device Sign-In flow (Google blocks TV Play Services consent webviews with Error 400). " +
+            "In Google Cloud Console (project gen-lang-client-0969064187), create an OAuth 2.0 Client ID of type " +
+            "'TVs and Limited Input devices' and set GOOGLE_TV_OAUTH_CLIENT_ID and GOOGLE_TV_OAUTH_CLIENT_SECRET in AI Studio Secrets."
+
     override suspend fun getAccessToken(preferredEmail: String?): String {
+        if (hasStoredDeviceRefreshToken() && hasDeviceFlowCredentials) {
+            return getDeviceAccessToken(forceRefresh = false)
+        }
+
         val primaryResult = runCatching { authorizeSilently() }
         primaryResult.getOrNull()?.let { result ->
             if (!result.hasResolution()) {
                 val token = result.accessToken?.takeIf { it.isNotBlank() }
                 if (token != null) return token
             }
+        }
+
+        if (isTelevisionDevice) {
+            throw DriveAuthorizationRequiredException(
+                message = if (hasDeviceFlowCredentials) {
+                    "Google Drive authorization required. Reconnect Google Drive in Settings."
+                } else {
+                    tvConfigurationMissingMessage()
+                }
+            )
         }
 
         val email = preferredEmail?.trim()?.takeIf { it.isNotBlank() }
@@ -259,6 +482,9 @@ class PlayServicesDriveAuthManager(
         invalidToken: String,
         preferredEmail: String?
     ): String {
+        if (hasStoredDeviceRefreshToken() && hasDeviceFlowCredentials) {
+            return getDeviceAccessToken(forceRefresh = true)
+        }
         withContext(Dispatchers.IO) {
             runCatching { GoogleAuthUtil.clearToken(appContext, invalidToken) }
         }
@@ -267,11 +493,19 @@ class PlayServicesDriveAuthManager(
 
     override suspend fun revokeAccess(accountEmail: String?) {
         val tokensToRevoke = linkedSetOf<String>()
+        devicePrefs.getString(KEY_DEVICE_REFRESH_TOKEN, null)?.takeIf { it.isNotBlank() }?.let {
+            tokensToRevoke += it
+        }
+        devicePrefs.getString(KEY_DEVICE_ACCESS_TOKEN, null)?.takeIf { it.isNotBlank() }?.let {
+            tokensToRevoke += it
+        }
+        clearDeviceTokens()
+
         runCatching { authorizeSilently() }.getOrNull()?.accessToken
             ?.takeIf { it.isNotBlank() }
             ?.let { tokensToRevoke += it }
         val email = accountEmail?.trim()?.takeIf { it.isNotBlank() }
-        if (email != null) {
+        if (!isTelevisionDevice && email != null) {
             withContext(Dispatchers.IO) {
                 runCatching {
                     GoogleAuthUtil.getToken(appContext, Account(email, GOOGLE_ACCOUNT_TYPE), OAUTH2_DRIVE_FILE_SCOPE)
@@ -284,7 +518,7 @@ class PlayServicesDriveAuthManager(
                 runCatching { GoogleAuthUtil.clearToken(appContext, token) }
                 runCatching {
                     val request = Request.Builder()
-                        .url("$REVOKE_URL?token=${java.net.URLEncoder.encode(token, "UTF-8")}")
+                        .url("${deviceAuthBaseUrl.trimEnd('/')}/revoke?token=${URLEncoder.encode(token, "UTF-8")}")
                         .post("".toRequestBody(null))
                         .build()
                     httpClient.newCall(request).execute().close()
@@ -292,6 +526,104 @@ class PlayServicesDriveAuthManager(
             }
         }
     }
+
+    private fun hasStoredDeviceRefreshToken(): Boolean =
+        !devicePrefs.getString(KEY_DEVICE_REFRESH_TOKEN, null).isNullOrBlank()
+
+    private fun storedDeviceAccount(): DriveAuthAccount? {
+        val email = devicePrefs.getString(KEY_DEVICE_ACCOUNT_EMAIL, null)?.takeIf { it.isNotBlank() }
+        val name = devicePrefs.getString(KEY_DEVICE_ACCOUNT_NAME, null)?.takeIf { it.isNotBlank() }
+        return if (email == null && name == null) null else DriveAuthAccount(email, name)
+    }
+
+    private fun saveDeviceTokens(
+        accessToken: String,
+        refreshToken: String?,
+        expiresInSeconds: Int,
+        account: DriveAuthAccount?
+    ) {
+        val expiresAtMs = clockMillis() + (expiresInSeconds * 1000L)
+        devicePrefs.edit().apply {
+            putString(KEY_DEVICE_ACCESS_TOKEN, accessToken)
+            putLong(KEY_DEVICE_EXPIRES_AT_MS, expiresAtMs)
+            if (!refreshToken.isNullOrBlank()) {
+                putString(KEY_DEVICE_REFRESH_TOKEN, refreshToken)
+            }
+            if (account != null) {
+                putString(KEY_DEVICE_ACCOUNT_EMAIL, account.email)
+                putString(KEY_DEVICE_ACCOUNT_NAME, account.displayName)
+            }
+        }.apply()
+    }
+
+    private fun clearDeviceTokens() {
+        devicePrefs.edit()
+            .remove(KEY_DEVICE_REFRESH_TOKEN)
+            .remove(KEY_DEVICE_ACCESS_TOKEN)
+            .remove(KEY_DEVICE_EXPIRES_AT_MS)
+            .remove(KEY_DEVICE_ACCOUNT_EMAIL)
+            .remove(KEY_DEVICE_ACCOUNT_NAME)
+            .apply()
+    }
+
+    private suspend fun getDeviceAccessToken(forceRefresh: Boolean): String =
+        deviceTokenMutex.withLock {
+            if (!forceRefresh) {
+                val cached = devicePrefs.getString(KEY_DEVICE_ACCESS_TOKEN, null)?.takeIf { it.isNotBlank() }
+                val expiresAt = devicePrefs.getLong(KEY_DEVICE_EXPIRES_AT_MS, 0L)
+                if (cached != null && clockMillis() + TOKEN_EXPIRY_LEEWAY_MS < expiresAt) {
+                    return@withLock cached
+                }
+            }
+
+            val refreshToken = devicePrefs.getString(KEY_DEVICE_REFRESH_TOKEN, null)?.takeIf { it.isNotBlank() }
+                ?: throw DriveAuthorizationRequiredException()
+            val clientId = resolvedTvClientId
+                ?: throw DriveOAuthConfigurationException(tvConfigurationMissingMessage())
+            val clientSecret = resolvedTvClientSecret
+                ?: throw DriveOAuthConfigurationException(tvConfigurationMissingMessage())
+
+            withContext(Dispatchers.IO) {
+                val body = FormBody.Builder()
+                    .add("client_id", clientId)
+                    .add("client_secret", clientSecret)
+                    .add("refresh_token", refreshToken)
+                    .add("grant_type", "refresh_token")
+                    .build()
+                val request = Request.Builder()
+                    .url("${deviceAuthBaseUrl.trimEnd('/')}/token")
+                    .post(body)
+                    .build()
+                httpClient.newCall(request).execute().use { response ->
+                    val raw = response.body?.string().orEmpty()
+                    val json = runCatching { JSONObject(raw) }.getOrNull() ?: JSONObject()
+                    if (response.isSuccessful) {
+                        val freshToken = json.optString("access_token").takeIf { it.isNotBlank() }
+                            ?: throw IllegalStateException("Google OAuth refresh did not return an access token.")
+                        val newRefreshToken = json.optString("refresh_token").takeIf { it.isNotBlank() }
+                        val expiresIn = json.optInt("expires_in", 3600).coerceAtLeast(60)
+                        saveDeviceTokens(
+                            accessToken = freshToken,
+                            refreshToken = newRefreshToken ?: refreshToken,
+                            expiresInSeconds = expiresIn,
+                            account = null
+                        )
+                        return@withContext freshToken
+                    }
+                    val error = json.optString("error")
+                    if (error == "invalid_grant") {
+                        clearDeviceTokens()
+                        throw DriveAuthorizationRequiredException(
+                            message = "Google Drive access expired or was revoked. Reconnect Google Drive in Settings."
+                        )
+                    }
+                    val description = json.optString("error_description").takeIf { it.isNotBlank() }
+                        ?: error.takeIf { it.isNotBlank() }
+                        ?: "HTTP ${response.code}"
+                    throw IllegalStateException("Google Drive token refresh failed: $description")
+                }
+            }
+        }
 
     private suspend fun resolveTokenForEmail(email: String): DriveAuthorizationStep {
         val account = Account(email, GOOGLE_ACCOUNT_TYPE)
@@ -388,8 +720,6 @@ class PlayServicesDriveAuthManager(
             if (duringInteractiveUi) {
                 CancellationException("Google Drive sign-in cancelled")
             } else {
-                // Play Services returns status 16 directly when the consent flow is unsupported
-                // (e.g. Android TV) or aborted due to missing Android OAuth / SHA-1 config.
                 DriveOAuthConfigurationException(
                     diagnosticConfigurationMessage("Google Play Services aborted Drive authorization (code 16)."),
                     error
@@ -432,8 +762,18 @@ class PlayServicesDriveAuthManager(
         private const val GOOGLE_ACCOUNT_TYPE = "com.google"
         private const val DRIVE_ABOUT_URL =
             "https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress)"
-        private const val REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+        private const val DEFAULT_OAUTH_BASE_URL = "https://oauth2.googleapis.com"
+        private const val DEFAULT_VERIFICATION_URL = "https://www.google.com/device"
+        private const val GRANT_TYPE_DEVICE_CODE = "urn:ietf:params:oauth:grant-type:device_code"
         private const val SIGN_IN_FAILED_STATUS_CODE = 12500
+        private const val TOKEN_EXPIRY_LEEWAY_MS = 60_000L
+
+        private const val DEVICE_AUTH_PREFS = "nexus_drive_device_auth"
+        private const val KEY_DEVICE_REFRESH_TOKEN = "refresh_token"
+        private const val KEY_DEVICE_ACCESS_TOKEN = "access_token"
+        private const val KEY_DEVICE_EXPIRES_AT_MS = "expires_at_ms"
+        private const val KEY_DEVICE_ACCOUNT_EMAIL = "account_email"
+        private const val KEY_DEVICE_ACCOUNT_NAME = "account_name"
 
         private val FALLBACK_ELIGIBLE_STATUS_CODES = setOf(
             CommonStatusCodes.CANCELED,
@@ -449,6 +789,22 @@ class PlayServicesDriveAuthManager(
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .build()
+
+        internal fun sanitizeSecretValue(raw: String?): String? {
+            val trimmed = raw?.trim().orEmpty()
+            if (trimmed.isBlank()) return null
+            if (trimmed.startsWith("YOUR_", ignoreCase = true)) return null
+            if (trimmed.startsWith("MY_", ignoreCase = true)) return null
+            if (trimmed.equals("null", ignoreCase = true)) return null
+            return trimmed
+        }
+
+        internal fun detectTelevisionDevice(context: Context): Boolean {
+            val uiModeManager = context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
+            val isTvUiMode = uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+            val hasLeanback = context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+            return isTvUiMode || hasLeanback
+        }
 
         internal fun computeAppSigningSha1(context: Context): String? = runCatching {
             val pm = context.packageManager

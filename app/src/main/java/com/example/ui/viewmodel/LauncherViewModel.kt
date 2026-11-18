@@ -18,6 +18,8 @@ import com.example.data.service.AmazonLunaService
 import com.example.data.service.DriveAuthAccount
 import com.example.data.service.DriveAuthorizationRequiredException
 import com.example.data.service.DriveAuthorizationStep
+import com.example.data.service.DriveDeviceCodeSession
+import com.example.data.service.DriveDevicePollResult
 import com.example.data.service.DriveOAuthConfigurationException
 import com.example.data.service.GeForceNowService
 import com.example.data.service.IconPackIcon
@@ -42,6 +44,7 @@ import com.example.ui.components.hasCustomAppIconUrl
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -283,7 +286,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val pendingDriveFallbackIntent: StateFlow<PendingDriveFallbackIntent?> =
         _pendingDriveFallbackIntent.asStateFlow()
 
+    private val _pendingDriveDeviceSession = MutableStateFlow<DriveDeviceCodeSession?>(null)
+    val pendingDriveDeviceSession: StateFlow<DriveDeviceCodeSession?> =
+        _pendingDriveDeviceSession.asStateFlow()
+
     private var activeDriveFallbackContext: Pair<String?, Boolean>? = null
+    private var driveDevicePollJob: Job? = null
     private var isInteractiveDriveAuthActive = false
     private var lastDriveAuthLaunchElapsedMs = 0L
 
@@ -1416,6 +1424,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     /** Starts Google Drive (`drive.file`) authorization & configures it as the exclusive sync target. */
     fun connectGoogleDrive() {
         if (_librarySyncBusy.value) return
+        driveDevicePollJob?.cancel()
+        driveDevicePollJob = null
+        _pendingDriveDeviceSession.value = null
         viewModelScope.launch {
             _librarySyncBusy.value = true
             isInteractiveDriveAuthActive = true
@@ -1441,6 +1452,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         }
                         _librarySyncBusy.value = false
                     }
+                    is DriveAuthorizationStep.NeedsDeviceCodeVerification -> {
+                        _pendingDriveDeviceSession.value = step.session
+                        _librarySyncStatus.value =
+                            "Enter ${step.session.userCode} at ${step.session.verificationUrl}"
+                        _librarySyncBusy.value = false
+                        startDriveDevicePolling(step.session)
+                    }
                     is DriveAuthorizationStep.Authorized -> {
                         isInteractiveDriveAuthActive = false
                         finishGoogleDriveConfiguration(step.account)
@@ -1463,6 +1481,68 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 _librarySyncBusy.value = false
             }
         }
+    }
+
+    private fun startDriveDevicePolling(session: DriveDeviceCodeSession) {
+        driveDevicePollJob?.cancel()
+        driveDevicePollJob = viewModelScope.launch {
+            var intervalMs = session.intervalSeconds.coerceAtLeast(5) * 1000L
+            val deadlineMs = SystemClock.elapsedRealtime() + (session.expiresInSeconds * 1000L)
+            try {
+                while (SystemClock.elapsedRealtime() < deadlineMs) {
+                    delay(intervalMs)
+                    when (val poll = librarySyncService.pollGoogleDriveDeviceAuthorization(session.deviceCode)) {
+                        is DriveDevicePollResult.Pending -> Unit
+                        is DriveDevicePollResult.SlowDown -> intervalMs += 5_000L
+                        is DriveDevicePollResult.Authorized -> {
+                            _pendingDriveDeviceSession.value = null
+                            isInteractiveDriveAuthActive = false
+                            _librarySyncBusy.value = true
+                            _librarySyncStatus.value = "Syncing with Google Drive…"
+                            finishGoogleDriveConfiguration(poll.account)
+                            return@launch
+                        }
+                        is DriveDevicePollResult.Denied -> {
+                            _pendingDriveDeviceSession.value = null
+                            isInteractiveDriveAuthActive = false
+                            _librarySyncStatus.value = "Google Drive sign-in cancelled"
+                            _librarySyncBusy.value = false
+                            return@launch
+                        }
+                        is DriveDevicePollResult.Expired -> {
+                            _pendingDriveDeviceSession.value = null
+                            isInteractiveDriveAuthActive = false
+                            _librarySyncStatus.value = "Google Drive sign-in code expired. Try again."
+                            _librarySyncBusy.value = false
+                            return@launch
+                        }
+                    }
+                }
+                _pendingDriveDeviceSession.value = null
+                isInteractiveDriveAuthActive = false
+                _librarySyncStatus.value = "Google Drive sign-in code expired. Try again."
+                _librarySyncBusy.value = false
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                _pendingDriveDeviceSession.value = null
+                isInteractiveDriveAuthActive = false
+                if (librarySyncService.syncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                    _librarySyncNeedsReauth.value = true
+                }
+                _librarySyncStatus.value = error.message ?: "Google Drive sign-in failed"
+                _librarySyncBusy.value = false
+            }
+        }
+    }
+
+    fun cancelGoogleDriveDeviceAuthorization() {
+        driveDevicePollJob?.cancel()
+        driveDevicePollJob = null
+        _pendingDriveDeviceSession.value = null
+        isInteractiveDriveAuthActive = false
+        _librarySyncStatus.value = "Google Drive sign-in cancelled"
+        _librarySyncBusy.value = false
     }
 
     fun markDriveAuthLaunched() {
@@ -1520,6 +1600,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                             _pendingDriveAuthIntent.value = step.pendingIntent
                             _librarySyncStatus.value = "Approve Google Drive access to continue"
                             _librarySyncBusy.value = false
+                        }
+                        is DriveAuthorizationStep.NeedsDeviceCodeVerification -> {
+                            _pendingDriveDeviceSession.value = step.session
+                            _librarySyncStatus.value =
+                                "Enter ${step.session.userCode} at ${step.session.verificationUrl}"
+                            _librarySyncBusy.value = false
+                            startDriveDevicePolling(step.session)
                         }
                         is DriveAuthorizationStep.Authorized -> {
                             isInteractiveDriveAuthActive = false
@@ -1656,6 +1743,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         _librarySyncStatus.value = "Approve Google Drive access to continue"
                         _librarySyncBusy.value = false
                     }
+                    is DriveAuthorizationStep.NeedsDeviceCodeVerification -> {
+                        _pendingDriveDeviceSession.value = step.session
+                        _librarySyncStatus.value =
+                            "Enter ${step.session.userCode} at ${step.session.verificationUrl}"
+                        _librarySyncBusy.value = false
+                        startDriveDevicePolling(step.session)
+                    }
                     is DriveAuthorizationStep.Authorized -> {
                         isInteractiveDriveAuthActive = false
                         finishGoogleDriveConfiguration(step.account)
@@ -1734,6 +1828,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun disconnectLibrarySync() {
+        driveDevicePollJob?.cancel()
+        driveDevicePollJob = null
+        _pendingDriveDeviceSession.value = null
         isInteractiveDriveAuthActive = false
         activeDriveFallbackContext = null
         _pendingDriveAuthIntent.value = null

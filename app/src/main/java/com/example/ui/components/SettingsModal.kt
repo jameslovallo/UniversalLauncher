@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -18,6 +19,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -66,6 +68,7 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -93,6 +96,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
@@ -106,11 +112,14 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -118,6 +127,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.R
 import com.example.data.model.GameItem
+import com.example.data.service.DriveDeviceCodeSession
 import com.example.data.service.IconPackInfo
 import com.example.data.service.LibrarySyncMode
 import com.example.data.service.TemperatureUnit
@@ -128,6 +138,9 @@ import com.example.data.service.temperatureDisplay
 import com.example.ui.theme.FavoritesLayout
 import com.example.ui.theme.ThemeStyle
 import com.example.ui.viewmodel.LauncherViewModel
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -184,12 +197,14 @@ fun SettingsModal(
     librarySyncNeedsReauth: Boolean = false,
     pendingDriveAuthIntent: PendingIntent? = null,
     pendingDriveFallbackIntent: LauncherViewModel.PendingDriveFallbackIntent? = null,
+    pendingDriveDeviceSession: DriveDeviceCodeSession? = null,
     onConnectGoogleDrive: () -> Unit = {},
     onGoogleDriveAuthorizationResult: (Int, Intent?) -> Unit = { _, _ -> },
     onGoogleDriveFallbackResult: (Int, Intent?, String?, Boolean) -> Unit = { _, _, _, _ -> },
     onConsumePendingDriveAuthIntent: () -> Unit = {},
     onConsumePendingDriveFallbackIntent: () -> Unit = {},
     onMarkDriveAuthLaunched: () -> Unit = {},
+    onCancelDriveDeviceAuthorization: () -> Unit = {},
     isTelevision: Boolean = isTelevisionMode(),
     tvWallpaperUrl: String? = null,
     appGridColumns: Int = 0,
@@ -1149,7 +1164,215 @@ fun SettingsModal(
         }
     }
 }
+    if (pendingDriveDeviceSession != null) {
+        TvDriveDeviceAuthDialog(
+            session = pendingDriveDeviceSession,
+            onCancel = onCancelDriveDeviceAuthorization
+        )
+    }
 }
+
+@Composable
+private fun TvDriveDeviceAuthDialog(
+    session: DriveDeviceCodeSession,
+    onCancel: () -> Unit
+) {
+    val qrBitmap = remember(session.qrTargetUrl) {
+        generateQrImageBitmap(session.qrTargetUrl)
+    }
+    val cancelFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(session.deviceCode) {
+        runCatching { cancelFocusRequester.requestFocus() }
+    }
+
+    Dialog(
+        onDismissRequest = onCancel,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            tonalElevation = 8.dp,
+            color = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 640.dp)
+                .padding(24.dp)
+                .testTag("drive_device_auth_dialog")
+        ) {
+            BoxWithConstraints(modifier = Modifier.padding(24.dp)) {
+                val wideLayout = maxWidth >= 460.dp
+                if (wideLayout) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(24.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (qrBitmap != null) {
+                            QrCodeCard(
+                                bitmap = qrBitmap,
+                                modifier = Modifier.size(184.dp)
+                            )
+                        }
+                        DeviceAuthInstructionsColumn(
+                            session = session,
+                            cancelFocusRequester = cancelFocusRequester,
+                            onCancel = onCancel,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (qrBitmap != null) {
+                            QrCodeCard(
+                                bitmap = qrBitmap,
+                                modifier = Modifier.size(176.dp)
+                            )
+                        }
+                        DeviceAuthInstructionsColumn(
+                            session = session,
+                            cancelFocusRequester = cancelFocusRequester,
+                            onCancel = onCancel,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QrCodeCard(
+    bitmap: ImageBitmap,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = Color.White,
+        modifier = modifier
+    ) {
+        androidx.compose.foundation.Image(
+            bitmap = bitmap,
+            contentDescription = "QR code to approve Google Drive access on your phone",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp)
+        )
+    }
+}
+
+@Composable
+private fun DeviceAuthInstructionsColumn(
+    session: DriveDeviceCodeSession,
+    cancelFocusRequester: FocusRequester,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_google_drive),
+                contentDescription = null,
+                tint = Color.Unspecified,
+                modifier = Modifier.size(24.dp)
+            )
+            Text(
+                text = "Connect Google Drive",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            text = "Scan the QR code on your phone or visit:",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = session.verificationUrl.removePrefix("https://"),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.testTag("drive_device_auth_url")
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = "Enter code:",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Text(
+                text = session.userCode,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 2.sp,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .testTag("drive_device_auth_code")
+            )
+        }
+        Spacer(modifier = Modifier.height(14.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            CircularProgressIndicator(
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = "Waiting for approval…",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        OutlinedButton(
+            onClick = onCancel,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .focusRequester(cancelFocusRequester)
+                .testTag("drive_device_auth_cancel")
+        ) {
+            Text("Cancel", fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+private fun generateQrImageBitmap(content: String, sizePx: Int = 384): ImageBitmap? = runCatching {
+    val hints = mapOf(EncodeHintType.MARGIN to 1)
+    val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
+    val width = matrix.width
+    val height = matrix.height
+    val pixels = IntArray(width * height)
+    val dark = Color.Black.toArgb()
+    val light = Color.White.toArgb()
+    for (y in 0 until height) {
+        val rowOffset = y * width
+        for (x in 0 until width) {
+            pixels[rowOffset + x] = if (matrix[x, y]) dark else light
+        }
+    }
+    Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888).asImageBitmap()
+}.getOrNull()
 
 
 

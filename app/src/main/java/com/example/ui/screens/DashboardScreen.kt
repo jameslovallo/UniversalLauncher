@@ -312,6 +312,7 @@ fun DashboardScreen(
     val librarySyncNeedsReauth by viewModel.librarySyncNeedsReauth.collectAsStateWithLifecycle()
     val pendingDriveAuthIntent by viewModel.pendingDriveAuthIntent.collectAsStateWithLifecycle()
     val pendingDriveFallbackIntent by viewModel.pendingDriveFallbackIntent.collectAsStateWithLifecycle()
+    val pendingDriveDeviceSession by viewModel.pendingDriveDeviceSession.collectAsStateWithLifecycle()
     val gamesRefreshing by viewModel.gamesRefreshing.collectAsStateWithLifecycle()
     val gamesRefreshFeedback by viewModel.gamesRefreshFeedback.collectAsStateWithLifecycle()
 
@@ -1301,6 +1302,7 @@ fun DashboardScreen(
                     librarySyncNeedsReauth = librarySyncNeedsReauth,
                     pendingDriveAuthIntent = pendingDriveAuthIntent,
                     pendingDriveFallbackIntent = pendingDriveFallbackIntent,
+                    pendingDriveDeviceSession = pendingDriveDeviceSession,
                     isDefaultLauncher = { viewModel.isDefaultLauncher() },
                     isHomeOverrideEnabled = { viewModel.isHomeOverrideEnabled() },
                     onSelectFavoritesLayout = { viewModel.setFavoritesLayout(it) },
@@ -1329,6 +1331,7 @@ fun DashboardScreen(
                     onConsumePendingDriveAuthIntent = { viewModel.consumePendingDriveAuthIntent() },
                     onConsumePendingDriveFallbackIntent = { viewModel.consumePendingDriveFallbackIntent() },
                     onMarkDriveAuthLaunched = { viewModel.markDriveAuthLaunched() },
+                    onCancelDriveDeviceAuthorization = { viewModel.cancelGoogleDriveDeviceAuthorization() },
                     onSyncLibraryNow = { viewModel.syncLibraryNow() },
                     onDisconnectLibrarySync = { viewModel.disconnectLibrarySync() },
                     onDismiss = { viewModel.closeSettingsModal() },

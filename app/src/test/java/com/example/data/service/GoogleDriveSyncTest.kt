@@ -489,6 +489,110 @@ class GoogleDriveSyncTest {
         assertTrue("Expected package diagnostic in status: $status", status.contains(app.packageName))
     }
 
+    @Test
+    fun `Android TV Drive auth uses Device Code Flow refreshes tokens and clears on revoke`() =
+        runBlocking {
+            val pollResponses = ArrayDeque(
+                listOf(
+                    400 to """{"error":"authorization_pending"}""",
+                    400 to """{"error":"slow_down"}""",
+                    200 to """{"access_token":"tv_access_1","refresh_token":"tv_refresh_1","expires_in":3600}"""
+                )
+            )
+            var refreshed = false
+            var revokedToken: String? = null
+            val httpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    val request = chain.request()
+                    val url = request.url.toString()
+                    val (code, body) = when {
+                        url.endsWith("/device/code") -> {
+                            200 to """{"device_code":"dev_123","user_code":"ABCD-EFGH","verification_url":"https://www.google.com/device","expires_in":1800,"interval":5}"""
+                        }
+                        url.endsWith("/token") -> {
+                            val reqBuf = Buffer()
+                            request.body?.writeTo(reqBuf)
+                            val form = reqBuf.readUtf8()
+                            if (form.contains("grant_type=refresh_token")) {
+                                refreshed = true
+                                200 to """{"access_token":"tv_access_2","expires_in":3600}"""
+                            } else {
+                                pollResponses.removeFirst()
+                            }
+                        }
+                        url.contains("/drive/v3/about") -> {
+                            200 to """{"user":{"emailAddress":"tv@example.com","displayName":"Living Room TV"}}"""
+                        }
+                        url.contains("/revoke") -> {
+                            revokedToken = request.url.queryParameter("token")
+                            200 to "{}"
+                        }
+                        else -> 404 to "{}"
+                    }
+                    Response.Builder()
+                        .request(request)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(code)
+                        .message("OK")
+                        .body(body.toResponseBody("application/json".toMediaType()))
+                        .build()
+                }
+                .build()
+
+            val manager = PlayServicesDriveAuthManager(
+                context = context,
+                httpClient = httpClient,
+                activityProvider = { null },
+                isTelevisionDevice = true,
+                tvClientId = "test-tv-client.apps.googleusercontent.com",
+                tvClientSecret = "test-tv-secret",
+                deviceAuthBaseUrl = "https://mock.oauth.test"
+            )
+
+            // 1. On TV, interactive authorization goes straight to Device Code Flow instead of Play Services webview.
+            val step = manager.beginInteractiveAuthorization()
+            assertTrue("Expected NeedsDeviceCodeVerification, got $step", step is DriveAuthorizationStep.NeedsDeviceCodeVerification)
+            val session = (step as DriveAuthorizationStep.NeedsDeviceCodeVerification).session
+            assertEquals("dev_123", session.deviceCode)
+            assertEquals("ABCD-EFGH", session.userCode)
+            assertEquals("https://www.google.com/device?user_code=ABCD-EFGH", session.qrTargetUrl)
+
+            // 2. Poll sequence: Pending -> SlowDown -> Authorized with account info.
+            assertEquals(DriveDevicePollResult.Pending, manager.pollDeviceAuthorization(session.deviceCode))
+            assertEquals(DriveDevicePollResult.SlowDown, manager.pollDeviceAuthorization(session.deviceCode))
+            val authorized = manager.pollDeviceAuthorization(session.deviceCode)
+            assertTrue(authorized is DriveDevicePollResult.Authorized)
+            assertEquals("tv@example.com", (authorized as DriveDevicePollResult.Authorized).account?.email)
+
+            // 3. Access token cached & refresh token works on invalidation.
+            assertEquals("tv_access_1", manager.getAccessToken("tv@example.com"))
+            assertEquals("tv_access_2", manager.invalidateAndRefreshToken("tv_access_1", "tv@example.com"))
+            assertTrue(refreshed)
+
+            // 4. Revoke clears stored TV session and notifies OAuth revoke endpoint.
+            manager.revokeAccess("tv@example.com")
+            assertNotNull(revokedToken)
+        }
+
+    @Test
+    fun `Android TV without TV OAuth secrets explains setup instead of launching broken webview`() =
+        runBlocking {
+            val manager = PlayServicesDriveAuthManager(
+                context = context,
+                activityProvider = { null },
+                isTelevisionDevice = true,
+                tvClientId = "YOUR_GOOGLE_TV_OAUTH_CLIENT_ID",
+                tvClientSecret = "YOUR_GOOGLE_TV_OAUTH_CLIENT_SECRET"
+            )
+
+            val result = runCatching { manager.beginInteractiveAuthorization() }
+            assertTrue(result.isFailure)
+            val error = result.exceptionOrNull()
+            assertTrue(error is DriveOAuthConfigurationException)
+            assertTrue(error!!.message!!.contains("GOOGLE_TV_OAUTH_CLIENT_ID"))
+            assertTrue(error.message!!.contains("TVs and Limited Input devices"))
+        }
+
     private class FakeDriveTokenProvider(
         private val driveServer: InMemoryDriveServer
     ) : DriveAccessTokenProvider {

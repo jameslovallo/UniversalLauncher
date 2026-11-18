@@ -219,6 +219,12 @@ class LibrarySyncService(
         )
     }
 
+    /** Polls Google's OAuth 2.0 device token endpoint for Android TV authorization completion. */
+    suspend fun pollGoogleDriveDeviceAuthorization(deviceCode: String): DriveDevicePollResult =
+        withContext(Dispatchers.IO) {
+            driveTokenProvider.pollDeviceAuthorization(deviceCode)
+        }
+
     /** Inspects a non-OK Play Services authorization result intent for the underlying [Throwable]. */
     fun inspectFailedGoogleDriveIntent(data: android.content.Intent?): Throwable? =
         driveTokenProvider.inspectFailedAuthorizationIntent(data)

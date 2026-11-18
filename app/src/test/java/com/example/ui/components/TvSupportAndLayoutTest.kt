@@ -49,6 +49,7 @@ import com.example.R
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.service.AppIconStore
+import com.example.data.service.DriveDeviceCodeSession
 import com.example.data.service.GeForceNowService
 import com.example.data.service.LibrarySyncMode
 import com.example.data.service.TemperatureUnit
@@ -1407,5 +1408,89 @@ class TvSupportAndLayoutTest {
         composeRule.waitForIdle()
         assertEquals(1, disconnectClicks)
         assertEquals(LibrarySyncMode.NONE, syncMode)
+    }
+
+    @Test
+    fun `settings modal shows TV Device Code dialog with QR url and code and supports cancel`() {
+        var activeSession by mutableStateOf<DriveDeviceCodeSession?>(
+            DriveDeviceCodeSession(
+                deviceCode = "dev-code-123",
+                userCode = "ABCD-EFGH",
+                verificationUrl = "https://www.google.com/device",
+                verificationUrlComplete = "https://www.google.com/device?user_code=ABCD-EFGH",
+                expiresInSeconds = 1800,
+                intervalSeconds = 5
+            )
+        )
+        var cancelCalls = 0
+
+        composeRule.setContent {
+            MaterialTheme {
+                SettingsModal(
+                    favoritesLayout = FavoritesLayout.TV_CARDS,
+                    steamGridDbApiKey = null,
+                    steamGridDbIncludeNsfw = false,
+                    iconPacks = emptyList(),
+                    selectedIconPack = null,
+                    hiddenItems = emptyList(),
+                    appsBackgroundOpacity = 0.7f,
+                    themeStyle = ThemeStyle.WALLPAPER,
+                    weatherEnabled = false,
+                    weatherMode = com.example.data.service.WeatherLocationMode.DEVICE_LOCATION,
+                    weatherZip = "",
+                    weatherInfo = null,
+                    weatherError = null,
+                    temperatureUnit = TemperatureUnit.FAHRENHEIT,
+                    weatherApps = emptyList(),
+                    weatherAppPackage = null,
+                    librarySyncBusy = false,
+                    librarySyncStatus = null,
+                    librarySyncConfigured = false,
+                    librarySyncTarget = null,
+                    librarySyncLastSyncedAt = null,
+                    isDefaultLauncher = { true },
+                    isHomeOverrideEnabled = { false },
+                    onSelectFavoritesLayout = {},
+                    onSaveApiKey = {},
+                    onSteamGridDbIncludeNsfwChange = {},
+                    onSelectIconPack = {},
+                    onSetDefaultLauncher = {},
+                    onSetAppsBackgroundOpacity = {},
+                    onSelectThemeStyle = {},
+                    onUnhideItem = {},
+                    onOpenHiddenItem = {},
+                    onWeatherEnabledChange = {},
+                    onWeatherModeChange = {},
+                    onWeatherZipChange = {},
+                    onTemperatureUnitChange = {},
+                    onSelectWeatherApp = {},
+                    onOpenAccessibilitySettings = {},
+                    onChooseSyncFolder = {},
+                    onSyncLibraryNow = {},
+                    onDisconnectLibrarySync = {},
+                    onDismiss = {},
+                    librarySyncMode = LibrarySyncMode.NONE,
+                    pendingDriveDeviceSession = activeSession,
+                    onCancelDriveDeviceAuthorization = {
+                        cancelCalls += 1
+                        activeSession = null
+                    },
+                    isTelevision = true
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("drive_device_auth_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("drive_device_auth_url").assertIsDisplayed()
+        composeRule.onNodeWithText("www.google.com/device").assertIsDisplayed()
+        composeRule.onNodeWithTag("drive_device_auth_code").assertIsDisplayed()
+        composeRule.onNodeWithText("ABCD-EFGH").assertIsDisplayed()
+        composeRule.onNodeWithTag("drive_device_auth_cancel")
+            .assertIsDisplayed()
+            .performClick()
+
+        composeRule.waitForIdle()
+        assertEquals(1, cancelCalls)
+        composeRule.onNodeWithTag("drive_device_auth_dialog").assertDoesNotExist()
     }
 }
