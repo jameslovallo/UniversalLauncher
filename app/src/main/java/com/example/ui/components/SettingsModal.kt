@@ -42,8 +42,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
@@ -94,6 +92,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
@@ -106,6 +105,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -116,6 +116,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.R
 import com.example.data.model.GameItem
 import com.example.data.service.IconPackInfo
 import com.example.data.service.LibrarySyncMode
@@ -934,20 +935,21 @@ fun SettingsModal(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(
-                            imageVector = if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE) {
-                                Icons.Default.Cloud
-                            } else {
-                                Icons.Default.Folder
-                            },
-                            contentDescription = if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE) {
-                                "Google Drive"
-                            } else {
-                                "Local Folder"
-                            },
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp)
-                        )
+                        if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_google_drive),
+                                contentDescription = "Google Drive",
+                                tint = Color.Unspecified,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Folder,
+                                contentDescription = "Local Folder",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = accountOrFolderLabel,
@@ -999,8 +1001,9 @@ fun SettingsModal(
                                 .testTag("library_sync_google_drive_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Cloud,
+                                painter = painterResource(id = R.drawable.ic_google_drive),
                                 contentDescription = null,
+                                tint = Color.Unspecified,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
