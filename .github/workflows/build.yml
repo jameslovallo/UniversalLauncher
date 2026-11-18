@@ -45,6 +45,9 @@ jobs:
 
     # Execute the build directly using the Gradle installed by setup-gradle
     - name: Build with Gradle
+      env:
+        GOOGLE_TV_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_TV_OAUTH_CLIENT_ID }}
+        GOOGLE_TV_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_TV_OAUTH_CLIENT_SECRET }}
       run: gradle -Djava.awt.headless=true assembleDebug
 
     - name: Upload Build Artifact
