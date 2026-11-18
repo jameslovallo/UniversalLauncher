@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -888,187 +889,154 @@ fun SettingsModal(
 
             SettingsSection(
                 title = "Library Sync",
-                description = "Keep your GeForce NOW, Moonlight, and shortcut games in sync " +
-                    "with Google Drive or a local folder. Only one method is active at a time; " +
-                    "switching methods preserves all existing library data and artwork."
-            ) {
-                if (effectiveSyncMode != LibrarySyncMode.NONE) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE) {
-                                Icons.Default.CloudDone
-                            } else {
-                                Icons.Default.Folder
-                            },
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE) {
-                                "Syncing with ${librarySyncTarget ?: "Google Drive (Nexus Launcher)"}"
-                            } else {
-                                "Syncing with ${librarySyncTarget ?: "your selected folder"}"
-                            },
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.testTag("library_sync_target")
-                        )
-                    }
-                    val lastSynced = librarySyncLastSyncedAt
-                        ?.takeIf { it > 0L }
-                        ?.let {
-                            java.text.DateFormat.getDateTimeInstance(
-                                java.text.DateFormat.SHORT,
-                                java.text.DateFormat.SHORT
-                            ).format(java.util.Date(it))
-                        }
-                    if (lastSynced != null) {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "Last synced $lastSynced",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.testTag("library_sync_last_synced")
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = onSyncLibraryNow,
-                            enabled = !librarySyncBusy,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 48.dp)
-                                .testTag("library_sync_now_button")
-                        ) {
-                            Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                when {
-                                    librarySyncBusy -> "Working…"
-                                    effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE && librarySyncNeedsReauth ->
-                                        "Reconnect Drive"
-                                    else -> "Sync Now"
-                                }
-                            )
-                        }
-                        TextButton(
-                            onClick = onDisconnectLibrarySync,
-                            enabled = !librarySyncBusy,
-                            modifier = Modifier
-                                .heightIn(min = 48.dp)
-                                .testTag("library_sync_disconnect_button")
-                        ) {
-                            Text("Disconnect")
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE) {
-                        OutlinedButton(
-                            onClick = { syncFolderLauncher.launch(null) },
-                            enabled = !librarySyncBusy,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .testTag("library_sync_pick_folder_button")
-                        ) {
-                            Icon(imageVector = Icons.Default.Folder, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Switch to Local Folder")
-                        }
-                    } else {
-                        OutlinedButton(
-                            onClick = { syncFolderLauncher.launch(null) },
-                            enabled = !librarySyncBusy,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .testTag("library_sync_pick_folder_button")
-                        ) {
-                            Icon(imageVector = Icons.Default.Folder, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Change Folder")
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedButton(
-                            onClick = onConnectGoogleDrive,
-                            enabled = !librarySyncBusy,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .testTag("library_sync_google_drive_button")
-                        ) {
-                            Icon(imageVector = Icons.Default.Cloud, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Switch to Google Drive")
-                        }
-                    }
+                description = if (effectiveSyncMode == LibrarySyncMode.NONE) {
+                    "Choose a backup destination for your library and artwork."
                 } else {
-                    Button(
-                        onClick = onConnectGoogleDrive,
-                        enabled = !librarySyncBusy,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 48.dp)
-                            .testTag("library_sync_google_drive_button")
-                    ) {
-                        Icon(imageVector = Icons.Default.Cloud, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Connect Google Drive", fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Stores backups in your Drive's app-owned Nexus Launcher folder (drive.file) — works cleanly on Android TV without folder picker issues.",
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    OutlinedButton(
-                        onClick = { syncFolderLauncher.launch(null) },
-                        enabled = !librarySyncBusy,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 48.dp)
-                            .testTag("library_sync_pick_folder_button")
-                    ) {
-                        Icon(imageVector = Icons.Default.Folder, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Choose Local Folder Instead", fontWeight = FontWeight.SemiBold)
-                    }
+                    null
                 }
-
-                if (!librarySyncStatus.isNullOrBlank()) {
-                    val isErrorStatus = librarySyncNeedsReauth ||
+            ) {
+                val statusText = librarySyncStatus?.takeIf { it.isNotBlank() }
+                    ?: if (librarySyncBusy) "Syncing…" else "Connected"
+                val isErrorStatus = !librarySyncStatus.isNullOrBlank() && (
+                    librarySyncNeedsReauth ||
+                        librarySyncStatus.contains("error", ignoreCase = true) ||
+                        librarySyncStatus.contains("unregistered", ignoreCase = true) ||
                         librarySyncStatus.contains("rejected", ignoreCase = true) ||
                         librarySyncStatus.contains("failed", ignoreCase = true) ||
                         librarySyncStatus.contains("aborted", ignoreCase = true) ||
                         librarySyncStatus.contains("configuration", ignoreCase = true) ||
+                        librarySyncStatus.contains("not completed", ignoreCase = true) ||
                         librarySyncStatus.contains("code ", ignoreCase = true)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    )
+
+                if (effectiveSyncMode != LibrarySyncMode.NONE) {
+                    val accountOrFolderLabel = remember(effectiveSyncMode, librarySyncTarget) {
+                        when (effectiveSyncMode) {
+                            LibrarySyncMode.GOOGLE_DRIVE -> {
+                                val raw = librarySyncTarget?.trim().orEmpty()
+                                val inner = raw.substringAfter("Google Drive (", "")
+                                    .substringBeforeLast(")", "")
+                                    .trim()
+                                when {
+                                    inner.isNotBlank() && !inner.equals("Nexus Launcher", ignoreCase = true) -> inner
+                                    raw.isNotBlank() -> raw
+                                    else -> "Google Drive"
+                                }
+                            }
+                            LibrarySyncMode.LOCAL_FOLDER ->
+                                librarySyncTarget?.takeIf { it.isNotBlank() } ?: "Local Folder"
+                            LibrarySyncMode.NONE -> ""
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = null,
-                            tint = if (isErrorStatus) {
-                                MaterialTheme.colorScheme.error
+                            imageVector = if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                                Icons.Default.Cloud
                             } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
+                                Icons.Default.Folder
                             },
-                            modifier = Modifier.size(16.dp)
+                            contentDescription = if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                                "Google Drive"
+                            } else {
+                                "Local Folder"
+                            },
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = accountOrFolderLabel,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag("library_sync_target")
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = statusText,
+                                fontSize = 12.sp,
+                                color = if (isErrorStatus) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.testTag("library_sync_status")
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = onDisconnectLibrarySync,
+                        enabled = !librarySyncBusy,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("library_sync_disconnect_button")
+                    ) {
+                        Text("Disconnect", fontWeight = FontWeight.SemiBold)
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onConnectGoogleDrive,
+                            enabled = !librarySyncBusy,
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("library_sync_google_drive_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Cloud,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Google Drive",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { syncFolderLauncher.launch(null) },
+                            enabled = !librarySyncBusy,
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("library_sync_pick_folder_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Folder,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Local Folder",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                    if (!librarySyncStatus.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = librarySyncStatus,
                             fontSize = 12.sp,
@@ -1087,7 +1055,7 @@ fun SettingsModal(
 
             SettingsSection(
                 title = "SteamGridDB API Key",
-                description = "Optional. Improves artwork matching for imported games."
+                description = "Improves artwork matching for imported games."
             ) {
                 OutlinedTextField(
                     value = apiKeyInput,
@@ -1136,7 +1104,7 @@ fun SettingsModal(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "NSFW posters will be available while enabled. Disabling this option hides NSFW game art, but it will still be saved to the game library if you choose to enable it again later.",
+                            text = "Hiding NSFW posters keeps saved art in your library.",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

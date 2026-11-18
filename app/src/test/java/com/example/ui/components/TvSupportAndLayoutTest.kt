@@ -1292,9 +1292,10 @@ class TvSupportAndLayoutTest {
     }
 
     @Test
-    fun `settings modal shows mutually exclusive Google Drive and Local Folder sync controls across all modes`() {
+    fun `settings modal shows clean Google Drive and Local Folder sync controls across all modes`() {
         var syncMode by mutableStateOf(LibrarySyncMode.NONE)
         var targetLabel by mutableStateOf<String?>(null)
+        var syncStatus by mutableStateOf<String?>(null)
         var driveConnectClicks by mutableIntStateOf(0)
         var disconnectClicks by mutableIntStateOf(0)
 
@@ -1318,7 +1319,7 @@ class TvSupportAndLayoutTest {
                     weatherApps = emptyList(),
                     weatherAppPackage = null,
                     librarySyncBusy = false,
-                    librarySyncStatus = null,
+                    librarySyncStatus = syncStatus,
                     librarySyncConfigured = syncMode != LibrarySyncMode.NONE,
                     librarySyncMode = syncMode,
                     librarySyncTarget = targetLabel,
@@ -1347,6 +1348,7 @@ class TvSupportAndLayoutTest {
                         disconnectClicks++
                         syncMode = LibrarySyncMode.NONE
                         targetLabel = null
+                        syncStatus = null
                     },
                     onDismiss = {},
                     isTelevision = true
@@ -1355,33 +1357,52 @@ class TvSupportAndLayoutTest {
         }
 
         composeRule.waitForIdle()
-        // Disconnected state: offers Connect Google Drive OR Choose Local Folder Instead.
-        composeRule.onNodeWithTag("library_sync_google_drive_button")
+        // Disconnected state: side-by-side Google Drive and Local Folder buttons.
+        val driveNode = composeRule.onNodeWithTag("library_sync_google_drive_button")
             .performScrollTo()
             .assertIsDisplayed()
-            .performClick()
+        val folderNode = composeRule.onNodeWithTag("library_sync_pick_folder_button")
+            .performScrollTo()
+            .assertIsDisplayed()
+        val driveBounds = driveNode.fetchSemanticsNode().boundsInRoot
+        val folderBounds = folderNode.fetchSemanticsNode().boundsInRoot
+        assertEquals(driveBounds.top, folderBounds.top, 2f)
+        assertTrue(driveBounds.right <= folderBounds.left)
+
+        driveNode.performClick()
         composeRule.waitForIdle()
         assertEquals(1, driveConnectClicks)
-        composeRule.onNodeWithTag("library_sync_pick_folder_button").performScrollTo().assertIsDisplayed()
 
-        // Active Google Drive mode: shows target, Sync Now, Disconnect, and Switch to Local Folder (no Drive switch button).
+        // SteamGridDB copy updates.
+        composeRule.onNodeWithText("Improves artwork matching for imported games.")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("Hiding NSFW posters keeps saved art in your library.")
+            .performScrollTo()
+            .assertIsDisplayed()
+
+        // Active Google Drive mode: shows account, status, and wide Disconnect button.
         syncMode = LibrarySyncMode.GOOGLE_DRIVE
         targetLabel = "Google Drive (player@example.com)"
+        syncStatus = "Saved 34 games to Google Drive"
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("library_sync_target").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithTag("library_sync_now_button").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Switch to Local Folder").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("player@example.com").assertIsDisplayed()
+        composeRule.onNodeWithTag("library_sync_status").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Saved 34 games to Google Drive").assertIsDisplayed()
+        composeRule.onNodeWithTag("library_sync_disconnect_button").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("library_sync_google_drive_button").assertDoesNotExist()
+        composeRule.onNodeWithTag("library_sync_pick_folder_button").assertDoesNotExist()
+        composeRule.onNodeWithTag("library_sync_now_button").assertDoesNotExist()
 
-        // Active Local Folder mode: shows Change Folder AND Switch to Google Drive.
+        // Active Local Folder mode: shows folder name, status, and wide Disconnect button.
         syncMode = LibrarySyncMode.LOCAL_FOLDER
         targetLabel = "NexusBackup"
+        syncStatus = "Saved 34 games to NexusBackup"
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("library_sync_target").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Change Folder").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Switch to Google Drive").performScrollTo().assertIsDisplayed()
-
-        // Disconnect returns to unconfigured without removing anything.
+        composeRule.onNodeWithText("NexusBackup").assertIsDisplayed()
+        composeRule.onNodeWithTag("library_sync_status").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("library_sync_disconnect_button").performScrollTo().performClick()
         composeRule.waitForIdle()
         assertEquals(1, disconnectClicks)
