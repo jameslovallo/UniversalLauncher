@@ -18,6 +18,7 @@ import com.example.data.service.AmazonLunaService
 import com.example.data.service.DriveAuthAccount
 import com.example.data.service.DriveAuthorizationRequiredException
 import com.example.data.service.DriveAuthorizationStep
+import com.example.data.service.DriveOAuthConfigurationException
 import com.example.data.service.GeForceNowService
 import com.example.data.service.IconPackIcon
 import com.example.data.service.IconPackInfo
@@ -269,8 +270,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _librarySyncNeedsReauth = MutableStateFlow(false)
     val librarySyncNeedsReauth: StateFlow<Boolean> = _librarySyncNeedsReauth.asStateFlow()
 
+    data class PendingDriveFallbackIntent(
+        val intent: Intent,
+        val accountEmail: String? = null,
+        val isAccountPicker: Boolean = false
+    )
+
     private val _pendingDriveAuthIntent = MutableStateFlow<PendingIntent?>(null)
     val pendingDriveAuthIntent: StateFlow<PendingIntent?> = _pendingDriveAuthIntent.asStateFlow()
+
+    private val _pendingDriveFallbackIntent = MutableStateFlow<PendingDriveFallbackIntent?>(null)
+    val pendingDriveFallbackIntent: StateFlow<PendingDriveFallbackIntent?> =
+        _pendingDriveFallbackIntent.asStateFlow()
+
+    private var activeDriveFallbackContext: Pair<String?, Boolean>? = null
+    private var isInteractiveDriveAuthActive = false
+    private var lastDriveAuthLaunchElapsedMs = 0L
 
     private val _gamesRefreshing = MutableStateFlow(false)
     val gamesRefreshing: StateFlow<Boolean> = _gamesRefreshing.asStateFlow()
@@ -1390,6 +1405,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     /** Uses a local/SAF folder as the exclusive sync target without losing existing library data. */
     fun chooseSyncFolder(uri: Uri) {
+        isInteractiveDriveAuthActive = false
         runLibrarySync("Switching to folder sync…") {
             librarySyncService.configureFolder(uri).also {
                 _librarySyncNeedsReauth.value = false
@@ -1402,6 +1418,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (_librarySyncBusy.value) return
         viewModelScope.launch {
             _librarySyncBusy.value = true
+            isInteractiveDriveAuthActive = true
             _librarySyncStatus.value = "Connecting to Google Drive…"
             try {
                 when (val step = librarySyncService.beginGoogleDriveAuthorization()) {
@@ -1410,41 +1427,251 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         _librarySyncStatus.value = "Approve Google Drive access to continue"
                         _librarySyncBusy.value = false
                     }
+                    is DriveAuthorizationStep.NeedsIntentResolution -> {
+                        activeDriveFallbackContext = step.accountEmail to step.isAccountPicker
+                        _pendingDriveFallbackIntent.value = PendingDriveFallbackIntent(
+                            intent = step.intent,
+                            accountEmail = step.accountEmail,
+                            isAccountPicker = step.isAccountPicker
+                        )
+                        _librarySyncStatus.value = if (step.isAccountPicker) {
+                            "Select your Google account for Drive sync"
+                        } else {
+                            "Approve Google Drive access to continue"
+                        }
+                        _librarySyncBusy.value = false
+                    }
                     is DriveAuthorizationStep.Authorized -> {
+                        isInteractiveDriveAuthActive = false
                         finishGoogleDriveConfiguration(step.account)
                     }
                 }
+            } catch (error: DriveOAuthConfigurationException) {
+                isInteractiveDriveAuthActive = false
+                if (librarySyncService.syncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                    _librarySyncNeedsReauth.value = true
+                }
+                _librarySyncStatus.value = error.message ?: "Google Drive OAuth configuration error"
+                _librarySyncBusy.value = false
             } catch (_: kotlinx.coroutines.CancellationException) {
+                isInteractiveDriveAuthActive = false
                 _librarySyncStatus.value = "Google Drive sign-in cancelled"
                 _librarySyncBusy.value = false
             } catch (error: Throwable) {
+                isInteractiveDriveAuthActive = false
                 _librarySyncStatus.value = error.message ?: "Google Drive sign-in failed"
                 _librarySyncBusy.value = false
             }
         }
     }
 
+    fun markDriveAuthLaunched() {
+        lastDriveAuthLaunchElapsedMs = SystemClock.elapsedRealtime()
+        isInteractiveDriveAuthActive = true
+    }
+
     fun consumePendingDriveAuthIntent() {
         _pendingDriveAuthIntent.value = null
     }
 
+    fun consumePendingDriveFallbackIntent() {
+        _pendingDriveFallbackIntent.value = null
+    }
+
     fun onGoogleDriveAuthorizationResult(resultCode: Int, data: Intent?) {
+        val elapsedMs = if (lastDriveAuthLaunchElapsedMs > 0L) {
+            SystemClock.elapsedRealtime() - lastDriveAuthLaunchElapsedMs
+        } else {
+            Long.MAX_VALUE
+        }
+        lastDriveAuthLaunchElapsedMs = 0L
+
         if (resultCode != Activity.RESULT_OK || data == null) {
-            _librarySyncStatus.value = "Google Drive sign-in cancelled"
-            _librarySyncBusy.value = false
+            val inspectedError = librarySyncService.inspectFailedGoogleDriveIntent(data)
+            val shouldTryFallback = elapsedMs < QUICK_AUTH_ABORT_THRESHOLD_MS ||
+                (inspectedError != null && inspectedError !is kotlinx.coroutines.CancellationException)
+            if (!shouldTryFallback) {
+                isInteractiveDriveAuthActive = false
+                _librarySyncStatus.value = "Google Drive sign-in cancelled"
+                _librarySyncBusy.value = false
+                return
+            }
+
+            viewModelScope.launch {
+                _librarySyncBusy.value = true
+                _librarySyncStatus.value = "Opening Google account sign-in…"
+                try {
+                    when (val step = librarySyncService.beginFallbackGoogleDriveAuthorization()) {
+                        is DriveAuthorizationStep.NeedsIntentResolution -> {
+                            activeDriveFallbackContext = step.accountEmail to step.isAccountPicker
+                            _pendingDriveFallbackIntent.value = PendingDriveFallbackIntent(
+                                intent = step.intent,
+                                accountEmail = step.accountEmail,
+                                isAccountPicker = step.isAccountPicker
+                            )
+                            _librarySyncStatus.value = if (step.isAccountPicker) {
+                                "Select your Google account for Drive sync"
+                            } else {
+                                "Approve Google Drive access to continue"
+                            }
+                            _librarySyncBusy.value = false
+                        }
+                        is DriveAuthorizationStep.NeedsUserConsent -> {
+                            _pendingDriveAuthIntent.value = step.pendingIntent
+                            _librarySyncStatus.value = "Approve Google Drive access to continue"
+                            _librarySyncBusy.value = false
+                        }
+                        is DriveAuthorizationStep.Authorized -> {
+                            isInteractiveDriveAuthActive = false
+                            finishGoogleDriveConfiguration(step.account)
+                        }
+                        null -> {
+                            isInteractiveDriveAuthActive = false
+                            if (librarySyncService.syncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                                _librarySyncNeedsReauth.value = true
+                            }
+                            _librarySyncStatus.value = (inspectedError as? DriveOAuthConfigurationException)?.message
+                                ?: inspectedError?.message
+                                ?: librarySyncService.driveDiagnosticConfigurationMessage(
+                                    "Google Drive sign-in exited immediately before showing consent."
+                                )
+                            _librarySyncBusy.value = false
+                        }
+                    }
+                } catch (error: Throwable) {
+                    isInteractiveDriveAuthActive = false
+                    if (librarySyncService.syncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                        _librarySyncNeedsReauth.value = true
+                    }
+                    _librarySyncStatus.value = when (error) {
+                        is DriveOAuthConfigurationException -> error.message
+                        is kotlinx.coroutines.CancellationException ->
+                            (inspectedError as? DriveOAuthConfigurationException)?.message
+                                ?: librarySyncService.driveDiagnosticConfigurationMessage(
+                                    "Google Drive sign-in was aborted by Google Play Services."
+                                )
+                        else -> error.message ?: "Google Drive sign-in failed"
+                    }
+                    refreshLibrarySyncState()
+                    _librarySyncBusy.value = false
+                }
+            }
             return
         }
+
         viewModelScope.launch {
             _librarySyncBusy.value = true
             _librarySyncStatus.value = "Syncing with Google Drive…"
             try {
                 val authorized = librarySyncService.resolveGoogleDriveAuthorization(data)
+                isInteractiveDriveAuthActive = false
                 finishGoogleDriveConfiguration(authorized.account)
             } catch (_: kotlinx.coroutines.CancellationException) {
+                isInteractiveDriveAuthActive = false
                 _librarySyncStatus.value = "Google Drive sign-in cancelled"
                 _librarySyncBusy.value = false
             } catch (error: Throwable) {
-                if (error is DriveAuthorizationRequiredException) {
+                isInteractiveDriveAuthActive = false
+                if (error is DriveAuthorizationRequiredException ||
+                    (error is DriveOAuthConfigurationException &&
+                        librarySyncService.syncMode == LibrarySyncMode.GOOGLE_DRIVE)
+                ) {
+                    _librarySyncNeedsReauth.value = true
+                }
+                _librarySyncStatus.value = error.message ?: "Google Drive sync failed"
+                refreshLibrarySyncState()
+                _librarySyncBusy.value = false
+            }
+        }
+    }
+
+    fun onGoogleDriveFallbackResult(
+        resultCode: Int,
+        data: Intent?,
+        accountEmail: String? = null,
+        isAccountPicker: Boolean = false
+    ) {
+        val elapsedMs = if (lastDriveAuthLaunchElapsedMs > 0L) {
+            SystemClock.elapsedRealtime() - lastDriveAuthLaunchElapsedMs
+        } else {
+            Long.MAX_VALUE
+        }
+        lastDriveAuthLaunchElapsedMs = 0L
+
+        val resolvedEmail = accountEmail ?: activeDriveFallbackContext?.first
+        val resolvedIsPicker = if (accountEmail != null) {
+            isAccountPicker
+        } else {
+            isAccountPicker || (activeDriveFallbackContext?.second == true)
+        }
+        activeDriveFallbackContext = null
+
+        if (resultCode != Activity.RESULT_OK) {
+            isInteractiveDriveAuthActive = false
+            if (elapsedMs < QUICK_AUTH_ABORT_THRESHOLD_MS) {
+                if (librarySyncService.syncMode == LibrarySyncMode.GOOGLE_DRIVE) {
+                    _librarySyncNeedsReauth.value = true
+                }
+                _librarySyncStatus.value = librarySyncService.driveDiagnosticConfigurationMessage(
+                    "Google Drive consent exited immediately (resultCode=$resultCode)."
+                )
+            } else {
+                _librarySyncStatus.value = "Google Drive sign-in cancelled"
+            }
+            _librarySyncBusy.value = false
+            return
+        }
+
+        viewModelScope.launch {
+            _librarySyncBusy.value = true
+            _librarySyncStatus.value = "Authorizing Google Drive…"
+            try {
+                when (
+                    val step = librarySyncService.resolveFallbackGoogleDriveAuthorization(
+                        resultCode = resultCode,
+                        data = data,
+                        accountEmail = resolvedEmail,
+                        isAccountPicker = resolvedIsPicker
+                    )
+                ) {
+                    is DriveAuthorizationStep.NeedsIntentResolution -> {
+                        if (!resolvedIsPicker && !step.isAccountPicker) {
+                            isInteractiveDriveAuthActive = false
+                            _librarySyncStatus.value =
+                                "Google Drive consent was not completed. Please try again."
+                            _librarySyncBusy.value = false
+                        } else {
+                            activeDriveFallbackContext = step.accountEmail to step.isAccountPicker
+                            _pendingDriveFallbackIntent.value = PendingDriveFallbackIntent(
+                                intent = step.intent,
+                                accountEmail = step.accountEmail,
+                                isAccountPicker = step.isAccountPicker
+                            )
+                            _librarySyncStatus.value = "Approve Google Drive access to continue"
+                            _librarySyncBusy.value = false
+                        }
+                    }
+                    is DriveAuthorizationStep.NeedsUserConsent -> {
+                        _pendingDriveAuthIntent.value = step.pendingIntent
+                        _librarySyncStatus.value = "Approve Google Drive access to continue"
+                        _librarySyncBusy.value = false
+                    }
+                    is DriveAuthorizationStep.Authorized -> {
+                        isInteractiveDriveAuthActive = false
+                        finishGoogleDriveConfiguration(step.account)
+                    }
+                    null -> {
+                        isInteractiveDriveAuthActive = false
+                        _librarySyncStatus.value = "Could not read selected Google account."
+                        _librarySyncBusy.value = false
+                    }
+                }
+            } catch (error: Throwable) {
+                isInteractiveDriveAuthActive = false
+                if (error is DriveAuthorizationRequiredException ||
+                    (error is DriveOAuthConfigurationException &&
+                        librarySyncService.syncMode == LibrarySyncMode.GOOGLE_DRIVE)
+                ) {
                     _librarySyncNeedsReauth.value = true
                 }
                 _librarySyncStatus.value = error.message ?: "Google Drive sync failed"
@@ -1468,6 +1695,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             if (error is DriveAuthorizationRequiredException) {
                 _librarySyncNeedsReauth.value = true
                 error.pendingIntent?.let { _pendingDriveAuthIntent.value = it }
+                if (error.pendingIntent == null) {
+                    error.recoveryIntent?.let { recovery ->
+                        val email = account?.email ?: librarySyncService.driveAccountEmail()
+                        activeDriveFallbackContext = email to false
+                        _pendingDriveFallbackIntent.value = PendingDriveFallbackIntent(
+                            intent = recovery,
+                            accountEmail = email,
+                            isAccountPicker = false
+                        )
+                    }
+                }
             }
             _librarySyncStatus.value = error.message ?: "Google Drive sync failed"
         }
@@ -1496,6 +1734,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun disconnectLibrarySync() {
+        isInteractiveDriveAuthActive = false
+        activeDriveFallbackContext = null
+        _pendingDriveAuthIntent.value = null
+        _pendingDriveFallbackIntent.value = null
         viewModelScope.launch {
             librarySyncService.disconnect()
             _librarySyncNeedsReauth.value = false
@@ -1506,14 +1748,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     /** Reads the active sync target when the device is unlocked. */
     fun onDeviceUnlocked() {
-        if (!librarySyncService.isConfigured || _librarySyncBusy.value) return
+        if (!librarySyncService.isConfigured || _librarySyncBusy.value || isInteractiveDriveAuthActive) return
         lastResumeLibrarySyncMs = SystemClock.elapsedRealtime()
         syncLibraryInBackground()
     }
 
     /** Pulls remote library and poster updates when returning to the launcher (throttled). */
     fun syncLibraryOnResume() {
-        if (!librarySyncService.isConfigured || _librarySyncBusy.value) return
+        if (!librarySyncService.isConfigured || _librarySyncBusy.value || isInteractiveDriveAuthActive) return
         val now = SystemClock.elapsedRealtime()
         if (now - lastResumeLibrarySyncMs < RESUME_SYNC_INTERVAL_MS) return
         lastResumeLibrarySyncMs = now
@@ -1562,6 +1804,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     if (error is DriveAuthorizationRequiredException) {
                         _librarySyncNeedsReauth.value = true
                         error.pendingIntent?.let { _pendingDriveAuthIntent.value = it }
+                        if (error.pendingIntent == null) {
+                            error.recoveryIntent?.let { recovery ->
+                                val email = librarySyncService.driveAccountEmail()
+                                activeDriveFallbackContext = email to false
+                                _pendingDriveFallbackIntent.value = PendingDriveFallbackIntent(
+                                    intent = recovery,
+                                    accountEmail = email,
+                                    isAccountPicker = false
+                                )
+                            }
+                        }
                     }
                     _librarySyncStatus.value = error.message ?: "Library sync failed"
                 }
@@ -1800,6 +2053,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         const val MAX_APP_GRID_COLUMNS = 8
         private const val DEFAULT_APPS_OPACITY = 0.6f
         private const val RESUME_SYNC_INTERVAL_MS = 15_000L
+        private const val QUICK_AUTH_ABORT_THRESHOLD_MS = 1_500L
         private const val TV_WALLPAPER_DIR = "tv_wallpapers"
 
         /** One-time cleanup of the hardcoded library entries from early builds. */

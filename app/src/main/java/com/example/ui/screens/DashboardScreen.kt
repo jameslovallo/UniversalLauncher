@@ -311,6 +311,7 @@ fun DashboardScreen(
     val librarySyncLastSyncedAt by viewModel.librarySyncLastSyncedAt.collectAsStateWithLifecycle()
     val librarySyncNeedsReauth by viewModel.librarySyncNeedsReauth.collectAsStateWithLifecycle()
     val pendingDriveAuthIntent by viewModel.pendingDriveAuthIntent.collectAsStateWithLifecycle()
+    val pendingDriveFallbackIntent by viewModel.pendingDriveFallbackIntent.collectAsStateWithLifecycle()
     val gamesRefreshing by viewModel.gamesRefreshing.collectAsStateWithLifecycle()
     val gamesRefreshFeedback by viewModel.gamesRefreshFeedback.collectAsStateWithLifecycle()
 
@@ -1299,6 +1300,7 @@ fun DashboardScreen(
                     librarySyncLastSyncedAt = librarySyncLastSyncedAt,
                     librarySyncNeedsReauth = librarySyncNeedsReauth,
                     pendingDriveAuthIntent = pendingDriveAuthIntent,
+                    pendingDriveFallbackIntent = pendingDriveFallbackIntent,
                     isDefaultLauncher = { viewModel.isDefaultLauncher() },
                     isHomeOverrideEnabled = { viewModel.isHomeOverrideEnabled() },
                     onSelectFavoritesLayout = { viewModel.setFavoritesLayout(it) },
@@ -1321,7 +1323,12 @@ fun DashboardScreen(
                     onGoogleDriveAuthorizationResult = { code, data ->
                         viewModel.onGoogleDriveAuthorizationResult(code, data)
                     },
+                    onGoogleDriveFallbackResult = { code, data, email, isPicker ->
+                        viewModel.onGoogleDriveFallbackResult(code, data, email, isPicker)
+                    },
                     onConsumePendingDriveAuthIntent = { viewModel.consumePendingDriveAuthIntent() },
+                    onConsumePendingDriveFallbackIntent = { viewModel.consumePendingDriveFallbackIntent() },
+                    onMarkDriveAuthLaunched = { viewModel.markDriveAuthLaunched() },
                     onSyncLibraryNow = { viewModel.syncLibraryNow() },
                     onDisconnectLibrarySync = { viewModel.disconnectLibrarySync() },
                     onDismiss = { viewModel.closeSettingsModal() },

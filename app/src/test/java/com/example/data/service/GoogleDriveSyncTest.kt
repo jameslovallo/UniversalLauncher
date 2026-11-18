@@ -372,6 +372,123 @@ class GoogleDriveSyncTest {
             assertNotNull(repository.getGameById("gfn_keep_me"))
         }
 
+    @Test
+    fun `fallback Drive authorization flow and diagnostic errors work end to end`() =
+        runBlocking {
+            val driveServer = InMemoryDriveServer()
+            val prefs = context.getSharedPreferences("fallback_test_${System.nanoTime()}", Context.MODE_PRIVATE)
+            val fallbackIntent = Intent("com.google.android.gms.auth.PICK_ACCOUNT")
+            val provider = object : DriveAccessTokenProvider {
+                override suspend fun beginInteractiveAuthorization(preferredEmail: String?): DriveAuthorizationStep =
+                    throw DriveOAuthConfigurationException(
+                        diagnosticConfigurationMessage("Google Play Services aborted Drive authorization (code 16).")
+                    )
+
+                override suspend fun resolveAuthorizationResult(data: Intent?): DriveAuthorizationStep.Authorized =
+                    throw IllegalStateException("Unused")
+
+                override suspend fun beginFallbackAccountAuthorization(preferredEmail: String?): DriveAuthorizationStep =
+                    DriveAuthorizationStep.NeedsIntentResolution(
+                        intent = fallbackIntent,
+                        accountEmail = null,
+                        isAccountPicker = true
+                    )
+
+                override suspend fun resolveFallbackActivityResult(
+                    resultCode: Int,
+                    data: Intent?,
+                    accountEmail: String?,
+                    isAccountPicker: Boolean
+                ): DriveAuthorizationStep = DriveAuthorizationStep.Authorized(
+                    accessToken = driveServer.validToken,
+                    account = DriveAuthAccount(email = "tvuser@example.com", displayName = "TV User")
+                )
+
+                override fun inspectFailedAuthorizationIntent(data: Intent?): Throwable =
+                    DriveOAuthConfigurationException(
+                        diagnosticConfigurationMessage("Google Drive OAuth configuration mismatch (code 10 DEVELOPER_ERROR).")
+                    )
+
+                override fun diagnosticConfigurationMessage(reason: String): String =
+                    "$reason Verify Google Drive API is enabled for ${context.packageName}."
+
+                override suspend fun getAccessToken(preferredEmail: String?): String = driveServer.validToken
+                override suspend fun invalidateAndRefreshToken(invalidToken: String, preferredEmail: String?): String =
+                    driveServer.validToken
+                override suspend fun revokeAccess(accountEmail: String?) = Unit
+            }
+            val apiClient = GoogleDriveApiClient(
+                tokenProvider = provider,
+                httpClient = OkHttpClient.Builder().addInterceptor(driveServer).build(),
+                driveApiBaseUrl = "https://mock.drive.test/drive/v3",
+                uploadApiBaseUrl = "https://mock.drive.test/upload/drive/v3"
+            )
+            val syncService = LibrarySyncService(
+                context = context,
+                repository = repository,
+                prefs = prefs,
+                driveTokenProvider = provider,
+                driveApiClient = apiClient
+            )
+
+            val fallbackStep = syncService.beginFallbackGoogleDriveAuthorization()
+            assertTrue(fallbackStep is DriveAuthorizationStep.NeedsIntentResolution)
+            assertTrue((fallbackStep as DriveAuthorizationStep.NeedsIntentResolution).isAccountPicker)
+
+            val resolvedStep = syncService.resolveFallbackGoogleDriveAuthorization(
+                resultCode = android.app.Activity.RESULT_OK,
+                data = Intent(),
+                accountEmail = null,
+                isAccountPicker = true
+            )
+            assertTrue(resolvedStep is DriveAuthorizationStep.Authorized)
+            val account = (resolvedStep as DriveAuthorizationStep.Authorized).account
+            assertEquals("tvuser@example.com", account?.email)
+
+            val outcome = syncService.configureGoogleDrive(account)
+            assertTrue(outcome is LibrarySyncOutcome.WroteLocal)
+            assertEquals("Google Drive (tvuser@example.com)", syncService.targetLabel())
+
+            val inspected = syncService.inspectFailedGoogleDriveIntent(Intent())
+            assertTrue(inspected is DriveOAuthConfigurationException)
+            assertTrue(inspected!!.message!!.contains(context.packageName))
+        }
+
+    @Test
+    fun `LauncherViewModel routes immediate RESULT_CANCELED to account picker instead of reporting cancelled`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = com.example.ui.viewmodel.LauncherViewModel(app)
+
+        viewModel.markDriveAuthLaunched()
+        viewModel.onGoogleDriveAuthorizationResult(android.app.Activity.RESULT_CANCELED, null)
+
+        val deadline = System.currentTimeMillis() + 5_000L
+        while (viewModel.pendingDriveFallbackIntent.value == null && System.currentTimeMillis() < deadline) {
+            Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            Thread.sleep(20)
+        }
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        val pendingFallback = viewModel.pendingDriveFallbackIntent.value
+        assertNotNull("Expected automatic fallback account picker intent on immediate abort", pendingFallback)
+        assertTrue(pendingFallback!!.isAccountPicker)
+        viewModel.consumePendingDriveFallbackIntent()
+
+        // If the fallback intent itself immediately aborts (< QUICK_AUTH_ABORT_THRESHOLD_MS),
+        // ViewModel must surface diagnostic OAuth info rather than "Google Drive sign-in cancelled".
+        viewModel.markDriveAuthLaunched()
+        viewModel.onGoogleDriveFallbackResult(
+            resultCode = android.app.Activity.RESULT_CANCELED,
+            data = null,
+            accountEmail = null,
+            isAccountPicker = true
+        )
+
+        val status = viewModel.librarySyncStatus.value.orEmpty()
+        assertFalse("Must not mask immediate abort as user cancellation: $status", status.contains("cancelled", ignoreCase = true))
+        assertTrue("Expected package diagnostic in status: $status", status.contains(app.packageName))
+    }
+
     private class FakeDriveTokenProvider(
         private val driveServer: InMemoryDriveServer
     ) : DriveAccessTokenProvider {

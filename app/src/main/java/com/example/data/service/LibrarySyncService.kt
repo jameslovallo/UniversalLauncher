@@ -185,12 +185,47 @@ class LibrarySyncService(
             driveTokenProvider.beginInteractiveAuthorization(prefs.getString(KEY_DRIVE_ACCOUNT_EMAIL, null))
         }
 
+    /**
+     * Starts the TV/fallback Google account + `GoogleAuthUtil` authorization flow when Play
+     * Services' `AuthorizationClient` aborts or is unsupported on the device.
+     */
+    suspend fun beginFallbackGoogleDriveAuthorization(): DriveAuthorizationStep? =
+        withContext(Dispatchers.IO) {
+            driveTokenProvider.beginFallbackAccountAuthorization(prefs.getString(KEY_DRIVE_ACCOUNT_EMAIL, null))
+        }
+
     /** Finishes Google Drive authorization after Android consent ActivityResult. */
     suspend fun resolveGoogleDriveAuthorization(
         data: android.content.Intent?
     ): DriveAuthorizationStep.Authorized = withContext(Dispatchers.IO) {
         driveTokenProvider.resolveAuthorizationResult(data)
     }
+
+    /**
+     * Resolves an activity result from the fallback [android.accounts.AccountManager] picker or
+     * [com.google.android.gms.auth.UserRecoverableAuthException] consent intent.
+     */
+    suspend fun resolveFallbackGoogleDriveAuthorization(
+        resultCode: Int,
+        data: android.content.Intent?,
+        accountEmail: String?,
+        isAccountPicker: Boolean
+    ): DriveAuthorizationStep? = withContext(Dispatchers.IO) {
+        driveTokenProvider.resolveFallbackActivityResult(
+            resultCode = resultCode,
+            data = data,
+            accountEmail = accountEmail,
+            isAccountPicker = isAccountPicker
+        )
+    }
+
+    /** Inspects a non-OK Play Services authorization result intent for the underlying [Throwable]. */
+    fun inspectFailedGoogleDriveIntent(data: android.content.Intent?): Throwable? =
+        driveTokenProvider.inspectFailedAuthorizationIntent(data)
+
+    /** Formats an actionable diagnostic error explaining required OAuth / SHA-1 setup for Drive. */
+    fun driveDiagnosticConfigurationMessage(reason: String): String =
+        driveTokenProvider.diagnosticConfigurationMessage(reason)
 
     /**
      * Activates Google Drive API sync (`drive.file` scope) as the exclusive sync target inside an

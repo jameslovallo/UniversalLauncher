@@ -181,9 +181,13 @@ fun SettingsModal(
     },
     librarySyncNeedsReauth: Boolean = false,
     pendingDriveAuthIntent: PendingIntent? = null,
+    pendingDriveFallbackIntent: LauncherViewModel.PendingDriveFallbackIntent? = null,
     onConnectGoogleDrive: () -> Unit = {},
     onGoogleDriveAuthorizationResult: (Int, Intent?) -> Unit = { _, _ -> },
+    onGoogleDriveFallbackResult: (Int, Intent?, String?, Boolean) -> Unit = { _, _, _, _ -> },
     onConsumePendingDriveAuthIntent: () -> Unit = {},
+    onConsumePendingDriveFallbackIntent: () -> Unit = {},
+    onMarkDriveAuthLaunched: () -> Unit = {},
     isTelevision: Boolean = isTelevisionMode(),
     tvWallpaperUrl: String? = null,
     appGridColumns: Int = 0,
@@ -237,13 +241,46 @@ fun SettingsModal(
         onGoogleDriveAuthorizationResult(result.resultCode, result.data)
     }
 
+    var activeFallbackAccountEmail by remember { mutableStateOf<String?>(null) }
+    var activeFallbackIsPicker by remember { mutableStateOf(false) }
+
+    val driveFallbackLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        onGoogleDriveFallbackResult(
+            result.resultCode,
+            result.data,
+            activeFallbackAccountEmail,
+            activeFallbackIsPicker
+        )
+    }
+
     LaunchedEffect(pendingDriveAuthIntent) {
         val pending = pendingDriveAuthIntent ?: return@LaunchedEffect
+        onMarkDriveAuthLaunched()
         onConsumePendingDriveAuthIntent()
         runCatching {
             driveAuthLauncher.launch(IntentSenderRequest.Builder(pending.intentSender).build())
         }.onFailure {
             onGoogleDriveAuthorizationResult(Activity.RESULT_CANCELED, null)
+        }
+    }
+
+    LaunchedEffect(pendingDriveFallbackIntent) {
+        val pending = pendingDriveFallbackIntent ?: return@LaunchedEffect
+        activeFallbackAccountEmail = pending.accountEmail
+        activeFallbackIsPicker = pending.isAccountPicker
+        onMarkDriveAuthLaunched()
+        onConsumePendingDriveFallbackIntent()
+        runCatching {
+            driveFallbackLauncher.launch(pending.intent)
+        }.onFailure {
+            onGoogleDriveFallbackResult(
+                Activity.RESULT_CANCELED,
+                null,
+                pending.accountEmail,
+                pending.isAccountPicker
+            )
         }
     }
 
@@ -1013,12 +1050,18 @@ fun SettingsModal(
                 }
 
                 if (!librarySyncStatus.isNullOrBlank()) {
+                    val isErrorStatus = librarySyncNeedsReauth ||
+                        librarySyncStatus.contains("rejected", ignoreCase = true) ||
+                        librarySyncStatus.contains("failed", ignoreCase = true) ||
+                        librarySyncStatus.contains("aborted", ignoreCase = true) ||
+                        librarySyncStatus.contains("configuration", ignoreCase = true) ||
+                        librarySyncStatus.contains("code ", ignoreCase = true)
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
                             contentDescription = null,
-                            tint = if (librarySyncNeedsReauth) {
+                            tint = if (isErrorStatus) {
                                 MaterialTheme.colorScheme.error
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
@@ -1029,7 +1072,7 @@ fun SettingsModal(
                         Text(
                             text = librarySyncStatus,
                             fontSize = 12.sp,
-                            color = if (librarySyncNeedsReauth) {
+                            color = if (isErrorStatus) {
                                 MaterialTheme.colorScheme.error
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
