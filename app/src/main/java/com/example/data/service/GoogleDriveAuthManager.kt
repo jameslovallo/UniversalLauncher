@@ -186,12 +186,13 @@ class PlayServicesDriveAuthManager(
             }
         }
 
+        if (isTelevisionDevice) {
+            return beginTvDeviceOrExplain()
+        }
+
         val result = try {
             authorizeSilently()
         } catch (error: Throwable) {
-            if (isTelevisionDevice) {
-                return beginTvDeviceOrExplain()
-            }
             if (shouldFallbackToAccountAuth(error)) {
                 return beginFallbackAccountAuthorization(preferredEmail)
                     ?: throw error
@@ -200,9 +201,6 @@ class PlayServicesDriveAuthManager(
         }
 
         if (result.hasResolution()) {
-            if (isTelevisionDevice) {
-                return beginTvDeviceOrExplain()
-            }
             val pendingIntent = result.pendingIntent
                 ?: return beginFallbackAccountAuthorization(preferredEmail)
                     ?: throw IllegalStateException("Google Drive consent prompt could not be opened.")
@@ -429,14 +427,6 @@ class PlayServicesDriveAuthManager(
             return getDeviceAccessToken(forceRefresh = false)
         }
 
-        val primaryResult = runCatching { authorizeSilently() }
-        primaryResult.getOrNull()?.let { result ->
-            if (!result.hasResolution()) {
-                val token = result.accessToken?.takeIf { it.isNotBlank() }
-                if (token != null) return token
-            }
-        }
-
         if (isTelevisionDevice) {
             throw DriveAuthorizationRequiredException(
                 message = if (hasDeviceFlowCredentials) {
@@ -445,6 +435,14 @@ class PlayServicesDriveAuthManager(
                     tvConfigurationMissingMessage()
                 }
             )
+        }
+
+        val primaryResult = runCatching { authorizeSilently() }
+        primaryResult.getOrNull()?.let { result ->
+            if (!result.hasResolution()) {
+                val token = result.accessToken?.takeIf { it.isNotBlank() }
+                if (token != null) return token
+            }
         }
 
         val email = preferredEmail?.trim()?.takeIf { it.isNotBlank() }
@@ -501,15 +499,17 @@ class PlayServicesDriveAuthManager(
         }
         clearDeviceTokens()
 
-        runCatching { authorizeSilently() }.getOrNull()?.accessToken
-            ?.takeIf { it.isNotBlank() }
-            ?.let { tokensToRevoke += it }
-        val email = accountEmail?.trim()?.takeIf { it.isNotBlank() }
-        if (!isTelevisionDevice && email != null) {
-            withContext(Dispatchers.IO) {
-                runCatching {
-                    GoogleAuthUtil.getToken(appContext, Account(email, GOOGLE_ACCOUNT_TYPE), OAUTH2_DRIVE_FILE_SCOPE)
-                }.getOrNull()?.takeIf { it.isNotBlank() }?.let { tokensToRevoke += it }
+        if (!isTelevisionDevice) {
+            runCatching { authorizeSilently() }.getOrNull()?.accessToken
+                ?.takeIf { it.isNotBlank() }
+                ?.let { tokensToRevoke += it }
+            val email = accountEmail?.trim()?.takeIf { it.isNotBlank() }
+            if (email != null) {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        GoogleAuthUtil.getToken(appContext, Account(email, GOOGLE_ACCOUNT_TYPE), OAUTH2_DRIVE_FILE_SCOPE)
+                    }.getOrNull()?.takeIf { it.isNotBlank() }?.let { tokensToRevoke += it }
+                }
             }
         }
         if (tokensToRevoke.isEmpty()) return

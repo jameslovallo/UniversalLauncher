@@ -1343,13 +1343,16 @@ private fun DeviceAuthInstructionsColumn(
             )
         }
         Spacer(modifier = Modifier.height(16.dp))
+        val cancelInteraction = remember { MutableInteractionSource() }
         OutlinedButton(
             onClick = onCancel,
+            interactionSource = cancelInteraction,
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 48.dp)
                 .focusRequester(cancelFocusRequester)
+                .tvFocusBorder(cancelInteraction, shape = RoundedCornerShape(12.dp))
                 .testTag("drive_device_auth_cancel")
         ) {
             Text("Cancel", fontWeight = FontWeight.SemiBold)
