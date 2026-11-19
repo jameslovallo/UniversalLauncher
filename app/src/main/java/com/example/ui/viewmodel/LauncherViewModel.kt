@@ -57,6 +57,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 enum class MainLibraryTab {
     APPS,
@@ -344,6 +345,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val hiddenItems: StateFlow<List<GameItem>> = repository.hiddenGames
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Guards [onHomeScreenReady] so the deferred startup work runs exactly once even if the
+    // dashboard is recomposed or recreated before it finishes.
+    private val homeReadyStarted = AtomicBoolean(false)
+
     init {
         viewModelScope.launch {
             val pendingLegacyCleanup = !prefs.getBoolean(KEY_LEGACY_CLEANUP_DONE, false)
@@ -387,9 +392,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             repository.backfillGfnArtwork()
             repository.matchMissingGamePosters()
         }
+        // Themed icons are hydrated from the local cache for the first frame, so the
+        // pack re-scan can stay here: it only refreshes the installed-pack list and
+        // re-applies remembered overrides.
+        refreshIconPacks()
+    }
+
+    /**
+     * Kicks off the refreshes that are not needed to draw the home screen. The dashboard
+     * calls this after its first frame so the weather lookup and its package scan cannot
+     * compete with the initial library render, which dominated cold start on Android TV.
+     */
+    fun onHomeScreenReady() {
+        if (!homeReadyStarted.compareAndSet(false, true)) return
         if (_weatherEnabled.value) refreshWeather()
         refreshWeatherApps()
-        refreshIconPacks()
     }
 
     fun setTab(tab: MainLibraryTab) {

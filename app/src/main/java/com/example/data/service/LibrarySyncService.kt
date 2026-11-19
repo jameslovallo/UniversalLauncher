@@ -12,8 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChangedBy
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -347,7 +346,15 @@ class LibrarySyncService(
     ) {
         scope.launch {
             repository.allItemsIncludingDeleted
-                .map { rows ->
+                // Startup performs a burst of writes (installed-app scan, artwork backfill).
+                // Debounce before mapping because building the payload hashes every local
+                // artwork file; doing that per write cost far more than the sync itself.
+                .debounce(WRITE_DEBOUNCE_MS)
+                .mapNotNull { rows ->
+                    // Nothing to push when no target is configured. Reading the flag here
+                    // (rather than filtering the flow) still picks up a target configured
+                    // while the launcher is running.
+                    if (!isConfigured) return@mapNotNull null
                     val payload = LocalSyncPayload(
                         items = syncable(rows),
                         appCustomizations = syncableAppCustomizations(rows),
@@ -358,20 +365,15 @@ class LibrarySyncService(
                     payload to librarySignature(payload.items, payload.appCustomizations)
                 }
                 .distinctUntilChangedBy { it.second }
-                .onEach { (_, sig) ->
-                    if (!isConfigured || sig == prefs.getString(KEY_SIGNATURE, "")) {
-                        return@onEach
-                    }
-                    prefs.edit().putLong(KEY_UPDATED_AT, nextVersion()).apply()
-                }
-                .debounce(WRITE_DEBOUNCE_MS)
                 .collect { (payload, sig) ->
+                    if (sig == prefs.getString(KEY_SIGNATURE, "")) return@collect
                     withContext(Dispatchers.IO) {
                         mutex.withLock {
                             if (!isConfigured || sig == prefs.getString(KEY_SIGNATURE, "")) {
                                 return@withLock
                             }
                             val transport = currentTransportLocked() ?: return@withLock
+                            prefs.edit().putLong(KEY_UPDATED_AT, nextVersion()).apply()
                             runCatching {
                                 writeLocked(
                                     transport = transport,

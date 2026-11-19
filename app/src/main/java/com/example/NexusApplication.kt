@@ -51,7 +51,10 @@ class NexusApplication : Application(), ImageLoaderFactory {
     override fun newImageLoader(): ImageLoader = buildAppImageLoader(this)
 
     companion object {
-        internal const val MEMORY_CACHE_PERCENT = 0.30
+        // Bitmaps are requested at their display size, so a large cache only pins memory
+        // the launcher cannot spare on low-RAM TV boxes. 12% keeps a screenful or two hot
+        // without competing with the Compose UI heap.
+        internal const val MEMORY_CACHE_PERCENT = 0.12
         internal const val DISK_CACHE_MAX_BYTES = 150L * 1024L * 1024L
         internal const val DISK_CACHE_DIR = "image_cache"
 

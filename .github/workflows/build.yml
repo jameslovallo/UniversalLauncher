@@ -32,29 +32,75 @@ jobs:
       with:
         gradle-version: '9.3.1'
 
-    # Restore the debug keystore from the repository's base64 encoded debug keystore
-    # This guarantees consistent signing across all CI builds and avoids INSTALL_FAILED_UPDATE_INCOMPATIBLE
-    - name: Restore Debug Keystore
+    # The release build type is signed with the "upload" key from KEYSTORE_PATH. Restore
+    # the real upload keystore from the RELEASE_KEYSTORE_BASE64 secret, which is stored as
+    # `base64 -w0 my-upload-key.jks`. The keystore must use the alias "upload", because
+    # app/build.gradle.kts signs with that alias.
+    #
+    # Releases on main/master must be signed with the real key, otherwise users could not
+    # install the update over an existing install. Pull requests only verify that the
+    # minified build compiles, so they fall back to a throwaway key instead of failing.
+    - name: Prepare Release Keystore
+      env:
+        RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+        RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
       run: |
-        if [ -f "debug.keystore.base64" ]; then
-          base64 -d debug.keystore.base64 > debug.keystore
-        elif [ ! -f "debug.keystore" ]; then
-          echo "debug.keystore.base64 not found, generating fallback keystore"
-          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+        IS_RELEASE_BRANCH=false
+        if [ "${{ github.event_name }}" = "push" ] && { [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.ref }}" = "refs/heads/master" ]; }; then
+          IS_RELEASE_BRANCH=true
         fi
 
-    # Execute the build directly using the Gradle installed by setup-gradle
-    - name: Build with Gradle
+        if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+          if [ -z "$RELEASE_STORE_PASSWORD" ] || [ -z "$RELEASE_KEY_PASSWORD" ]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 is set, but RELEASE_STORE_PASSWORD and/or RELEASE_KEY_PASSWORD are missing."
+            exit 1
+          fi
+
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 -d > ci-release.keystore
+          echo "Using the upload keystore from RELEASE_KEYSTORE_BASE64"
+          echo "RELEASE_KEYSTORE_PATH=$PWD/ci-release.keystore" >> "$GITHUB_ENV"
+          exit 0
+        fi
+
+        if [ "$IS_RELEASE_BRANCH" = "true" ]; then
+          echo "::error::RELEASE_KEYSTORE_BASE64 is not set. Releases from main/master must be signed with the upload key."
+          exit 1
+        fi
+
+        echo "::warning::RELEASE_KEYSTORE_BASE64 is not set, so this build is signed with a throwaway key. The APK installs but cannot update an existing install."
+        keytool -genkeypair -v \
+          -keystore ci-release.keystore \
+          -storepass ci-fallback \
+          -alias upload \
+          -keypass ci-fallback \
+          -keyalg RSA -keysize 2048 -validity 10000 \
+          -dname "CN=CI Fallback, O=Nexus Launcher, C=US"
+        echo "RELEASE_KEYSTORE_PATH=$PWD/ci-release.keystore" >> "$GITHUB_ENV"
+
+    - name: Build Release APK
       env:
+        KEYSTORE_PATH: ${{ env.RELEASE_KEYSTORE_PATH }}
+        STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD || 'ci-fallback' }}
+        KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'ci-fallback' }}
         GOOGLE_TV_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_TV_OAUTH_CLIENT_ID }}
         GOOGLE_TV_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_TV_OAUTH_CLIENT_SECRET }}
-      run: gradle -Djava.awt.headless=true assembleDebug
+      run: gradle -Djava.awt.headless=true assembleRelease
 
-    - name: Upload Build Artifact
+    - name: Upload Release APK
       uses: actions/upload-artifact@v4
       with:
-        name: nexus-launcher-debug
-        path: app/build/outputs/apk/debug/app-debug.apk
+        name: nexus-launcher-release
+        path: app/build/outputs/apk/release/app-release.apk
+        if-no-files-found: error
+
+    # R8 renames classes, so the mapping file is what makes release stack traces readable.
+    - name: Upload R8 Mapping
+      uses: actions/upload-artifact@v4
+      with:
+        name: nexus-launcher-release-mapping
+        path: app/build/outputs/mapping/release/mapping.txt
+        if-no-files-found: warn
 
     # Auto tag the next patch release and publish a GitHub Release on push to master/main
     - name: Create Release and Tag
@@ -83,7 +129,7 @@ jobs:
         git tag -a "$NEW_TAG" -m "Release $NEW_TAG"
         git push origin "$NEW_TAG"
 
-        APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+        APK_PATH="app/build/outputs/apk/release/app-release.apk"
         RELEASE_APK="NexusLauncher-${NEW_TAG}.apk"
         cp "$APK_PATH" "$RELEASE_APK"
 

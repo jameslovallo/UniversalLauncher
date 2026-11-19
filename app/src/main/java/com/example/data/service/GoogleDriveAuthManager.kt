@@ -785,7 +785,7 @@ class PlayServicesDriveAuthManager(
             12501
         )
 
-        private fun defaultAuthHttpClient(): OkHttpClient = OkHttpClient.Builder()
+        private fun defaultAuthHttpClient(): OkHttpClient = HttpClients.shared.newBuilder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .build()

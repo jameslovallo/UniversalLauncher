@@ -1,21 +1,39 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
+# ProGuard/R8 rules for the release build.
 #
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# The launcher is almost entirely Kotlin + Compose, both of which ship their own consumer
+# rules, so only the places where a class is reached by name rather than by reference need
+# help here.
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Keep line numbers so release crash reports are actually actionable. The file name is
+# still rewritten, so the source tree layout is not leaked.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# --- OkHttp ---------------------------------------------------------------------------
+# OkHttp probes for optional TLS providers (Conscrypt, BouncyCastle, OpenJSSE) that are
+# not bundled with the app. Its consumer rules already guard the lookups; silencing the
+# missing-class warnings keeps the release build output readable.
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# --- Room -----------------------------------------------------------------------------
+# Room loads the generated `AppDatabase_Impl` by name from `Room.databaseBuilder`, so the
+# implementation is only reachable as a string. Room's own rules keep RoomDatabase
+# subclasses; the generated implementation is kept here explicitly.
+-keep class com.example.data.local.AppDatabase_Impl { *; }
+
+# --- Accessibility service ------------------------------------------------------------
+# The system binds this service from the manifest and reads its XML metadata. Keeping it
+# explicitly also preserves the service callbacks the platform invokes.
+-keep class com.example.HomeOverrideService { *; }
+
+# --- Enum names read from preferences ------------------------------------------------
+# Enum values are restored from SharedPreferences and sync payloads by name
+# (`ThemeStyle.valueOf`, `FavoritesLayout.valueOf`, `GameType.valueOf`, ...). R8 rewrites
+# enum access for constants referenced in code, but keeping `values`/`valueOf` documents
+# and protects that contract.
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}

@@ -7,7 +7,6 @@ import android.location.LocationManager
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.util.Locale
@@ -87,7 +86,7 @@ fun WeatherInfo.temperatureDisplay(
  * from the device's last known fix or from a ZIP/postal code.
  */
 class WeatherService(private val context: Context) {
-    private val client = OkHttpClient.Builder()
+    private val client = HttpClients.shared.newBuilder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .build()

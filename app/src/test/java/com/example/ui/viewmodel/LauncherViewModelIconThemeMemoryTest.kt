@@ -8,14 +8,17 @@ import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
 import android.content.pm.ResolveInfo
 import android.os.Looper
+import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AppDatabase
 import com.example.data.local.GameDao
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Before
@@ -31,6 +34,13 @@ class LauncherViewModelIconThemeMemoryTest {
 
     private lateinit var app: Application
     private lateinit var dao: GameDao
+
+    /**
+     * Cancelled in [tearDown]. This test builds the ViewModel directly instead of through a
+     * `ViewModelStore`, so nothing else cancels `viewModelScope`; the leftover collectors run
+     * into Robolectric's deleted database and surface as an uncaught exception in a later test.
+     */
+    private var createdViewModel: LauncherViewModel? = null
 
     @Before
     fun setUp() {
@@ -74,6 +84,12 @@ class LauncherViewModelIconThemeMemoryTest {
         shadowOf(Looper.getMainLooper()).idle()
     }
 
+    @After
+    fun tearDown() {
+        createdViewModel?.viewModelScope?.cancel()
+        createdViewModel = null
+    }
+
     @Test
     fun `default theme keeps custom icons across pack switches`(): Unit = runBlocking {
         val spotify = GameItem(
@@ -97,7 +113,7 @@ class LauncherViewModelIconThemeMemoryTest {
             dao.insertGame(chrome)
         }
 
-        val viewModel = LauncherViewModel(app)
+        val viewModel = LauncherViewModel(app).also { createdViewModel = it }
         awaitCondition { viewModel.installedIconPacks.value.any { it.packageName == "com.example.iconpack" } }
 
         // 1. Customize Spotify in the Default theme.

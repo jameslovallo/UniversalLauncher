@@ -39,8 +39,9 @@ android {
 
   buildTypes {
     release {
-      isCrunchPngs = false
-      isMinifyEnabled = false
+      isCrunchPngs = true
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
@@ -64,7 +65,23 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      // One worker JVM per test class.
+      //
+      // Robolectric reuses a sandbox loader, and the tests share JVM-wide statics: the Room
+      // singleton in `AppDatabase`, Robolectric's own environment, and Compose's idling
+      // registry. A `LauncherViewModel` whose scope is cancelled during activity teardown
+      // can still have a Room query queued on the main looper; by the time it runs, the
+      // harness has swapped to the next class's environment, so the query fails with
+      // SQLITE_CANTOPEN. kotlinx-coroutines-test then reports that uncaught exception
+      // against whichever test starts next, which fails with `UncaughtExceptionsBeforeTest`
+      // or a 60 second "Compose did not get idle" timeout, several classes away from the
+      // real cause. Forking per class keeps each class's statics to itself.
+      all { it.forkEvery = 1 }
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
@@ -89,25 +106,23 @@ dependencies {
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
-  implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
   // implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
   // implementation(libs.androidx.navigation.compose)
+  // Installs the bundled baseline profile on API 24-27, where the profile is not applied
+  // at install time. No-op on newer releases.
+  implementation(libs.androidx.profileinstaller)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
-  implementation(libs.converter.moshi)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
-  implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.play.services.auth)
   // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
   implementation(libs.zxing.core)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
@@ -122,6 +137,6 @@ dependencies {
   androidTestImplementation(libs.androidx.runner)
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
+  debugImplementation(libs.androidx.compose.ui.tooling.preview)
   "ksp"(libs.androidx.room.compiler)
-  "ksp"(libs.moshi.kotlin.codegen)
 }

@@ -261,7 +261,6 @@ fun DashboardScreen(
     val libraryApps by viewModel.libraryApps.collectAsStateWithLifecycle()
     val appsHomeReset by viewModel.appsHomeReset.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
-    val focusedItemId by viewModel.focusedItemId.collectAsStateWithLifecycle()
 
     val contextMenuItem by viewModel.contextMenuItem.collectAsStateWithLifecycle()
     val canDeleteContextMenuItem by viewModel.canDeleteContextMenuItem.collectAsStateWithLifecycle()
@@ -315,6 +314,14 @@ fun DashboardScreen(
     val pendingDriveDeviceSession by viewModel.pendingDriveDeviceSession.collectAsStateWithLifecycle()
     val gamesRefreshing by viewModel.gamesRefreshing.collectAsStateWithLifecycle()
     val gamesRefreshFeedback by viewModel.gamesRefreshFeedback.collectAsStateWithLifecycle()
+
+    // Artwork backfills and the weather lookup are not needed to draw the library, so hold
+    // them until a frame is on screen. Running them during startup stole IO from the first
+    // render and made cold start feel slow on TV hardware.
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        viewModel.onHomeScreenReady()
+    }
 
     val gamesSnackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(gamesRefreshFeedback) {
@@ -906,28 +913,30 @@ fun DashboardScreen(
                                                 )
                                             }
                                         } else {
-                                            GamesPosterGrid(
-                                                games = gamesDisplay,
-                                                focusedItemId = focusedItemId,
-                                                showFocusEffects = showFocusEffects,
-                                                showNsfwPoster = steamGridDbIncludeNsfw,
-                                                firstItemFocusRequester = gamesFirstFocusRequester,
-                                                itemFocusRequester = gamesItemFocusRequester,
-                                                focusEnabled = gamesCanFocus,
-                                                gridState = gridState,
-                                                rowState = gamesRowState,
-                                                compactLandscape = isCompactLandscape,
-                                                compactViewportHeight = pageMaxHeight,
-                                                onSwipeToApps = {
-                                                    scope.launch { pagerState.animateScrollToPage(0) }
-                                                },
-                                                onNavigateUpToNav = {
-                                                    runCatching { navFirstFocusRequester.requestFocus() }
-                                                },
-                                                onGameClick = onGameClick,
-                                                onGameLongClick = onGameLongClick,
-                                                onGameFocus = onGameFocus
-                                            )
+                                            FocusedItemState(viewModel) { focusedItemId ->
+                                                GamesPosterGrid(
+                                                    games = gamesDisplay,
+                                                    focusedItemId = focusedItemId,
+                                                    showFocusEffects = showFocusEffects,
+                                                    showNsfwPoster = steamGridDbIncludeNsfw,
+                                                    firstItemFocusRequester = gamesFirstFocusRequester,
+                                                    itemFocusRequester = gamesItemFocusRequester,
+                                                    focusEnabled = gamesCanFocus,
+                                                    gridState = gridState,
+                                                    rowState = gamesRowState,
+                                                    compactLandscape = isCompactLandscape,
+                                                    compactViewportHeight = pageMaxHeight,
+                                                    onSwipeToApps = {
+                                                        scope.launch { pagerState.animateScrollToPage(0) }
+                                                    },
+                                                    onNavigateUpToNav = {
+                                                        runCatching { navFirstFocusRequester.requestFocus() }
+                                                    },
+                                                    onGameClick = onGameClick,
+                                                    onGameLongClick = onGameLongClick,
+                                                    onGameFocus = onGameFocus
+                                                )
+                                            }
                                         }
                                     }
 
@@ -995,36 +1004,38 @@ fun DashboardScreen(
                                                             }
                                                             .focusGroup()
                                                     ) {
-                                                        FavoritesHome(
-                                                            favorites = favoriteApps,
-                                                            focusedItemId = focusedItemId,
-                                                            layout = effectiveFavoritesLayout,
-                                                            showFocusEffects = showFocusEffects,
-                                                            weatherEnabled = weatherEnabled,
-                                                            weather = weatherInfo,
-                                                            temperatureUnit = temperatureUnit,
-                                                            firstItemFocusRequester = favoritesFirstFocusRequester,
-                                                            itemFocusRequester = favoritesItemFocusRequester,
-                                                            focusEnabled = favoritesCanFocus,
-                                                            onLaunchFavorite = { app ->
-                                                                viewModel.setFocusedItem(app.id)
-                                                                viewModel.launchItem(app)
-                                                            },
-                                                            onLongPressFavorite = { app ->
-                                                                viewModel.openFavoriteActions(app)
-                                                            },
-                                                            onOpenClock = { viewModel.openClockApp() },
-                                                            onOpenCalendar = { viewModel.openCalendarApp() },
-                                                            onOpenWeather = { viewModel.openWeatherApp() },
-                                                            onPullDown = { viewModel.expandNotificationShade() },
-                                                            onNavigateDownToAppList = {
-                                                                if (appsPagerState.targetPage != 1) {
-                                                                    scope.launch { appsPagerState.animateScrollToPage(1) }
-                                                                }
-                                                            },
-                                                            onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
-                                                            configuredColumns = if (isTelevision) appGridColumns else 0
-                                                        )
+                                                        FocusedItemState(viewModel) { focusedItemId ->
+                                                            FavoritesHome(
+                                                                favorites = favoriteApps,
+                                                                focusedItemId = focusedItemId,
+                                                                layout = effectiveFavoritesLayout,
+                                                                showFocusEffects = showFocusEffects,
+                                                                weatherEnabled = weatherEnabled,
+                                                                weather = weatherInfo,
+                                                                temperatureUnit = temperatureUnit,
+                                                                firstItemFocusRequester = favoritesFirstFocusRequester,
+                                                                itemFocusRequester = favoritesItemFocusRequester,
+                                                                focusEnabled = favoritesCanFocus,
+                                                                onLaunchFavorite = { app ->
+                                                                    viewModel.setFocusedItem(app.id)
+                                                                    viewModel.launchItem(app)
+                                                                },
+                                                                onLongPressFavorite = { app ->
+                                                                    viewModel.openFavoriteActions(app)
+                                                                },
+                                                                onOpenClock = { viewModel.openClockApp() },
+                                                                onOpenCalendar = { viewModel.openCalendarApp() },
+                                                                onOpenWeather = { viewModel.openWeatherApp() },
+                                                                onPullDown = { viewModel.expandNotificationShade() },
+                                                                onNavigateDownToAppList = {
+                                                                    if (appsPagerState.targetPage != 1) {
+                                                                        scope.launch { appsPagerState.animateScrollToPage(1) }
+                                                                    }
+                                                                },
+                                                                onFocusFavorite = { app -> viewModel.setFocusedItem(app.id) },
+                                                                configuredColumns = if (isTelevision) appGridColumns else 0
+                                                            )
+                                                        }
                                                     }
                                                 } else {
                                                     Box(
@@ -1050,42 +1061,44 @@ fun DashboardScreen(
                                                             )
                                                         } else {
                                                             val effectiveAppGridColumns = if (isTelevision) appGridColumns else 0
-                                                            AppsAlphabeticalList(
-                                                                entries = appListEntries,
-                                                                focusedItemId = focusedItemId,
-                                                                layout = effectiveFavoritesLayout,
-                                                                showFocusEffects = showFocusEffects,
-                                                                listState = appsListState,
-                                                                gridState = appsGridState,
-                                                                firstItemFocusRequester = appsListFirstFocusRequester,
-                                                                itemFocusRequester = appsItemFocusRequester,
-                                                                focusEnabled = appDrawerCanFocus,
-                                                                configuredColumns = effectiveAppGridColumns,
-                                                                showAlphabetRail = !isTelevision,
-                                                                onAppClick = onAppClick,
-                                                                onAppLongClick = onAppLongClick,
-                                                                onAppFocus = onAppFocus,
-                                                                onNavigateUpToFavorites = {
-                                                                    if (appsPagerState.targetPage != 0) {
-                                                                        scope.launch { appsPagerState.animateScrollToPage(0) }
-                                                                    }
-                                                                },
-                                                                onLetterSelected = { letter ->
-                                                                    val index = appListEntries.indexOfFirst {
-                                                                        it is AppListEntry.Letter && it.letter == letter
-                                                                    }
-                                                                    if (index >= 0) {
-                                                                        val usesAppsGrid = effectiveFavoritesLayout != FavoritesLayout.TEXT || effectiveAppGridColumns > 1
-                                                                        scope.launch {
-                                                                            if (usesAppsGrid) {
-                                                                                appsGridState.scrollToItem(index)
-                                                                            } else {
-                                                                                appsListState.scrollToItem(index)
+                                                            FocusedItemState(viewModel) { focusedItemId ->
+                                                                AppsAlphabeticalList(
+                                                                    entries = appListEntries,
+                                                                    focusedItemId = focusedItemId,
+                                                                    layout = effectiveFavoritesLayout,
+                                                                    showFocusEffects = showFocusEffects,
+                                                                    listState = appsListState,
+                                                                    gridState = appsGridState,
+                                                                    firstItemFocusRequester = appsListFirstFocusRequester,
+                                                                    itemFocusRequester = appsItemFocusRequester,
+                                                                    focusEnabled = appDrawerCanFocus,
+                                                                    configuredColumns = effectiveAppGridColumns,
+                                                                    showAlphabetRail = !isTelevision,
+                                                                    onAppClick = onAppClick,
+                                                                    onAppLongClick = onAppLongClick,
+                                                                    onAppFocus = onAppFocus,
+                                                                    onNavigateUpToFavorites = {
+                                                                        if (appsPagerState.targetPage != 0) {
+                                                                            scope.launch { appsPagerState.animateScrollToPage(0) }
+                                                                        }
+                                                                    },
+                                                                    onLetterSelected = { letter ->
+                                                                        val index = appListEntries.indexOfFirst {
+                                                                            it is AppListEntry.Letter && it.letter == letter
+                                                                        }
+                                                                        if (index >= 0) {
+                                                                            val usesAppsGrid = effectiveFavoritesLayout != FavoritesLayout.TEXT || effectiveAppGridColumns > 1
+                                                                            scope.launch {
+                                                                                if (usesAppsGrid) {
+                                                                                    appsGridState.scrollToItem(index)
+                                                                                } else {
+                                                                                    appsListState.scrollToItem(index)
+                                                                                }
                                                                             }
                                                                         }
                                                                     }
-                                                                }
-                                                            )
+                                                                )
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -1102,20 +1115,22 @@ fun DashboardScreen(
             // Folder Contents Bottom Sheet (rendered before context/customize sheets so actions stack on top)
             val openFolder = openFolderId?.let { id -> foldersList.firstOrNull { it.id == id } }
             if (openFolder != null) {
-                FolderContentsSheet(
-                    folder = openFolder,
-                    apps = folderMembersMap[openFolder.id].orEmpty(),
-                    layout = effectiveFavoritesLayout,
-                    focusedItemId = focusedItemId,
-                    showFocusEffects = showFocusEffects,
-                    onAppClick = onAppClick,
-                    onAppLongClick = onAppLongClick,
-                    onAppFocus = onAppFocus,
-                    onCustomizeFolder = { viewModel.openEditCustomizer(openFolder) },
-                    onManageFolderApps = { viewModel.openManageFolderApps(openFolder.id) },
-                    onDismiss = { viewModel.closeFolder() },
-                    configuredColumns = if (isTelevision) appGridColumns else 0
-                )
+                FocusedItemState(viewModel) { focusedItemId ->
+                    FolderContentsSheet(
+                        folder = openFolder,
+                        apps = folderMembersMap[openFolder.id].orEmpty(),
+                        layout = effectiveFavoritesLayout,
+                        focusedItemId = focusedItemId,
+                        showFocusEffects = showFocusEffects,
+                        onAppClick = onAppClick,
+                        onAppLongClick = onAppLongClick,
+                        onAppFocus = onAppFocus,
+                        onCustomizeFolder = { viewModel.openEditCustomizer(openFolder) },
+                        onManageFolderApps = { viewModel.openManageFolderApps(openFolder.id) },
+                        onDismiss = { viewModel.closeFolder() },
+                        configuredColumns = if (isTelevision) appGridColumns else 0
+                    )
+                }
             }
 
             // Context Menu Modal (Tap and Hold on any card)
@@ -1536,6 +1551,23 @@ private fun Modifier.navigateUpToNavFromTopRow(
     }
 } else {
     this
+}
+
+/**
+ * Reads the focused library item inside its own composition scope and hands it to [content].
+ *
+ * `DashboardScreen` reads almost sixty state flows at its root; when the focused item was
+ * collected there, every D-pad move recomposed that entire scope. Collecting it per view
+ * keeps focus changes local to the grid, favorites list, app list or folder sheet that
+ * actually highlights something.
+ */
+@Composable
+private fun FocusedItemState(
+    viewModel: LauncherViewModel,
+    content: @Composable (String?) -> Unit
+) {
+    val focusedItemId by viewModel.focusedItemId.collectAsStateWithLifecycle()
+    content(focusedItemId)
 }
 
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)

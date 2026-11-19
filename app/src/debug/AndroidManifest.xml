@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <!--
+            The profile installer only exists to push the release baseline profile into the
+            ART profile store on first launch. Debug APKs are not built with a baseline
+            profile, so the initializer has nothing to install.
+
+            Dropping it here also keeps the Robolectric Compose tests deterministic: the
+            initializer posts a Choreographer frame callback during Application startup,
+            which never gets dispatched under Robolectric and leaves the main looper
+            permanently "busy". Espresso then times out with
+
+                Compose did not get idle after N attempts in 60 SECONDS
+
+            in every Compose test that runs afterwards in the same JVM.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+                tools:node="remove" />
+        </provider>
+    </application>
+
+</manifest>

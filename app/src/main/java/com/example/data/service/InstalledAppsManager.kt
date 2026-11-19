@@ -73,6 +73,8 @@ class InstalledAppsManager(private val context: Context) {
         val preferLeanback = isTelevisionConfiguration(context.resources.configuration, context)
         val resolveInfos = queryLauncherActivities(preferLeanback = preferLeanback)
         val myPackageName = context.packageName
+        // One snapshot for the whole scan keeps icon/banner cleanup linear in package count.
+        val iconCache = AppIconStore.snapshot(context)
 
         resolveInfos.filter { it.activityInfo.packageName != myPackageName }.map { resolveInfo ->
             val pkg = resolveInfo.activityInfo.packageName
@@ -89,8 +91,8 @@ class InstalledAppsManager(private val context: Context) {
 
             // Render the app icon (and 16:9 TV banner when declared) to cached PNGs.
             val versionStamp = packageVersionStamp(pkg)
-            val iconUri = AppIconStore.iconUrl(context, pkg, versionStamp)
-            val bannerUri = AppIconStore.bannerUrl(context, pkg, versionStamp, activityName)
+            val iconUri = AppIconStore.iconUrl(context, pkg, versionStamp, iconCache)
+            val bannerUri = AppIconStore.bannerUrl(context, pkg, versionStamp, activityName, iconCache)
 
             GameItem(
                 id = "app_$pkg",

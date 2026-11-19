@@ -303,7 +303,7 @@ class GoogleDriveApiClient(
         private const val FILE_FIELDS = "id,name,mimeType,modifiedTime,size,trashed,appProperties"
         private val JSON_MEDIA_TYPE = "application/json; charset=UTF-8".toMediaType()
 
-        private fun defaultDriveHttpClient(): OkHttpClient = OkHttpClient.Builder()
+        private fun defaultDriveHttpClient(): OkHttpClient = HttpClients.shared.newBuilder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)

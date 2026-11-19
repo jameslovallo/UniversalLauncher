@@ -3,7 +3,6 @@ package com.example.data.service
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -45,7 +44,7 @@ object SteamGridDbService {
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    private val httpClient = OkHttpClient.Builder()
+    private val httpClient = HttpClients.shared.newBuilder()
         .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .callTimeout(25, TimeUnit.SECONDS)

@@ -7,7 +7,6 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -49,7 +48,7 @@ object AmazonLunaService {
     private const val MAX_CONCURRENT_POSTER_FETCHES = 4
     private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
-    private val httpClient = OkHttpClient.Builder()
+    private val httpClient = HttpClients.shared.newBuilder()
         .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .callTimeout(25, TimeUnit.SECONDS)

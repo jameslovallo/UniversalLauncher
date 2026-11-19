@@ -9,7 +9,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
@@ -41,7 +40,7 @@ object GeForceNowService {
     private const val UTM_SOURCE = "universal_launcher"
     private const val UTM_CAMPAIGN = "gfn_catalog"
 
-    private val httpClient = OkHttpClient.Builder().build()
+    private val httpClient = HttpClients.shared
 
     // Cached catalog so repeated searches don't re-download the full index.
     @Volatile

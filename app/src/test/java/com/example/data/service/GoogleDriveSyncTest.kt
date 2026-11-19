@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ProviderInfo
 import android.net.Uri
 import android.provider.DocumentsContract
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AppDatabase
@@ -15,6 +16,7 @@ import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
 import java.io.File
 import java.net.URLDecoder
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -49,6 +51,19 @@ class GoogleDriveSyncTest {
     private lateinit var repository: GameRepository
     private lateinit var safProvider: FakeDriveDocumentsProvider
 
+    /**
+     * Tracked so [tearDown] can cancel its scope.
+     *
+     * A `LauncherViewModel` created directly by a test is not owned by a `ViewModelStore`,
+     * so nothing ever cancels `viewModelScope`. Its collectors keep running on the main
+     * looper after Robolectric tears the test environment down, and the surviving coroutine
+     * later hits a database file the harness has already deleted. The resulting
+     * `SQLiteCantOpenDatabaseException` is uncaught, and kotlinx-coroutines-test reports it
+     * against the *next* Compose test, which then fails with
+     * `UncaughtExceptionsBeforeTest` instead of whatever it was actually testing.
+     */
+    private var createdViewModel: com.example.ui.viewmodel.LauncherViewModel? = null
+
     @Before
     fun setUp() {
         val app = ApplicationProvider.getApplicationContext<Application>()
@@ -74,6 +89,7 @@ class GoogleDriveSyncTest {
 
     @After
     fun tearDown() {
+        createdViewModel?.viewModelScope?.cancel()
         db.close()
     }
 
@@ -457,7 +473,7 @@ class GoogleDriveSyncTest {
     @Test
     fun `LauncherViewModel routes immediate RESULT_CANCELED to account picker instead of reporting cancelled`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val viewModel = com.example.ui.viewmodel.LauncherViewModel(app)
+        val viewModel = com.example.ui.viewmodel.LauncherViewModel(app).also { createdViewModel = it }
 
         viewModel.markDriveAuthLaunched()
         viewModel.onGoogleDriveAuthorizationResult(android.app.Activity.RESULT_CANCELED, null)
