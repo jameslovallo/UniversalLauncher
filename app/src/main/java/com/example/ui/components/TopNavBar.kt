@@ -71,12 +71,17 @@ fun TopNavBar(
     onOpenSettings: () -> Unit,
     onNavigateDown: (() -> Unit)? = null,
     firstItemFocusRequester: FocusRequester? = null,
+    onNavFocusChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
             .height(64.dp)
+            // True while any control in the bar holds focus. The dashboard uses this to
+            // stop the library views from drawing their "last focused" highlight once
+            // focus moves up to the navigation.
+            .onFocusChanged { onNavFocusChanged(it.hasFocus) }
             .focusGroup()
             .onPreviewKeyEvent { keyEvent ->
                 if (onNavigateDown != null &&

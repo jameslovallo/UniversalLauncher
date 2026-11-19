@@ -21,6 +21,7 @@ import com.example.data.service.DriveAuthorizationStep
 import com.example.data.service.DriveDeviceCodeSession
 import com.example.data.service.DriveDevicePollResult
 import com.example.data.service.DriveOAuthConfigurationException
+import com.example.data.service.FavoritesSnapshotStore
 import com.example.data.service.GeForceNowService
 import com.example.data.service.IconPackIcon
 import com.example.data.service.IconPackInfo
@@ -50,7 +51,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -331,9 +334,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             .groupBy { it.folderId!! }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
-    // Favorites home: favorited apps (and favorited folders) in the user's custom order
+    // Favorites home: favorited apps (and favorited folders) in the user's custom order.
+    //
+    // Seeded from the last favorites this device displayed, because low-memory devices kill
+    // the launcher process behind a foreground app. Coming back then cold-starts the process,
+    // and Room's first emission can land after the home screen is drawn, which made the
+    // favorites row blink out on Android TV. The Room emission still wins: it is written back
+    // to the snapshot and replaces this starting value.
     val favoriteApps: StateFlow<List<GameItem>> = repository.favoriteApps
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .distinctUntilChanged()
+        .onEach { FavoritesSnapshotStore.persist(prefs, it) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            FavoritesSnapshotStore.restore(prefs)
+        )
 
     // Full app list shown after swiping up: no favorites, no games, no folder members;
     // unfavorited folders appear after Z.

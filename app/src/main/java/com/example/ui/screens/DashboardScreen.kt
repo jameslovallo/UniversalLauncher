@@ -559,6 +559,11 @@ fun DashboardScreen(
     // actually holds focus, otherwise the focus system has no valid target for one frame and
     // falls back to the top navigation bar.
     var handingOffFrom by remember { mutableStateOf<LibraryFocusTarget?>(null) }
+    // True while the top navigation bar has focus. The library views remember the last
+    // focused tile in the ViewModel (for context-menu actions and scroll position), so
+    // without this flag they keep drawing the focus highlight after focus moves up to the
+    // navigation. The id itself is left untouched.
+    var navBarFocused by remember { mutableStateOf(false) }
     // Any pager motion invalidates the current view's focus claim. Focus is re-requested by
     // the settle effect below once both pagers are idle again.
     LaunchedEffect(pagerState.isScrollInProgress, appsPagerState.isScrollInProgress) {
@@ -774,6 +779,7 @@ fun DashboardScreen(
                     onOpenAddModal = { viewModel.openAddModal() },
                     onOpenSettings = { viewModel.openSettingsModal() },
                     firstItemFocusRequester = navFirstFocusRequester,
+                    onNavFocusChanged = { navBarFocused = it },
                     onNavigateDown = {
                         // Down from the bar returns to the first item of whichever library
                         // view is on screen, so the bar never traps focus on the Games tab.
@@ -913,7 +919,10 @@ fun DashboardScreen(
                                                 )
                                             }
                                         } else {
-                                            FocusedItemState(viewModel) { focusedItemId ->
+                                            FocusedItemState(
+                                                viewModel,
+                                                suppressFocus = navBarFocused
+                                            ) { focusedItemId ->
                                                 GamesPosterGrid(
                                                     games = gamesDisplay,
                                                     focusedItemId = focusedItemId,
@@ -1004,7 +1013,10 @@ fun DashboardScreen(
                                                             }
                                                             .focusGroup()
                                                     ) {
-                                                        FocusedItemState(viewModel) { focusedItemId ->
+                                                        FocusedItemState(
+                                                            viewModel,
+                                                            suppressFocus = navBarFocused
+                                                        ) { focusedItemId ->
                                                             FavoritesHome(
                                                                 favorites = favoriteApps,
                                                                 focusedItemId = focusedItemId,
@@ -1061,7 +1073,10 @@ fun DashboardScreen(
                                                             )
                                                         } else {
                                                             val effectiveAppGridColumns = if (isTelevision) appGridColumns else 0
-                                                            FocusedItemState(viewModel) { focusedItemId ->
+                                                            FocusedItemState(
+                                                                viewModel,
+                                                                suppressFocus = navBarFocused
+                                                            ) { focusedItemId ->
                                                                 AppsAlphabeticalList(
                                                                     entries = appListEntries,
                                                                     focusedItemId = focusedItemId,
@@ -1560,14 +1575,19 @@ private fun Modifier.navigateUpToNavFromTopRow(
  * collected there, every D-pad move recomposed that entire scope. Collecting it per view
  * keeps focus changes local to the grid, favorites list, app list or folder sheet that
  * actually highlights something.
+ *
+ * [suppressFocus] hides the highlight while focus is outside the library, for example on
+ * the top navigation bar. The stored id is not cleared, because the context-menu action and
+ * the scroll position still need to know the last item the user selected.
  */
 @Composable
 private fun FocusedItemState(
     viewModel: LauncherViewModel,
+    suppressFocus: Boolean = false,
     content: @Composable (String?) -> Unit
 ) {
     val focusedItemId by viewModel.focusedItemId.collectAsStateWithLifecycle()
-    content(focusedItemId)
+    content(focusedItemId.takeUnless { suppressFocus })
 }
 
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
