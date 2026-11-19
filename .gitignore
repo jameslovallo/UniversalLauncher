@@ -16,5 +16,3 @@
 local.properties
 .env
 debug.keystore
-# Throwaway keystore the CI workflow generates when the upload key is not configured.
-ci-release.keystore
