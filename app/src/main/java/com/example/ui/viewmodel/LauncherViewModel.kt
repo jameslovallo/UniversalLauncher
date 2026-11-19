@@ -57,6 +57,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 
 enum class MainLibraryTab {
@@ -416,6 +417,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _focusedItemId.value = null
         if (tab == MainLibraryTab.APPS) {
             _appsHomeReset.value += 1
+        } else if (tab == MainLibraryTab.GAMES) {
+            syncLibraryOnResume()
         }
     }
 
@@ -1505,10 +1508,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         driveDevicePollJob = viewModelScope.launch {
             var intervalMs = session.intervalSeconds.coerceAtLeast(5) * 1000L
             val deadlineMs = SystemClock.elapsedRealtime() + (session.expiresInSeconds * 1000L)
+            var consecutiveNetworkErrors = 0
             try {
                 while (SystemClock.elapsedRealtime() < deadlineMs) {
                     delay(intervalMs)
-                    when (val poll = librarySyncService.pollGoogleDriveDeviceAuthorization(session.deviceCode)) {
+                    val poll = try {
+                        librarySyncService.pollGoogleDriveDeviceAuthorization(session.deviceCode)
+                    } catch (networkError: IOException) {
+                        consecutiveNetworkErrors++
+                        if (consecutiveNetworkErrors > MAX_CONSECUTIVE_POLL_NETWORK_ERRORS) {
+                            throw networkError
+                        }
+                        continue
+                    }
+                    consecutiveNetworkErrors = 0
+                    when (poll) {
                         is DriveDevicePollResult.Pending -> Unit
                         is DriveDevicePollResult.SlowDown -> intervalMs += 5_000L
                         is DriveDevicePollResult.Authorized -> {
@@ -1792,19 +1806,32 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private suspend fun finishGoogleDriveConfiguration(account: DriveAuthAccount?) {
-        runCatching {
-            if (librarySyncService.syncMode == LibrarySyncMode.GOOGLE_DRIVE && _librarySyncNeedsReauth.value) {
-                librarySyncService.syncNow()
-            } else {
-                librarySyncService.configureGoogleDrive(account)
-            }
-        }.onSuccess { outcome ->
+    private suspend fun finishGoogleDriveConfiguration(
+        account: DriveAuthAccount?,
+        allowDeviceAuthRecovery: Boolean = true
+    ) {
+        val result = runCatching {
+            librarySyncService.configureGoogleDrive(account)
+        }
+        result.onSuccess { outcome ->
             _librarySyncNeedsReauth.value = false
             _librarySyncStatus.value = formatSyncOutcomeStatus(outcome, LibrarySyncMode.GOOGLE_DRIVE)
         }.onFailure { error ->
             if (error is DriveAuthorizationRequiredException) {
                 _librarySyncNeedsReauth.value = true
+                if (error.pendingIntent == null && error.recoveryIntent == null && allowDeviceAuthRecovery) {
+                    val recoveryStep = runCatching { librarySyncService.beginGoogleDriveAuthorization() }.getOrNull()
+                    if (recoveryStep is DriveAuthorizationStep.NeedsDeviceCodeVerification) {
+                        isInteractiveDriveAuthActive = true
+                        _pendingDriveDeviceSession.value = recoveryStep.session
+                        _librarySyncStatus.value =
+                            "Enter ${recoveryStep.session.userCode} at ${recoveryStep.session.verificationUrl}"
+                        refreshLibrarySyncState()
+                        _librarySyncBusy.value = false
+                        startDriveDevicePolling(recoveryStep.session)
+                        return
+                    }
+                }
                 error.pendingIntent?.let { _pendingDriveAuthIntent.value = it }
                 if (error.pendingIntent == null) {
                     error.recoveryIntent?.let { recovery ->
@@ -2168,6 +2195,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         private const val DEFAULT_APPS_OPACITY = 0.6f
         private const val RESUME_SYNC_INTERVAL_MS = 15_000L
         private const val QUICK_AUTH_ABORT_THRESHOLD_MS = 1_500L
+        private const val MAX_CONSECUTIVE_POLL_NETWORK_ERRORS = 6
         private const val TV_WALLPAPER_DIR = "tv_wallpapers"
 
         /** One-time cleanup of the hardcoded library entries from early builds. */

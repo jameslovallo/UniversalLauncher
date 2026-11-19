@@ -315,20 +315,24 @@ class GoogleDriveApiClient(
         private fun encodeSegment(value: String): String =
             URLEncoder.encode(value, "UTF-8")
 
-        internal fun parseRfc3339Millis(raw: String): Long {
-            if (raw.isBlank()) return 0L
-            val patterns = arrayOf(
+        private val rfc3339Formatters = ThreadLocal.withInitial {
+            listOf(
                 "yyyy-MM-dd'T'HH:mm:ss.SSSX",
                 "yyyy-MM-dd'T'HH:mm:ssX",
                 "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
                 "yyyy-MM-dd'T'HH:mm:ss'Z'"
-            )
-            for (pattern in patterns) {
-                val parsed = runCatching {
-                    SimpleDateFormat(pattern, Locale.US).apply {
-                        timeZone = TimeZone.getTimeZone("UTC")
-                    }.parse(raw)?.time
-                }.getOrNull()
+            ).map { pattern ->
+                SimpleDateFormat(pattern, Locale.US).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }
+            }
+        }
+
+        internal fun parseRfc3339Millis(raw: String): Long {
+            if (raw.isBlank()) return 0L
+            val formatters = rfc3339Formatters.get() ?: return 0L
+            for (formatter in formatters) {
+                val parsed = runCatching { formatter.parse(raw)?.time }.getOrNull()
                 if (parsed != null) return parsed
             }
             return 0L

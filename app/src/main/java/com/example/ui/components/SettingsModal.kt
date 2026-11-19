@@ -989,13 +989,33 @@ fun SettingsModal(
                         }
                     }
                     Spacer(modifier = Modifier.height(12.dp))
+                    if (effectiveSyncMode == LibrarySyncMode.GOOGLE_DRIVE && librarySyncNeedsReauth) {
+                        val reconnectInteraction = remember { MutableInteractionSource() }
+                        OutlinedButton(
+                            onClick = onConnectGoogleDrive,
+                            enabled = !librarySyncBusy,
+                            interactionSource = reconnectInteraction,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .tvFocusBorder(reconnectInteraction, shape = RoundedCornerShape(12.dp))
+                                .testTag("library_sync_reconnect_button")
+                        ) {
+                            Text("Reconnect Google Drive", fontWeight = FontWeight.SemiBold)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    val disconnectInteraction = remember { MutableInteractionSource() }
                     OutlinedButton(
                         onClick = onDisconnectLibrarySync,
                         enabled = !librarySyncBusy,
+                        interactionSource = disconnectInteraction,
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 48.dp)
+                            .tvFocusBorder(disconnectInteraction, shape = RoundedCornerShape(12.dp))
                             .testTag("library_sync_disconnect_button")
                     ) {
                         Text("Disconnect", fontWeight = FontWeight.SemiBold)
@@ -1005,14 +1025,18 @@ fun SettingsModal(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        val driveInteraction = remember { MutableInteractionSource() }
+                        val folderInteraction = remember { MutableInteractionSource() }
                         OutlinedButton(
                             onClick = onConnectGoogleDrive,
                             enabled = !librarySyncBusy,
+                            interactionSource = driveInteraction,
                             shape = RoundedCornerShape(12.dp),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                             modifier = Modifier
                                 .weight(1f)
                                 .heightIn(min = 48.dp)
+                                .tvFocusBorder(driveInteraction, shape = RoundedCornerShape(12.dp))
                                 .testTag("library_sync_google_drive_button")
                         ) {
                             Icon(
@@ -1032,11 +1056,13 @@ fun SettingsModal(
                         OutlinedButton(
                             onClick = { syncFolderLauncher.launch(null) },
                             enabled = !librarySyncBusy,
+                            interactionSource = folderInteraction,
                             shape = RoundedCornerShape(12.dp),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                             modifier = Modifier
                                 .weight(1f)
                                 .heightIn(min = 48.dp)
+                                .tvFocusBorder(folderInteraction, shape = RoundedCornerShape(12.dp))
                                 .testTag("library_sync_pick_folder_button")
                         ) {
                             Icon(
@@ -1200,7 +1226,11 @@ private fun TvDriveDeviceAuthDialog(
                 .padding(24.dp)
                 .testTag("drive_device_auth_dialog")
         ) {
-            BoxWithConstraints(modifier = Modifier.padding(24.dp)) {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp)
+            ) {
                 val wideLayout = maxWidth >= 460.dp
                 if (wideLayout) {
                     Row(

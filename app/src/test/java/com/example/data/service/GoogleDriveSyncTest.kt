@@ -17,6 +17,7 @@ import com.example.data.repository.GameRepository
 import java.io.File
 import java.net.URLDecoder
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -607,6 +608,183 @@ class GoogleDriveSyncTest {
             assertTrue(error is DriveOAuthConfigurationException)
             assertTrue(error!!.message!!.contains("GOOGLE_TV_OAUTH_CLIENT_ID"))
             assertTrue(error.message!!.contains("TVs and Limited Input devices"))
+        }
+
+    @Test
+    fun `two devices sync recently played order posters and installed games over Google Drive`() =
+        runBlocking {
+            val driveServer = InMemoryDriveServer()
+            val tokenProvider = FakeDriveTokenProvider(driveServer)
+            val apiClient = GoogleDriveApiClient(
+                tokenProvider = tokenProvider,
+                httpClient = OkHttpClient.Builder().addInterceptor(driveServer).build(),
+                driveApiBaseUrl = "https://mock.drive.test/drive/v3",
+                uploadApiBaseUrl = "https://mock.drive.test/upload/drive/v3"
+            )
+            val prefsA = context.getSharedPreferences("recents_a_${System.nanoTime()}", Context.MODE_PRIVATE)
+            val syncA = LibrarySyncService(
+                context = context,
+                repository = repository,
+                prefs = prefsA,
+                driveTokenProvider = tokenProvider,
+                driveApiClient = apiClient
+            )
+
+            val localArtDir = File(context.filesDir, "custom_art").apply { mkdirs() }
+            val alphaBytes = byteArrayOf(1, 3, 5, 7, 9)
+            val betaBytes = byteArrayOf(2, 4, 6, 8, 10)
+            val nsfwBytes = byteArrayOf(9, 7, 5, 3, 1)
+            val alphaFile = File(localArtDir, "alpha_${System.nanoTime()}.png").apply { writeBytes(alphaBytes) }
+            val betaFile = File(localArtDir, "beta_${System.nanoTime()}.png").apply { writeBytes(betaBytes) }
+            val nsfwFile = File(localArtDir, "beta_nsfw_${System.nanoTime()}.png").apply { writeBytes(nsfwBytes) }
+
+            val installedGame = GameItem(
+                id = "app_com.example.indiegame",
+                title = "Indie Game",
+                type = GameType.INSTALLED_APP,
+                isGame = true,
+                packageName = "com.example.indiegame"
+            )
+            val gfnAlpha = GameItem(
+                id = "gfn_alpha",
+                title = "Alpha Protocol",
+                type = GameType.GEFORCE_NOW,
+                isGame = true,
+                posterUrl = Uri.fromFile(alphaFile).toString(),
+                lastPlayedTimestamp = 1_000L,
+                playCount = 1
+            )
+            val gfnBeta = GameItem(
+                id = "gfn_beta",
+                title = "Beta Ray",
+                type = GameType.GEFORCE_NOW,
+                isGame = true,
+                posterUrl = Uri.fromFile(betaFile).toString(),
+                nsfwPosterUrl = Uri.fromFile(nsfwFile).toString(),
+                lastPlayedTimestamp = 3_000L,
+                playCount = 2
+            )
+            db.gameDao().insertGames(
+                listOf(
+                    installedGame.copy(lastPlayedTimestamp = 2_000L, playCount = 1),
+                    gfnAlpha,
+                    gfnBeta
+                )
+            )
+
+            val auth = syncA.beginGoogleDriveAuthorization() as DriveAuthorizationStep.Authorized
+            syncA.configureGoogleDrive(auth.account)
+
+            val dbB = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+                .allowMainThreadQueries()
+                .build()
+            try {
+                val repoB = GameRepository(dbB.gameDao(), InstalledAppsManager(context))
+                // Installed game must exist locally on Device B so appCustomizations apply to it.
+                dbB.gameDao().insertGame(installedGame)
+
+                val prefsB = context.getSharedPreferences("recents_b_${System.nanoTime()}", Context.MODE_PRIVATE)
+                val syncB = LibrarySyncService(
+                    context = context,
+                    repository = repoB,
+                    prefs = prefsB,
+                    driveTokenProvider = tokenProvider,
+                    driveApiClient = apiClient
+                )
+                syncB.configureGoogleDrive(auth.account)
+
+                // Verify initial recents order on Device B: Beta (3000), Indie (2000), Alpha (1000)
+                val orderB1 = repoB.allGames.first().filter { it.isGame }.map { it.id }
+                assertEquals(listOf("gfn_beta", "app_com.example.indiegame", "gfn_alpha"), orderB1)
+                val restoredBeta = repoB.getGameById("gfn_beta")!!
+                assertEquals(LibrarySyncCodec.sha256Hex(betaBytes), LibrarySyncCodec.localFileSha256(restoredBeta.posterUrl!!))
+                assertEquals(LibrarySyncCodec.sha256Hex(nsfwBytes), LibrarySyncCodec.localFileSha256(restoredBeta.nsfwPosterUrl!!))
+
+                // Device B plays Indie Game & Alpha Protocol cleanly in newer order.
+                dbB.gameDao().recordPlay("app_com.example.indiegame", 4_000L)
+                dbB.gameDao().recordPlay("gfn_alpha", 5_000L)
+                val pushB = syncB.syncNow()
+                assertTrue(pushB is LibrarySyncOutcome.WroteLocal)
+
+                val pullA = syncA.syncNow()
+                assertTrue(pullA is LibrarySyncOutcome.Applied)
+
+                val orderA2 = repository.allGames.first().filter { it.isGame }.map { it.id }
+                assertEquals(listOf("gfn_alpha", "app_com.example.indiegame", "gfn_beta"), orderA2)
+                assertEquals(2, repository.getGameById("app_com.example.indiegame")!!.playCount)
+
+                // Removing from recents on Device A clears recents on Device B after sync.
+                repository.clearPlayHistory("gfn_alpha")
+                syncA.syncNow()
+                syncB.syncNow()
+                assertEquals(0L, repoB.getGameById("gfn_alpha")!!.lastPlayedTimestamp)
+            } finally {
+                dbB.close()
+            }
+        }
+
+    @Test
+    fun `Android TV revoked cached token falls back to fresh Device Code QR flow`() =
+        runBlocking {
+            val pollQueue = ArrayDeque(
+                listOf(
+                    200 to """{"access_token":"revoked_cached_access","refresh_token":"revoked_refresh","expires_in":3600}"""
+                )
+            )
+            var deviceCodeRequests = 0
+            val httpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    val request = chain.request()
+                    val url = request.url.toString()
+                    val (code, body) = when {
+                        url.endsWith("/device/code") -> {
+                            deviceCodeRequests++
+                            200 to """{"device_code":"dev_retry_$deviceCodeRequests","user_code":"ZZZZ-1111","verification_url":"https://www.google.com/device","expires_in":1800,"interval":5}"""
+                        }
+                        url.endsWith("/token") -> {
+                            val reqBuf = Buffer()
+                            request.body?.writeTo(reqBuf)
+                            val form = reqBuf.readUtf8()
+                            if (form.contains("grant_type=refresh_token")) {
+                                400 to """{"error":"invalid_grant","error_description":"Token has been expired or revoked."}"""
+                            } else {
+                                pollQueue.removeFirst()
+                            }
+                        }
+                        url.contains("/drive/v3/about") -> {
+                            401 to """{"error":{"message":"Invalid Credentials"}}"""
+                        }
+                        else -> 404 to "{}"
+                    }
+                    Response.Builder()
+                        .request(request)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(code)
+                        .message(if (code in 200..299) "OK" else "Error")
+                        .body(body.toResponseBody("application/json".toMediaType()))
+                        .build()
+                }
+                .build()
+
+            val manager = PlayServicesDriveAuthManager(
+                context = context,
+                httpClient = httpClient,
+                activityProvider = { null },
+                isTelevisionDevice = true,
+                tvClientId = "\"test-tv-client.apps.googleusercontent.com\"",
+                tvClientSecret = "\"test-tv-secret\"",
+                deviceAuthBaseUrl = "https://mock.oauth.test"
+            )
+
+            // Seed stale revoked token as if a previous TV session existed.
+            val firstStep = manager.beginInteractiveAuthorization()
+            assertTrue(firstStep is DriveAuthorizationStep.NeedsDeviceCodeVerification)
+            manager.pollDeviceAuthorization((firstStep as DriveAuthorizationStep.NeedsDeviceCodeVerification).session.deviceCode)
+
+            // Next interactive auth detects 401 on cached token + invalid_grant on refresh -> clears stale creds & re-opens QR!
+            val recoveryStep = manager.beginInteractiveAuthorization()
+            assertTrue("Expected fresh Device Code flow after revoked token, got $recoveryStep", recoveryStep is DriveAuthorizationStep.NeedsDeviceCodeVerification)
+            assertEquals(2, deviceCodeRequests)
         }
 
     private class FakeDriveTokenProvider(

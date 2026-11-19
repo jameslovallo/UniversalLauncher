@@ -27,11 +27,12 @@ import com.example.ui.viewmodel.LauncherViewModel
 class MainActivity : ComponentActivity() {
     private val viewModel: LauncherViewModel by viewModels()
 
-    /** Reads the library sync file again after the device is unlocked. */
+    /** Reads the library sync file again after unlock or TV wake from standby. */
     private val userPresentReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == Intent.ACTION_USER_PRESENT) {
-                viewModel.onDeviceUnlocked()
+            when (intent?.action) {
+                Intent.ACTION_USER_PRESENT -> viewModel.onDeviceUnlocked()
+                Intent.ACTION_SCREEN_ON -> viewModel.syncLibraryOnResume()
             }
         }
     }
@@ -62,7 +63,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun registerUserPresentReceiver() {
-        val filter = IntentFilter(Intent.ACTION_USER_PRESENT)
+        val filter = IntentFilter(Intent.ACTION_USER_PRESENT).apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(userPresentReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {

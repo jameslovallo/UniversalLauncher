@@ -183,12 +183,9 @@ class PlayServicesDriveAuthManager(
         preferredEmail: String?
     ): DriveAuthorizationStep {
         if (hasStoredDeviceRefreshToken() && hasDeviceFlowCredentials) {
-            val token = runCatching { getDeviceAccessToken(forceRefresh = false) }.getOrNull()
-            if (!token.isNullOrBlank()) {
-                val account = fetchAccountInfo(token)
-                    ?: storedDeviceAccount()
-                    ?: preferredEmail?.let { DriveAuthAccount(email = it) }
-                return DriveAuthorizationStep.Authorized(token, account)
+            val refreshedOrValid = resolveExistingDeviceAuthStep(preferredEmail)
+            if (refreshedOrValid != null) {
+                return refreshedOrValid
             }
         }
 
@@ -217,6 +214,47 @@ class PlayServicesDriveAuthManager(
         val account = fetchAccountInfo(token)
             ?: preferredEmail?.let { DriveAuthAccount(email = it) }
         return DriveAuthorizationStep.Authorized(token, account)
+    }
+
+    private suspend fun resolveExistingDeviceAuthStep(
+        preferredEmail: String?
+    ): DriveAuthorizationStep.Authorized? {
+        val token = try {
+            getDeviceAccessToken(forceRefresh = false)
+        } catch (configError: DriveOAuthConfigurationException) {
+            throw configError
+        } catch (_: DriveAuthorizationRequiredException) {
+            return null
+        } catch (_: Throwable) {
+            null
+        }
+        if (token.isNullOrBlank()) return null
+
+        val probe = fetchAccountInfoWithStatus(token)
+        if (!probe.unauthorized) {
+            val account = probe.account
+                ?: storedDeviceAccount()
+                ?: preferredEmail?.let { DriveAuthAccount(email = it) }
+            return DriveAuthorizationStep.Authorized(token, account)
+        }
+
+        val freshToken = try {
+            getDeviceAccessToken(forceRefresh = true)
+        } catch (configError: DriveOAuthConfigurationException) {
+            throw configError
+        } catch (_: DriveAuthorizationRequiredException) {
+            // Refresh token was revoked; fall through cleanly to interactive Device Code Flow.
+            return null
+        }
+        val refreshedProbe = fetchAccountInfoWithStatus(freshToken)
+        if (refreshedProbe.unauthorized) {
+            clearDeviceTokens()
+            return null
+        }
+        val account = refreshedProbe.account
+            ?: storedDeviceAccount()
+            ?: preferredEmail?.let { DriveAuthAccount(email = it) }
+        return DriveAuthorizationStep.Authorized(freshToken, account)
     }
 
     private suspend fun beginTvDeviceOrExplain(): DriveAuthorizationStep {
@@ -266,8 +304,8 @@ class PlayServicesDriveAuthManager(
                 when (val error = json.optString("error")) {
                     "authorization_pending" -> DriveDevicePollResult.Pending
                     "slow_down" -> DriveDevicePollResult.SlowDown
-                    "access_denied" -> DriveDevicePollResult.Denied
-                    "expired_token" -> DriveDevicePollResult.Expired
+                    "access_denied", "authorization_declined" -> DriveDevicePollResult.Denied
+                    "expired_token", "invalid_grant" -> DriveDevicePollResult.Expired
                     "invalid_client", "unauthorized_client" -> throw DriveOAuthConfigurationException(
                         "Google rejected the TV OAuth client ($error). Verify GOOGLE_TV_OAUTH_CLIENT_ID " +
                             "and GOOGLE_TV_OAUTH_CLIENT_SECRET come from a 'TVs and Limited Input devices' " +
@@ -708,7 +746,15 @@ class PlayServicesDriveAuthManager(
         else -> false
     }
 
+    private data class AccountProbeResult(
+        val account: DriveAuthAccount?,
+        val unauthorized: Boolean
+    )
+
     private suspend fun fetchAccountInfo(accessToken: String): DriveAuthAccount? =
+        fetchAccountInfoWithStatus(accessToken).account
+
+    private suspend fun fetchAccountInfoWithStatus(accessToken: String): AccountProbeResult =
         withContext(Dispatchers.IO) {
             runCatching {
                 val request = Request.Builder()
@@ -717,15 +763,22 @@ class PlayServicesDriveAuthManager(
                     .get()
                     .build()
                 httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@runCatching null
+                    if (response.code == 401) {
+                        return@runCatching AccountProbeResult(account = null, unauthorized = true)
+                    }
+                    if (!response.isSuccessful) {
+                        return@runCatching AccountProbeResult(account = null, unauthorized = false)
+                    }
                     val body = response.body?.string()?.takeIf { it.isNotBlank() }
-                        ?: return@runCatching null
-                    val user = JSONObject(body).optJSONObject("user") ?: return@runCatching null
+                        ?: return@runCatching AccountProbeResult(account = null, unauthorized = false)
+                    val user = JSONObject(body).optJSONObject("user")
+                        ?: return@runCatching AccountProbeResult(account = null, unauthorized = false)
                     val email = user.optString("emailAddress").takeIf { it.isNotBlank() }
                     val name = user.optString("displayName").takeIf { it.isNotBlank() }
-                    if (email == null && name == null) null else DriveAuthAccount(email, name)
+                    val account = if (email == null && name == null) null else DriveAuthAccount(email, name)
+                    AccountProbeResult(account = account, unauthorized = false)
                 }
-            }.getOrNull()
+            }.getOrDefault(AccountProbeResult(account = null, unauthorized = false))
         }
 
     private fun mapApiException(
@@ -807,7 +860,13 @@ class PlayServicesDriveAuthManager(
             .build()
 
         internal fun sanitizeSecretValue(raw: String?): String? {
-            val trimmed = raw?.trim().orEmpty()
+            var trimmed = raw?.trim().orEmpty()
+            if (trimmed.length >= 2 &&
+                ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+                    (trimmed.startsWith('\'') && trimmed.endsWith('\'')))
+            ) {
+                trimmed = trimmed.substring(1, trimmed.length - 1).trim()
+            }
             if (trimmed.isBlank()) return null
             if (trimmed.startsWith("YOUR_", ignoreCase = true)) return null
             if (trimmed.startsWith("MY_", ignoreCase = true)) return null

@@ -707,6 +707,12 @@ internal class GoogleDriveSyncTransport(
     @Volatile
     private var resolvedRootFolderId: String? = initialFolderId
 
+    @Volatile
+    private var rootFolderVerified: Boolean = false
+
+    @Volatile
+    private var resolvedPostersFolderId: String? = null
+
     override suspend fun ensureReady() {
         resolveOrCreateRootFolderId()
     }
@@ -780,6 +786,7 @@ internal class GoogleDriveSyncTransport(
                 )
             }.getOrNull()
             if (updated != null) return updated.id
+            rootFolderVerified = false
         }
 
         val existingDoc = readLibrary(forceRefresh = false)
@@ -876,11 +883,17 @@ internal class GoogleDriveSyncTransport(
 
     private suspend fun resolveOrCreateRootFolderId(): String {
         resolvedRootFolderId?.let { cachedId ->
+            if (rootFolderVerified) {
+                return cachedId
+            }
             val existing = runCatching { api.getFileMetadata(preferredEmail, cachedId) }.getOrNull()
             if (existing != null && existing.isFolder && !existing.trashed) {
+                rootFolderVerified = true
                 return existing.id
             }
             resolvedRootFolderId = null
+            rootFolderVerified = false
+            resolvedPostersFolderId = null
         }
 
         val candidates = api.findRootFolders(preferredEmail)
@@ -896,6 +909,7 @@ internal class GoogleDriveSyncTransport(
             }
         }
         resolvedRootFolderId = chosen.id
+        rootFolderVerified = true
         onFolderResolved(chosen.id)
         return chosen.id
     }
@@ -904,6 +918,7 @@ internal class GoogleDriveSyncTransport(
         rootId: String,
         createIfMissing: Boolean
     ): String? {
+        resolvedPostersFolderId?.let { return it }
         val dirs = api.listChildren(preferredEmail, rootId)
             .filter { it.isFolder && it.name == LibrarySyncService.POSTERS_DIR_NAME }
         if (dirs.isEmpty()) {
@@ -912,10 +927,10 @@ internal class GoogleDriveSyncTransport(
                 preferredEmail = preferredEmail,
                 name = LibrarySyncService.POSTERS_DIR_NAME,
                 parentFolderId = rootId
-            ).id
+            ).id.also { resolvedPostersFolderId = it }
         }
         if (dirs.size == 1) {
-            return dirs.single().id
+            return dirs.single().id.also { resolvedPostersFolderId = it }
         }
 
         data class DirInfo(
@@ -986,6 +1001,7 @@ internal class GoogleDriveSyncTransport(
             }
             runCatching { api.deleteFile(preferredEmail, candidate.folder.id) }
         }
+        resolvedPostersFolderId = winner.folder.id
         return winner.folder.id
     }
 

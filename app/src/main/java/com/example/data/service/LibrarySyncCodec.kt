@@ -13,10 +13,12 @@ import org.json.JSONObject
  * Builds and parses the JSON document used to sync the game library between devices.
  *
  * The document lists every shareable item (cloud games, Moonlight games and game
- * shortcuts, including tombstones) with an `updatedAt` version. Device-local details are
- * deliberately excluded from both the file and the comparison [signature]:
+ * shortcuts, including tombstones) with an `updatedAt` version. Play history
+ * (`lastPlayedTimestamp` and `playCount`) syncs so recently played game order stays
+ * consistent across devices, while device-local details remain excluded from the
+ * file and comparison [signature]:
  *
- * - `isPinned`, `isFavorite`, `favoriteOrder`, play counts and last-played times
+ * - `isPinned`, `isFavorite`, `favoriteOrder`, and local app folders
  * - Raw `file:` artwork paths (which are local to a device); instead, existing local
  *   poster files contribute a content SHA-256 hash (`posterHash` / `nsfwPosterHash`) so
  *   chosen-file posters sync through the folder's `posters/` directory.
@@ -74,7 +76,8 @@ internal object LibrarySyncCodec {
                     !item.logoUrl.isNullOrBlank() ||
                     item.overlayNsfwLogo ||
                     !item.nsfwLogoUrl.isNullOrBlank() ||
-                    item.isHidden
+                    item.isHidden ||
+                    (item.isGame && (item.lastPlayedTimestamp > 0L || item.playCount > 0))
                 )
 
     /** Shareable rows in a stable order. */
@@ -377,7 +380,9 @@ internal object LibrarySyncCodec {
             item.isDeleted.toString(),
             item.isCustomized.toString(),
             item.customArtworkSource.orEmpty(),
-            item.tags
+            item.tags,
+            item.lastPlayedTimestamp.toString(),
+            item.playCount.toString()
         ).joinToString(FIELD_SEPARATOR)
     }
 

@@ -77,11 +77,24 @@ class LibrarySyncCodecTest {
     @Test
     fun `signature ignores device local state`() {
         val local = moonlightGame(isPinned = false, playCount = 0, iconUrl = "file:/icons/a.png")
-        val otherDevice = moonlightGame(isPinned = true, playCount = 9, iconUrl = null)
+            .copy(isFavorite = false, favoriteOrder = 0)
+        val otherDevice = moonlightGame(isPinned = true, playCount = 0, iconUrl = null)
+            .copy(isFavorite = true, favoriteOrder = 7)
 
         assertEquals(
             LibrarySyncCodec.signature(listOf(local)),
             LibrarySyncCodec.signature(listOf(otherDevice))
+        )
+    }
+
+    @Test
+    fun `signature changes when recently played timestamp or play count changes`() {
+        val unplayed = moonlightGame(playCount = 0).copy(lastPlayedTimestamp = 0L)
+        val played = moonlightGame(playCount = 1).copy(lastPlayedTimestamp = 1_700_000_000_000L)
+
+        assertNotEquals(
+            LibrarySyncCodec.signature(listOf(unplayed)),
+            LibrarySyncCodec.signature(listOf(played))
         )
     }
 
@@ -369,6 +382,33 @@ class LibrarySyncCodecTest {
             parsed.appPosterHashes["app_com.example.game"]?.nsfwPosterHash,
             reparsed.appPosterHashes["app_com.example.game"]?.nsfwPosterHash
         )
+    }
+
+    @Test
+    fun `uncustomized installed game with play history syncs in appCustomizations`() {
+        val playedInstalledGame = GameItem(
+            id = "app_com.example.playedgame",
+            title = "Played Android Game",
+            type = GameType.INSTALLED_APP,
+            isGame = true,
+            packageName = "com.example.playedgame",
+            lastPlayedTimestamp = 5_000L,
+            playCount = 2
+        )
+        val unplayedInstalledApp = GameItem(
+            id = "app_com.android.settings",
+            title = "Settings",
+            type = GameType.INSTALLED_APP,
+            isGame = false,
+            packageName = "com.android.settings",
+            lastPlayedTimestamp = 9_000L,
+            playCount = 4
+        )
+
+        val syncableApps = LibrarySyncCodec.syncableAppCustomizations(
+            listOf(playedInstalledGame, unplayedInstalledApp)
+        )
+        assertEquals(listOf("app_com.example.playedgame"), syncableApps.map { it.id })
     }
 
     @Test

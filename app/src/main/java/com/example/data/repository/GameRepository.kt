@@ -419,7 +419,8 @@ class GameRepository(
      */
     suspend fun replaceSyncedLibrary(
         remoteItems: List<GameItem>,
-        tracksLocalPosters: Boolean = false
+        tracksLocalPosters: Boolean = false,
+        remoteUpdatedAt: Long = 0L
     ) {
         val remoteById = remoteItems.associateBy { it.id }
         val local = gameDao.getAllItemsNow()
@@ -456,9 +457,10 @@ class GameRepository(
                         ?: existing?.heroBannerUrl?.takeIf { it.startsWith("file:") },
                     iconUrl = remote.iconUrl
                         ?: existing?.iconUrl?.takeIf { it.startsWith("file:") },
-                    lastPlayedTimestamp = maxOf(
-                        remote.lastPlayedTimestamp,
-                        existing?.lastPlayedTimestamp ?: 0L
+                    lastPlayedTimestamp = resolveSyncedLastPlayedTimestamp(
+                        remoteLastPlayed = remote.lastPlayedTimestamp,
+                        existingLastPlayed = existing?.lastPlayedTimestamp ?: 0L,
+                        remoteUpdatedAt = remoteUpdatedAt
                     ),
                     playCount = maxOf(remote.playCount, existing?.playCount ?: 0)
                 )
@@ -474,7 +476,8 @@ class GameRepository(
     suspend fun applySyncedAppCustomizations(
         remoteApps: List<GameItem>,
         tracksLocalPosters: Boolean = false,
-        preserveLocalCustomizations: Boolean = false
+        preserveLocalCustomizations: Boolean = false,
+        remoteUpdatedAt: Long = 0L
     ) {
         if (remoteApps.isEmpty()) return
         val localById = gameDao.getGamesByTypeNow(GameType.INSTALLED_APP).associateBy { it.id }
@@ -528,10 +531,26 @@ class GameRepository(
                         existing.customArtworkSource ?: remote.customArtworkSource
                     } else {
                         remote.customArtworkSource
-                    }
+                    },
+                    lastPlayedTimestamp = resolveSyncedLastPlayedTimestamp(
+                        remoteLastPlayed = remote.lastPlayedTimestamp,
+                        existingLastPlayed = existing.lastPlayedTimestamp,
+                        remoteUpdatedAt = remoteUpdatedAt
+                    ),
+                    playCount = maxOf(existing.playCount, remote.playCount)
                 )
             )
         }
+    }
+
+    private fun resolveSyncedLastPlayedTimestamp(
+        remoteLastPlayed: Long,
+        existingLastPlayed: Long,
+        remoteUpdatedAt: Long
+    ): Long = when {
+        remoteLastPlayed > 0L -> maxOf(remoteLastPlayed, existingLastPlayed)
+        existingLastPlayed > 0L && remoteUpdatedAt > 0L && remoteUpdatedAt >= existingLastPlayed -> 0L
+        else -> existingLastPlayed
     }
 
     suspend fun updateSyncedPosters(items: List<GameItem>) {

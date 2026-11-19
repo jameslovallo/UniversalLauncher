@@ -7,16 +7,27 @@ import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.repository.GameRepository
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONObject
 
 /** Result of a library folder or Google Drive sync or write. */
@@ -48,6 +59,12 @@ class LibrarySyncService(
 ) {
     private val resolver = context.contentResolver
     private val mutex = Mutex()
+    private val posterHttpClient: OkHttpClient by lazy {
+        HttpClients.shared.newBuilder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
+            .build()
+    }
 
     val syncMode: LibrarySyncMode
         get() = when (LibrarySyncMode.fromPrefs(prefs)) {
@@ -445,13 +462,25 @@ class LibrarySyncService(
         val relevantRemoteAppHashes = snapshot.appPosterHashes.filterKeys { it in localInstalledAppIds }
 
         if (!snapshot.authoritative) {
-            val importedItems = importPosters(snapshot.items, snapshot.posterHashes, transport)
-            val importedApps = importPosters(relevantRemoteApps, relevantRemoteAppHashes, transport)
+            val sharedPosters = preloadRemotePosters(transport, forceRefresh = true)
+            val importedItems = importPosters(
+                items = snapshot.items,
+                posterHashes = snapshot.posterHashes,
+                transport = transport,
+                preloadedRemotePosters = sharedPosters
+            )
+            val importedApps = importPosters(
+                items = relevantRemoteApps,
+                posterHashes = relevantRemoteAppHashes,
+                transport = transport,
+                preloadedRemotePosters = sharedPosters
+            )
             repository.mergeSyncedLibrary(importedItems.items)
             repository.applySyncedAppCustomizations(
                 remoteApps = importedApps.items,
                 tracksLocalPosters = snapshot.tracksLocalPosters,
-                preserveLocalCustomizations = switchingMethod
+                preserveLocalCustomizations = switchingMethod,
+                remoteUpdatedAt = snapshot.updatedAt
             )
             val updatedRows = repository.getAllItemsSnapshot()
             val updatedInstalledIds = updatedRows
@@ -500,10 +529,29 @@ class LibrarySyncService(
         }
 
         if (differs && fileIsNewer) {
-            val importedItems = importPosters(snapshot.items, snapshot.posterHashes, transport)
-            val importedApps = importPosters(relevantRemoteApps, relevantRemoteAppHashes, transport)
-            repository.replaceSyncedLibrary(importedItems.items, snapshot.tracksLocalPosters)
-            repository.applySyncedAppCustomizations(importedApps.items, snapshot.tracksLocalPosters)
+            val sharedPosters = preloadRemotePosters(transport, forceRefresh = true)
+            val importedItems = importPosters(
+                items = snapshot.items,
+                posterHashes = snapshot.posterHashes,
+                transport = transport,
+                preloadedRemotePosters = sharedPosters
+            )
+            val importedApps = importPosters(
+                items = relevantRemoteApps,
+                posterHashes = relevantRemoteAppHashes,
+                transport = transport,
+                preloadedRemotePosters = sharedPosters
+            )
+            repository.replaceSyncedLibrary(
+                remoteItems = importedItems.items,
+                tracksLocalPosters = snapshot.tracksLocalPosters,
+                remoteUpdatedAt = snapshot.updatedAt
+            )
+            repository.applySyncedAppCustomizations(
+                remoteApps = importedApps.items,
+                tracksLocalPosters = snapshot.tracksLocalPosters,
+                remoteUpdatedAt = snapshot.updatedAt
+            )
             val appliedRows = repository.getAllItemsSnapshot()
             val appliedSignature = librarySignature(
                 items = syncable(appliedRows),
@@ -526,17 +574,20 @@ class LibrarySyncService(
 
         if (differs) {
             if (snapshot.updatedAt >= localVersion) {
+                val sharedPosters = preloadRemotePosters(transport, forceRefresh = true)
                 val repairedItems = importPosters(
                     items = localItems,
                     posterHashes = snapshot.posterHashes,
                     transport = transport,
-                    forceRefresh = true
+                    forceRefresh = true,
+                    preloadedRemotePosters = sharedPosters
                 )
                 val repairedApps = importPosters(
                     items = localApps,
                     posterHashes = snapshot.appPosterHashes,
                     transport = transport,
-                    forceRefresh = true
+                    forceRefresh = true,
+                    preloadedRemotePosters = sharedPosters
                 )
                 val changedItems = repairedItems.items.filterIndexed { index, updated ->
                     updated != localItems[index]
@@ -576,17 +627,20 @@ class LibrarySyncService(
         }
 
         // Metadata matches, yet remote posters/ may have updated or missing assets locally.
+        val sharedPosters = preloadRemotePosters(transport, forceRefresh = true)
         val reconciledItems = importPosters(
             items = localItems,
             posterHashes = snapshot.posterHashes,
             transport = transport,
-            forceRefresh = true
+            forceRefresh = true,
+            preloadedRemotePosters = sharedPosters
         )
         val reconciledApps = importPosters(
             items = localApps,
             posterHashes = snapshot.appPosterHashes,
             transport = transport,
-            forceRefresh = true
+            forceRefresh = true,
+            preloadedRemotePosters = sharedPosters
         )
         val changedItems = reconciledItems.items.filterIndexed { index, updated ->
             updated != localItems[index]
@@ -599,7 +653,11 @@ class LibrarySyncService(
             repository.updateSyncedPosters(changedItems + changedApps)
         }
 
-        exportPosters(reconciledItems.items + reconciledApps.items, transport)
+        exportPosters(
+            items = reconciledItems.items + reconciledApps.items,
+            transport = transport,
+            preloadedRemotePosters = sharedPosters
+        )
 
         val updatedRows = if (changedItems.isNotEmpty() || changedApps.isNotEmpty()) {
             repository.getAllItemsSnapshot()
@@ -652,8 +710,19 @@ class LibrarySyncService(
         val hasLocalOnlyItems = localItems.any { !it.isDeleted && it.id !in remoteItemIds }
         val hasLocalOnlyApps = localApps.any { it.id !in remoteAppIds }
 
-        val importedItems = importPosters(snapshot.items, snapshot.posterHashes, transport)
-        val importedApps = importPosters(relevantRemoteApps, relevantRemoteAppHashes, transport)
+        val sharedPosters = preloadRemotePosters(transport, forceRefresh = true)
+        val importedItems = importPosters(
+            items = snapshot.items,
+            posterHashes = snapshot.posterHashes,
+            transport = transport,
+            preloadedRemotePosters = sharedPosters
+        )
+        val importedApps = importPosters(
+            items = relevantRemoteApps,
+            posterHashes = relevantRemoteAppHashes,
+            transport = transport,
+            preloadedRemotePosters = sharedPosters
+        )
 
         val addedFromRemote = repository.mergeSyncedLibraryPreservingExisting(
             remoteItems = importedItems.items,
@@ -662,7 +731,8 @@ class LibrarySyncService(
         repository.applySyncedAppCustomizations(
             remoteApps = importedApps.items,
             tracksLocalPosters = snapshot.tracksLocalPosters,
-            preserveLocalCustomizations = !remoteIsNewer || switchingMethod
+            preserveLocalCustomizations = !remoteIsNewer || switchingMethod,
+            remoteUpdatedAt = snapshot.updatedAt
         )
 
         val mergedRows = repository.getAllItemsSnapshot()
@@ -767,26 +837,56 @@ class LibrarySyncService(
 
     // ---- Poster Export & Import ---------------------------------------------------
 
-    private suspend fun exportPosters(items: List<GameItem>, transport: LibrarySyncTransport) {
-        runCatching {
-            val postersContainerId = transport.ensurePostersContainer(forceRefresh = true) ?: return
-            val existingFiles = transport.listRemotePosters(forceRefresh = true)
+    private suspend fun preloadRemotePosters(
+        transport: LibrarySyncTransport,
+        forceRefresh: Boolean
+    ): MutableMap<String, RemotePosterEntry>? = runCatching {
+        ConcurrentHashMap(transport.listRemotePosters(forceRefresh = forceRefresh))
+    }.getOrNull()
 
-            items.forEach { item ->
-                exportSinglePosterSlot(
-                    transport = transport,
-                    postersContainerId = postersContainerId,
-                    existingFiles = existingFiles,
-                    fileName = posterFileNameFor(item.id),
-                    rawUrl = if (item.isDeleted) null else item.posterUrl
-                )
-                exportSinglePosterSlot(
-                    transport = transport,
-                    postersContainerId = postersContainerId,
-                    existingFiles = existingFiles,
-                    fileName = nsfwPosterFileNameFor(item.id),
-                    rawUrl = if (item.isDeleted) null else item.nsfwPosterUrl
-                )
+    private suspend fun exportPosters(
+        items: List<GameItem>,
+        transport: LibrarySyncTransport,
+        preloadedRemotePosters: MutableMap<String, RemotePosterEntry>? = null
+    ) {
+        runCatching {
+            val uniqueItems = items.distinctBy { it.id }
+            val existingFiles = ConcurrentHashMap(
+                preloadedRemotePosters ?: transport.listRemotePosters(forceRefresh = true)
+            )
+            val mayUpload = uniqueItems.any { item ->
+                !item.isDeleted && (!item.posterUrl.isNullOrBlank() || !item.nsfwPosterUrl.isNullOrBlank())
+            }
+            if (!mayUpload && existingFiles.isEmpty()) return
+
+            val postersContainerId = if (mayUpload) {
+                transport.ensurePostersContainer(forceRefresh = true) ?: return
+            } else {
+                ""
+            }
+
+            val semaphore = Semaphore(POSTER_SYNC_CONCURRENCY)
+            coroutineScope {
+                uniqueItems.map { item ->
+                    async {
+                        semaphore.withPermit {
+                            exportSinglePosterSlot(
+                                transport = transport,
+                                postersContainerId = postersContainerId,
+                                existingFiles = existingFiles,
+                                fileName = posterFileNameFor(item.id),
+                                rawUrl = if (item.isDeleted) null else item.posterUrl
+                            )
+                            exportSinglePosterSlot(
+                                transport = transport,
+                                postersContainerId = postersContainerId,
+                                existingFiles = existingFiles,
+                                fileName = nsfwPosterFileNameFor(item.id),
+                                rawUrl = if (item.isDeleted) null else item.nsfwPosterUrl
+                            )
+                        }
+                    }
+                }.awaitAll()
             }
         }
     }
@@ -843,61 +943,75 @@ class LibrarySyncService(
         items: List<GameItem>,
         posterHashes: Map<String, LibrarySyncCodec.PosterHashes>,
         transport: LibrarySyncTransport,
-        forceRefresh: Boolean = true
+        forceRefresh: Boolean = true,
+        preloadedRemotePosters: MutableMap<String, RemotePosterEntry>? = null
     ): ImportResult {
+        if (items.isEmpty()) {
+            return ImportResult(items, missingExpectedPoster = false, pulledCount = 0)
+        }
         return runCatching {
-            val existingEntries = transport.listRemotePosters(forceRefresh = forceRefresh)
+            val existingEntries = preloadedRemotePosters
+                ?: transport.listRemotePosters(forceRefresh = forceRefresh)
             val localDir = File(context.filesDir, "custom_art").apply { mkdirs() }
-            var missingExpectedPoster = false
-            var pulledCount = 0
+            val missingExpectedPoster = AtomicBoolean(false)
+            val pulledCount = AtomicInteger(0)
+            val semaphore = Semaphore(POSTER_SYNC_CONCURRENCY)
 
-            val updatedItems = items.map { item ->
-                val safeId = item.id.replace(Regex("[^A-Za-z0-9._-]"), "_")
-                val expectedHashes = posterHashes[item.id]
-                var updated = item
+            val updatedItems = coroutineScope {
+                items.map { item ->
+                    async {
+                        val safeId = item.id.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                        val expectedHashes = posterHashes[item.id]
+                        var updated = item
 
-                val posterEntry = existingEntries[posterFileNameFor(item.id)]
-                if (slotNeedsPosterPull(item.posterUrl, expectedHashes?.posterHash, posterEntry)) {
-                    val importedPoster = copyPosterFromTransport(
-                        transport = transport,
-                        posterEntry = posterEntry,
-                        localDir = localDir,
-                        filePrefix = "$safeId-synced",
-                        expectedHash = expectedHashes?.posterHash,
-                        forceRefresh = forceRefresh
-                    )
-                    if (importedPoster != null) {
-                        pulledCount++
-                        updated = updated.copy(
-                            posterUrl = importedPoster,
-                            customArtworkSource = updated.customArtworkSource ?: "SYNCED"
-                        )
-                    } else if (expectedHashes?.posterHash != null) {
-                        missingExpectedPoster = true
+                        val posterEntry = existingEntries[posterFileNameFor(item.id)]
+                        if (slotNeedsPosterPull(item.posterUrl, expectedHashes?.posterHash, posterEntry)) {
+                            val importedPoster = semaphore.withPermit {
+                                copyPosterFromTransport(
+                                    transport = transport,
+                                    posterEntry = posterEntry,
+                                    localDir = localDir,
+                                    filePrefix = "$safeId-synced",
+                                    expectedHash = expectedHashes?.posterHash,
+                                    forceRefresh = forceRefresh
+                                )
+                            }
+                            if (importedPoster != null) {
+                                pulledCount.incrementAndGet()
+                                updated = updated.copy(
+                                    posterUrl = importedPoster,
+                                    customArtworkSource = updated.customArtworkSource ?: "SYNCED"
+                                )
+                            } else if (expectedHashes?.posterHash != null) {
+                                missingExpectedPoster.set(true)
+                            }
+                        }
+
+                        val nsfwEntry = existingEntries[nsfwPosterFileNameFor(item.id)]
+                        if (slotNeedsPosterPull(item.nsfwPosterUrl, expectedHashes?.nsfwPosterHash, nsfwEntry)) {
+                            val importedNsfw = semaphore.withPermit {
+                                copyPosterFromTransport(
+                                    transport = transport,
+                                    posterEntry = nsfwEntry,
+                                    localDir = localDir,
+                                    filePrefix = "$safeId-nsfw-synced",
+                                    expectedHash = expectedHashes?.nsfwPosterHash,
+                                    forceRefresh = forceRefresh
+                                )
+                            }
+                            if (importedNsfw != null) {
+                                pulledCount.incrementAndGet()
+                                updated = updated.copy(nsfwPosterUrl = importedNsfw)
+                            } else if (expectedHashes?.nsfwPosterHash != null) {
+                                missingExpectedPoster.set(true)
+                            }
+                        }
+
+                        updated
                     }
-                }
-
-                val nsfwEntry = existingEntries[nsfwPosterFileNameFor(item.id)]
-                if (slotNeedsPosterPull(item.nsfwPosterUrl, expectedHashes?.nsfwPosterHash, nsfwEntry)) {
-                    val importedNsfw = copyPosterFromTransport(
-                        transport = transport,
-                        posterEntry = nsfwEntry,
-                        localDir = localDir,
-                        filePrefix = "$safeId-nsfw-synced",
-                        expectedHash = expectedHashes?.nsfwPosterHash,
-                        forceRefresh = forceRefresh
-                    )
-                    if (importedNsfw != null) {
-                        pulledCount++
-                        updated = updated.copy(nsfwPosterUrl = importedNsfw)
-                    } else if (expectedHashes?.nsfwPosterHash != null) {
-                        missingExpectedPoster = true
-                    }
-                }
-
-                updated
+                }.awaitAll()
             }
-            ImportResult(updatedItems, missingExpectedPoster, pulledCount)
+            ImportResult(updatedItems, missingExpectedPoster.get(), pulledCount.get())
         }.getOrElse {
             val expectsAnyPoster = posterHashes.values.any {
                 it.posterHash != null || it.nsfwPosterHash != null
@@ -1001,13 +1115,10 @@ class LibrarySyncService(
                 resolver.openInputStream(Uri.parse(rawUrl))?.use { it.readBytes() }
             }
             rawUrl.startsWith("http://") || rawUrl.startsWith("https://") -> {
-                val conn = java.net.URL(rawUrl).openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 4000
-                conn.readTimeout = 5000
-                conn.instanceFollowRedirects = true
-                if (conn.responseCode in 200..299) {
-                    conn.inputStream.use { it.readBytes() }
-                } else null
+                val request = Request.Builder().url(rawUrl).get().build()
+                posterHttpClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) response.body?.bytes() else null
+                }
             }
             else -> null
         }
@@ -1058,6 +1169,7 @@ class LibrarySyncService(
         const val POSTERS_DIR_NAME = "posters"
 
         private const val WRITE_DEBOUNCE_MS = 750L
+        private const val POSTER_SYNC_CONCURRENCY = 4
 
         internal const val KEY_SYNC_MODE = "library_sync_mode"
         internal const val KEY_TREE_URI = "library_sync_tree_uri"
