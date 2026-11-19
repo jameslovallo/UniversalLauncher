@@ -43,12 +43,27 @@ jobs:
           keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
         fi
 
-    # Execute the build directly using the Gradle installed by setup-gradle
-    - name: Build with Gradle
+    # Write build-time secrets into .env for secrets-gradle-plugin (it reads .env, not OS env vars)
+    - name: Configure Build Secrets
       env:
         GOOGLE_TV_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_TV_OAUTH_CLIENT_ID }}
         GOOGLE_TV_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_TV_OAUTH_CLIENT_SECRET }}
+      run: |
+        : > .env
+        if [ -n "$GOOGLE_TV_OAUTH_CLIENT_ID" ]; then
+          printf 'GOOGLE_TV_OAUTH_CLIENT_ID=%s\n' "$GOOGLE_TV_OAUTH_CLIENT_ID" >> .env
+        fi
+        if [ -n "$GOOGLE_TV_OAUTH_CLIENT_SECRET" ]; then
+          printf 'GOOGLE_TV_OAUTH_CLIENT_SECRET=%s\n' "$GOOGLE_TV_OAUTH_CLIENT_SECRET" >> .env
+        fi
+
+    # Execute the build directly using the Gradle installed by setup-gradle
+    - name: Build with Gradle
       run: gradle -Djava.awt.headless=true assembleDebug
+
+    - name: Clean Build Secrets
+      if: always()
+      run: rm -f .env
 
     - name: Upload Build Artifact
       uses: actions/upload-artifact@v4

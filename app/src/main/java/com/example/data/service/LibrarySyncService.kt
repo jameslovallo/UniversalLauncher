@@ -304,8 +304,9 @@ class LibrarySyncService(
      * library items, favorites, folders, or cached artwork files.
      */
     suspend fun disconnect() {
+        var wasGoogleDrive = false
         val emailToRevoke = mutex.withLock {
-            val mode = syncMode
+            wasGoogleDrive = syncMode == LibrarySyncMode.GOOGLE_DRIVE
             val email = prefs.getString(KEY_DRIVE_ACCOUNT_EMAIL, null)
             prefs.getString(KEY_TREE_URI, null)?.let { stored ->
                 SafFolderSyncTransport.releasePermission(resolver, Uri.parse(stored))
@@ -321,9 +322,9 @@ class LibrarySyncService(
                 .remove(KEY_SIGNATURE)
                 .remove(KEY_LAST_SYNC)
                 .apply()
-            if (mode == LibrarySyncMode.GOOGLE_DRIVE) email else null
+            email
         }
-        if (emailToRevoke != null) {
+        if (wasGoogleDrive) {
             withContext(Dispatchers.IO) {
                 driveTokenProvider.revokeAccess(emailToRevoke)
             }

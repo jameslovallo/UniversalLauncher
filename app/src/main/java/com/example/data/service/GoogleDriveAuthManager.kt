@@ -151,7 +151,7 @@ class PlayServicesDriveAuthManager(
     context: Context,
     private val httpClient: OkHttpClient = defaultAuthHttpClient(),
     private val activityProvider: () -> Activity? = { NexusApplication.currentForegroundActivity() },
-    private val isTelevisionDevice: Boolean = detectTelevisionDevice(context.applicationContext),
+    private val isTelevisionDevice: Boolean? = null,
     tvClientId: String = BuildConfig.GOOGLE_TV_OAUTH_CLIENT_ID,
     tvClientSecret: String = BuildConfig.GOOGLE_TV_OAUTH_CLIENT_SECRET,
     private val deviceAuthBaseUrl: String = DEFAULT_OAUTH_BASE_URL,
@@ -168,6 +168,12 @@ class PlayServicesDriveAuthManager(
 
     private val hasDeviceFlowCredentials: Boolean
         get() = !resolvedTvClientId.isNullOrBlank() && !resolvedTvClientSecret.isNullOrBlank()
+
+    private fun isTelevision(): Boolean =
+        isTelevisionDevice ?: (
+            detectTelevisionDevice(appContext) ||
+                (activityProvider()?.let { detectTelevisionDevice(it) } == true)
+            )
 
     private fun authorizationClient(): AuthorizationClient =
         activityProvider()?.let { Identity.getAuthorizationClient(it) }
@@ -186,7 +192,7 @@ class PlayServicesDriveAuthManager(
             }
         }
 
-        if (isTelevisionDevice) {
+        if (isTelevision()) {
             return beginTvDeviceOrExplain()
         }
 
@@ -335,7 +341,7 @@ class PlayServicesDriveAuthManager(
     override suspend fun beginFallbackAccountAuthorization(
         preferredEmail: String?
     ): DriveAuthorizationStep? {
-        if (isTelevisionDevice) {
+        if (isTelevision()) {
             return beginTvDeviceOrExplain()
         }
         val trimmedEmail = preferredEmail?.trim()?.takeIf { it.isNotBlank() }
@@ -420,14 +426,15 @@ class PlayServicesDriveAuthManager(
     private fun tvConfigurationMissingMessage(): String =
         "Android TV requires Google's QR/Device Sign-In flow (Google blocks TV Play Services consent webviews with Error 400). " +
             "In Google Cloud Console (project gen-lang-client-0969064187), create an OAuth 2.0 Client ID of type " +
-            "'TVs and Limited Input devices' and set GOOGLE_TV_OAUTH_CLIENT_ID and GOOGLE_TV_OAUTH_CLIENT_SECRET in AI Studio Secrets."
+            "'TVs and Limited Input devices' and set GOOGLE_TV_OAUTH_CLIENT_ID and GOOGLE_TV_OAUTH_CLIENT_SECRET " +
+            "in AI Studio Secrets (or GitHub Actions Secrets when building via CI)."
 
     override suspend fun getAccessToken(preferredEmail: String?): String {
         if (hasStoredDeviceRefreshToken() && hasDeviceFlowCredentials) {
             return getDeviceAccessToken(forceRefresh = false)
         }
 
-        if (isTelevisionDevice) {
+        if (isTelevision()) {
             throw DriveAuthorizationRequiredException(
                 message = if (hasDeviceFlowCredentials) {
                     "Google Drive authorization required. Reconnect Google Drive in Settings."
@@ -483,6 +490,15 @@ class PlayServicesDriveAuthManager(
         if (hasStoredDeviceRefreshToken() && hasDeviceFlowCredentials) {
             return getDeviceAccessToken(forceRefresh = true)
         }
+        if (isTelevision()) {
+            throw DriveAuthorizationRequiredException(
+                message = if (hasDeviceFlowCredentials) {
+                    "Google Drive authorization required. Reconnect Google Drive in Settings."
+                } else {
+                    tvConfigurationMissingMessage()
+                }
+            )
+        }
         withContext(Dispatchers.IO) {
             runCatching { GoogleAuthUtil.clearToken(appContext, invalidToken) }
         }
@@ -499,7 +515,7 @@ class PlayServicesDriveAuthManager(
         }
         clearDeviceTokens()
 
-        if (!isTelevisionDevice) {
+        if (!isTelevision()) {
             runCatching { authorizeSilently() }.getOrNull()?.accessToken
                 ?.takeIf { it.isNotBlank() }
                 ?.let { tokensToRevoke += it }
@@ -800,10 +816,14 @@ class PlayServicesDriveAuthManager(
         }
 
         internal fun detectTelevisionDevice(context: Context): Boolean {
+            val isConfigTv = (context.resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) ==
+                Configuration.UI_MODE_TYPE_TELEVISION
             val uiModeManager = context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
             val isTvUiMode = uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
             val hasLeanback = context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-            return isTvUiMode || hasLeanback
+            @Suppress("DEPRECATION")
+            val hasLegacyTelevision = context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEVISION)
+            return isConfigTv || isTvUiMode || hasLeanback || hasLegacyTelevision
         }
 
         internal fun computeAppSigningSha1(context: Context): String? = runCatching {
