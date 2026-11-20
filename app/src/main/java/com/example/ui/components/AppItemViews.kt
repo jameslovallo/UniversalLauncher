@@ -333,10 +333,10 @@ fun AppTvCard(
             val context = LocalContext.current
             val density = LocalDensity.current
             val widthPx = remember(density, maxWidth) {
-                with(density) { maxWidth.roundToPx().coerceAtLeast(1) }
+                with(density) { maxWidth.roundToPx().coerceIn(1, 2048) }
             }
             val heightPx = remember(density, maxHeight) {
-                with(density) { maxHeight.roundToPx().coerceAtLeast(1) }
+                with(density) { maxHeight.roundToPx().coerceIn(1, 2048) }
             }
             val bannerRequest = remember(context, bannerUrl, widthPx, heightPx) {
                 buildAppBannerImageRequest(context, bannerUrl, widthPx, heightPx)

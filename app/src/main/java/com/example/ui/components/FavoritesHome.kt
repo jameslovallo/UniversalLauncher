@@ -400,7 +400,7 @@ fun FavoritesHome(
                                 val handleClick = remember(app, onLaunchFavorite) { { onLaunchFavorite(app) } }
                                 val handleLongClick = remember(app, onLongPressFavorite) { { onLongPressFavorite(app) } }
                                 val handleFocus = remember(app, onFocusFavorite) { { onFocusFavorite(app) } }
-                                val focusNavModifier = if (showFocusEffects && rowFocusRequesters.isNotEmpty()) {
+                                val focusNavModifier = if (showFocusEffects && index < rowFocusRequesters.size) {
                                     Modifier
                                         .focusRequester(rowFocusRequesters[index])
                                         .favoriteRowDpadNavigation(
@@ -473,23 +473,12 @@ fun FavoritesHome(
                             maxItemsInEachRow = columns
                         ) {
                             favorites.forEachIndexed { index, app ->
-                                AppTextRow(
-                                    app = app,
-                                    isFocused = app.id == focusedItemId,
-                                    showFocusEffects = showFocusEffects,
-                                    testTag = "favorite_app_${app.id}",
-                                    onClick = { onLaunchFavorite(app) },
-                                    onLongClick = { onLongPressFavorite(app) },
-                                    onFocus = { onFocusFavorite(app) },
-                                    contentPadding = PaddingValues(
-                                        horizontal = 6.dp + spacing / 2,
-                                        vertical = 9.dp + rowGap / 2
-                                    ),
-                                    modifier = Modifier
-                                        .width(itemWidth)
-                                        .focusProperties { canFocus = focusEnabled }
+                                val handleClick = remember(app, onLaunchFavorite) { { onLaunchFavorite(app) } }
+                                val handleLongClick = remember(app, onLongPressFavorite) { { onLongPressFavorite(app) } }
+                                val handleFocus = remember(app, onFocusFavorite) { { onFocusFavorite(app) } }
+                                val focusNavModifier = if (showFocusEffects && index < rowFocusRequesters.size) {
+                                    Modifier
                                         .focusRequester(rowFocusRequesters[index])
-                                        .then(itemRequesterModifier(app.id))
                                         .favoriteDpadNavigation(
                                             index = index,
                                             columns = columns,
@@ -497,6 +486,26 @@ fun FavoritesHome(
                                             requesters = rowFocusRequesters,
                                             onNavigateDownToAppList = onNavigateDownToAppList
                                         )
+                                } else {
+                                    Modifier
+                                }
+                                AppTextRow(
+                                    app = app,
+                                    isFocused = app.id == focusedItemId,
+                                    showFocusEffects = showFocusEffects,
+                                    testTag = "favorite_app_${app.id}",
+                                    onClick = handleClick,
+                                    onLongClick = handleLongClick,
+                                    onFocus = handleFocus,
+                                    contentPadding = PaddingValues(
+                                        horizontal = 6.dp + spacing / 2,
+                                        vertical = 9.dp + rowGap / 2
+                                    ),
+                                    modifier = Modifier
+                                        .width(itemWidth)
+                                        .focusProperties { canFocus = focusEnabled }
+                                        .then(itemRequesterModifier(app.id))
+                                        .then(focusNavModifier)
                                         .then(
                                             if (index == 0) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }
@@ -543,23 +552,12 @@ fun FavoritesHome(
                             maxItemsInEachRow = columns
                         ) {
                             favorites.forEachIndexed { index, app ->
-                                AppIconTile(
-                                    app = app,
-                                    isFocused = app.id == focusedItemId,
-                                    showFocusEffects = showFocusEffects,
-                                    testTag = "favorite_app_${app.id}",
-                                    onClick = { onLaunchFavorite(app) },
-                                    onLongClick = { onLongPressFavorite(app) },
-                                    onFocus = { onFocusFavorite(app) },
-                                    contentPadding = PaddingValues(
-                                        horizontal = cellHorizontalPadding,
-                                        vertical = 6.dp + rowGap / 2
-                                    ),
-                                    modifier = Modifier
-                                        .width(itemPitch)
-                                        .focusProperties { canFocus = focusEnabled }
+                                val handleClick = remember(app, onLaunchFavorite) { { onLaunchFavorite(app) } }
+                                val handleLongClick = remember(app, onLongPressFavorite) { { onLongPressFavorite(app) } }
+                                val handleFocus = remember(app, onFocusFavorite) { { onFocusFavorite(app) } }
+                                val focusNavModifier = if (showFocusEffects && index < rowFocusRequesters.size) {
+                                    Modifier
                                         .focusRequester(rowFocusRequesters[index])
-                                        .then(itemRequesterModifier(app.id))
                                         .favoriteDpadNavigation(
                                             index = index,
                                             columns = columns,
@@ -567,6 +565,26 @@ fun FavoritesHome(
                                             requesters = rowFocusRequesters,
                                             onNavigateDownToAppList = onNavigateDownToAppList
                                         )
+                                } else {
+                                    Modifier
+                                }
+                                AppIconTile(
+                                    app = app,
+                                    isFocused = app.id == focusedItemId,
+                                    showFocusEffects = showFocusEffects,
+                                    testTag = "favorite_app_${app.id}",
+                                    onClick = handleClick,
+                                    onLongClick = handleLongClick,
+                                    onFocus = handleFocus,
+                                    contentPadding = PaddingValues(
+                                        horizontal = cellHorizontalPadding,
+                                        vertical = 6.dp + rowGap / 2
+                                    ),
+                                    modifier = Modifier
+                                        .width(itemPitch)
+                                        .focusProperties { canFocus = focusEnabled }
+                                        .then(itemRequesterModifier(app.id))
+                                        .then(focusNavModifier)
                                         .then(
                                             if (index == 0) {
                                                 firstItemFocusRequester?.let { Modifier.focusRequester(it) }

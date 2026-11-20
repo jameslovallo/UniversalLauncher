@@ -708,10 +708,10 @@ fun DashboardScreen(
                 val context = LocalContext.current
                 val density = LocalDensity.current
                 val wallpaperWidthPx = remember(density, maxWidth) {
-                    with(density) { maxWidth.roundToPx().coerceAtLeast(1) }
+                    with(density) { maxWidth.roundToPx().coerceIn(1, 4096) }
                 }
                 val wallpaperHeightPx = remember(density, maxHeight) {
-                    with(density) { maxHeight.roundToPx().coerceAtLeast(1) }
+                    with(density) { maxHeight.roundToPx().coerceIn(1, 4096) }
                 }
                 val wallpaperRequest = remember(
                     context,
@@ -1959,7 +1959,7 @@ private fun GamesPosterGrid(
                     } else {
                         Modifier
                     }
-                    val focusGridModifier = if (showFocusEffects && gameFocusRequesters.isNotEmpty()) {
+                    val focusGridModifier = if (showFocusEffects && index < gameFocusRequesters.size) {
                         Modifier
                             .focusRequester(gameFocusRequesters[index])
                             .flatGridDownNextRowFallback(
