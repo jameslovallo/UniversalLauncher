@@ -70,7 +70,10 @@ object IconPackManager {
     private const val CHOICE_DIR = "custom_icons"
 
     /** All installed icon themes, sorted by display name. */
-    suspend fun installedIconPacks(context: Context): List<IconPackInfo> =
+    suspend fun installedIconPacks(
+        context: Context,
+        includePackIcons: Boolean = true
+    ): List<IconPackInfo> =
         withContext(Dispatchers.IO) {
             val packageManager = context.packageManager
             val found = LinkedHashMap<String, IconPackInfo>()
@@ -87,7 +90,7 @@ object IconPackManager {
                     found[packageName] = IconPackInfo(
                         packageName = packageName,
                         label = label,
-                        iconUrl = packAppIconUrl(context, packageName)
+                        iconUrl = if (includePackIcons) packAppIconUrl(context, packageName) else null
                     )
                 }
             }
@@ -108,7 +111,7 @@ object IconPackManager {
     ): Map<String, String> = withContext(Dispatchers.IO) {
         val packContext = packageContext(context, packPackage) ?: return@withContext emptyMap()
         val resources = packContext.resources
-        val appFilter = parseAppFilter(packContext, packPackage).packages
+        val appFilter = parseAppFilter(packContext, packPackage, includeDrawables = false).packages
         if (appFilter.isEmpty()) return@withContext emptyMap()
 
         val dir = packDirectory(context, packPackage).apply { mkdirs() }
@@ -139,7 +142,7 @@ object IconPackManager {
     ): Map<String, String> = withContext(Dispatchers.IO) {
         val packContext = packageContext(context, packPackage) ?: return@withContext emptyMap()
         val resources = packContext.resources
-        val appFilter = parseAppFilter(packContext, packPackage).packages
+        val appFilter = parseAppFilter(packContext, packPackage, includeDrawables = false).packages
         val dir = packDirectory(context, packPackage).apply { mkdirs() }
         val result = LinkedHashMap<String, String>()
 
@@ -187,8 +190,7 @@ object IconPackManager {
     suspend fun icons(context: Context, packPackage: String): List<IconPackIcon> =
         withContext(Dispatchers.IO) {
             val packContext = packageContext(context, packPackage) ?: return@withContext emptyList()
-            parseAppFilter(packContext, packPackage).drawables
-                .distinct()
+            parseAppFilter(packContext, packPackage, includeDrawables = true).drawables
                 .sorted()
                 .map { drawableName -> IconPackIcon(drawableName, prettify(drawableName)) }
         }
@@ -375,13 +377,38 @@ object IconPackManager {
      * both are supported. Entries can identify the package through `package="..."` or
      * `component="ComponentInfo{pkg/activity}"`.
      */
-    private fun parseAppFilter(packContext: Context, packPackage: String): AppFilter =
-        openAppFilter(packContext, packPackage)?.let(::parseAppFilter)
-            ?: AppFilter(emptyMap(), emptyList())
+    private fun parseAppFilter(
+        packContext: Context,
+        packPackage: String,
+        includeDrawables: Boolean = true
+    ): AppFilter {
+        val resourceId = packContext.resources.getIdentifier("appfilter", "xml", packPackage)
+        if (resourceId != 0) {
+            val xmlParser = runCatching { packContext.resources.getXml(resourceId) }.getOrNull()
+            if (xmlParser != null) {
+                return try {
+                    parseAppFilter(xmlParser, includeDrawables)
+                } finally {
+                    runCatching { xmlParser.close() }
+                }
+            }
+        }
+        return runCatching {
+            packContext.assets.open("appfilter.xml").use { stream ->
+                val parser = android.util.Xml.newPullParser().apply {
+                    setInput(stream, null)
+                }
+                parseAppFilter(parser, includeDrawables)
+            }
+        }.getOrElse { AppFilter(emptyMap(), emptyList()) }
+    }
 
-    internal fun parseAppFilter(parser: XmlPullParser): AppFilter {
+    internal fun parseAppFilter(
+        parser: XmlPullParser,
+        includeDrawables: Boolean = true
+    ): AppFilter {
         val packages = LinkedHashMap<String, String>()
-        val drawables = LinkedHashSet<String>()
+        val drawables = if (includeDrawables) LinkedHashSet<String>() else null
         runCatching {
             var event = parser.eventType
             while (event != XmlPullParser.END_DOCUMENT) {
@@ -395,7 +422,7 @@ object IconPackManager {
                             ?.trim()
                             ?.trimEnd('}')
                     if (!drawable.isNullOrBlank()) {
-                        drawables += drawable
+                        drawables?.add(drawable)
                         if (!packageName.isNullOrBlank()) {
                             packages[packageName] = drawable
                         }
@@ -404,20 +431,7 @@ object IconPackManager {
                 event = parser.next()
             }
         }
-        return AppFilter(packages, drawables.toList())
-    }
-
-    private fun openAppFilter(packContext: Context, packPackage: String): XmlPullParser? {
-        val resourceId = packContext.resources.getIdentifier("appfilter", "xml", packPackage)
-        if (resourceId != 0) {
-            runCatching { packContext.resources.getXml(resourceId) }.getOrNull()?.let { return it }
-        }
-        return runCatching {
-            val stream = packContext.assets.open("appfilter.xml")
-            android.util.Xml.newPullParser().apply {
-                setInput(stream, null)
-            }
-        }.getOrNull()
+        return AppFilter(packages, drawables?.toList().orEmpty())
     }
 
     private fun prettify(drawableName: String): String =

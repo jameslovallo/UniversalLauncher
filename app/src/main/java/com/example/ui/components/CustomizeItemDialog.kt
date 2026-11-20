@@ -81,6 +81,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -136,6 +137,7 @@ fun CustomizeItemDialog(
     iconPack: IconPackInfo? = null,
     activeThemeKey: String = IconPackOverridesStore.themeKey(iconPack?.packageName),
     iconPackIcons: List<IconPackIcon> = emptyList(),
+    isLoadingIconPackIcons: Boolean = false,
     selectedPackDrawable: String? = null,
     canResetIcon: Boolean = false,
     onApplyTitle: (id: String, newTitle: String) -> Unit,
@@ -573,7 +575,14 @@ fun CustomizeItemDialog(
                         }
                     }
                     CustomizeArtworkTab.ICON_THEME -> { // Icon from the active icon theme
-                        if (iconPack == null || iconPackIcons.isEmpty()) {
+                        if (iconPack != null && isLoadingIconPackIcons && iconPackIcons.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator()
+                            }
+                        } else if (iconPack == null || iconPackIcons.isEmpty()) {
                             Column(
                                 modifier = Modifier.fillMaxSize(),
                                 verticalArrangement = Arrangement.Center,
@@ -1042,7 +1051,9 @@ private fun PosterOptionCard(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    Box(
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .aspectRatio(2f / 3f)
@@ -1058,8 +1069,22 @@ private fun PosterOptionCard(
             )
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
     ) {
+        val posterWidthPx = remember(density, maxWidth) {
+            with(density) { maxWidth.roundToPx().coerceAtLeast(1) }
+        }
+        val posterHeightPx = remember(density, maxHeight) {
+            with(density) { maxHeight.roundToPx().coerceAtLeast(1) }
+        }
+        val posterRequest = remember(context, imageUrl, posterWidthPx, posterHeightPx) {
+            buildPosterImageRequest(
+                context = context,
+                imageUrl = imageUrl,
+                posterWidthPx = posterWidthPx,
+                posterHeightPx = posterHeightPx
+            )
+        }
         AsyncImage(
-            model = imageUrl,
+            model = posterRequest,
             contentDescription = contentDescription,
             contentScale = ContentScale.Crop,
             modifier = Modifier
@@ -1068,7 +1093,11 @@ private fun PosterOptionCard(
         )
 
         if (!logoOverlayUrl.isNullOrBlank()) {
-            PosterLogoOverlay(logoUrl = logoOverlayUrl)
+            PosterLogoOverlay(
+                logoUrl = logoOverlayUrl,
+                posterWidthPx = posterWidthPx,
+                posterHeightPx = posterHeightPx
+            )
         }
 
         if (isSelected) {

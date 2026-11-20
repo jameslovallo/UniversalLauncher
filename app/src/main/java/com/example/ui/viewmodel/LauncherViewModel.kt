@@ -60,6 +60,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
@@ -178,6 +179,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _iconPackIcons = MutableStateFlow<List<IconPackIcon>>(emptyList())
     val iconPackIcons: StateFlow<List<IconPackIcon>> = _iconPackIcons.asStateFlow()
 
+    private val _iconPackIconsLoading = MutableStateFlow(false)
+    val iconPackIconsLoading: StateFlow<Boolean> = _iconPackIconsLoading.asStateFlow()
+
+    private var iconPackCatalogJob: Job? = null
     private val iconThemeMutex = Mutex()
 
     // itemId -> drawableName overrides remembered for the currently selected pack.
@@ -323,26 +328,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // Games Tab: poster grid (all cloud games, game apps, shortcuts)
     val gamesList: StateFlow<List<GameItem>> = allItems.map { list ->
         list.filter { it.isGame }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Apps Tab: all non-game applications (excluding folder members), folders sorted after Z
     val appsList: StateFlow<List<GameItem>> = allItems.map { list ->
         list.filter { !it.isGame && it.folderId == null }
-            .sortedWith(compareBy<GameItem> { it.type == GameType.FOLDER }.thenBy { it.title.lowercase() })
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            .sortedNonGamesForDrawer()
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // All folders in alphabetical order
     val foldersList: StateFlow<List<GameItem>> = allItems.map { list ->
         list.filter { !it.isGame && it.type == GameType.FOLDER }
-            .sortedBy { it.title.lowercase() }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            .sortedByTitleCaseInsensitive()
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // folderId -> sorted list of non-folder apps inside that folder
     val folderMembersMap: StateFlow<Map<String, List<GameItem>>> = allItems.map { list ->
         list.filter { !it.isGame && it.type != GameType.FOLDER && !it.folderId.isNullOrBlank() }
-            .sortedBy { it.title.lowercase() }
+            .sortedByTitleCaseInsensitive()
             .groupBy { it.folderId!! }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     // Favorites home: favorited apps (and favorited folders) in the user's custom order.
     //
@@ -364,8 +373,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // unfavorited folders appear after Z.
     val libraryApps: StateFlow<List<GameItem>> = allItems.map { list ->
         list.filter { !it.isGame && !it.isFavorite && it.folderId == null }
-            .sortedWith(compareBy<GameItem> { it.type == GameType.FOLDER }.thenBy { it.title.lowercase() })
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            .sortedNonGamesForDrawer()
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Hidden items for the Settings restore list
     val hiddenItems: StateFlow<List<GameItem>> = repository.hiddenGames
@@ -387,6 +397,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 repository.recategorizeStreamingClientsAsApps(STREAMING_CLIENT_APP_PACKAGES)
                 prefs.edit().putBoolean(KEY_STREAMING_CLIENTS_AS_APPS_DONE, true).apply()
             }
+
+            // Hydrated themed icons are already ready for Frame 0. Refresh the pack list
+            // and icon-pack overrides sequentially after the initial app sync so both do not
+            // scan PackageManager simultaneously on cold start.
+            refreshIconPacks(includePackIcons = false)
 
             // Restore the library file before anything else can write over it.
             if (librarySyncService.isConfigured) {
@@ -418,10 +433,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             repository.backfillGfnArtwork()
             repository.matchMissingGamePosters()
         }
-        // Themed icons are hydrated from the local cache for the first frame, so the
-        // pack re-scan can stay here: it only refreshes the installed-pack list and
-        // re-applies remembered overrides.
-        refreshIconPacks()
         registerPackageMonitor()
     }
 
@@ -762,10 +773,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _contextMenuItem.value = null
         _favoriteActionItem.value = null
         _editingItem.value = item
+        if (!item.isGame) {
+            loadIconPackCatalogForCustomizer(_selectedIconPack.value)
+            if (_installedIconPacks.value.isEmpty()) {
+                refreshIconPacks(includePackIcons = false)
+            }
+        } else {
+            iconPackCatalogJob?.cancel()
+            _iconPackIcons.value = emptyList()
+            _iconPackIconsLoading.value = false
+        }
     }
 
     fun closeEditCustomizer() {
+        iconPackCatalogJob?.cancel()
         _editingItem.value = null
+        _iconPackIcons.value = emptyList()
+        _iconPackIconsLoading.value = false
     }
 
     fun applyItemTitle(id: String, newTitle: String) {
@@ -908,7 +932,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // ---- Icon themes ---------------------------------------------------------------
 
     /** Re-scans installed icon packs; called at startup and when Settings opens. */
-    fun refreshIconPacks() {
+    fun refreshIconPacks(includePackIcons: Boolean = true) {
         val initialSelected = _selectedIconPack.value
         if (initialSelected != null) {
             loadIconPack(initialSelected)
@@ -916,8 +940,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             loadDefaultThemeIcons()
         }
         viewModelScope.launch {
-            val packs = runCatching { IconPackManager.installedIconPacks(getApplication()) }
-                .getOrDefault(emptyList())
+            val packs = runCatching {
+                IconPackManager.installedIconPacks(
+                    getApplication(),
+                    includePackIcons = includePackIcons
+                )
+            }.getOrDefault(emptyList())
             _installedIconPacks.value = packs
             val selected = _selectedIconPack.value
             if (selected != null && packs.none { it.packageName == selected }) {
@@ -935,7 +963,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _selectedPackOverrides.value = resolved?.let { iconPackStore.getOverridesForPack(it) }.orEmpty()
         _selectedCustomUrlOverrides.value = iconPackStore.getCustomUrlOverrides(resolved)
         if (resolved == null) {
+            iconPackCatalogJob?.cancel()
             _iconPackIcons.value = emptyList()
+            _iconPackIconsLoading.value = false
+        } else if (_editingItem.value?.isGame == false) {
+            loadIconPackCatalogForCustomizer(resolved)
         }
         _themedAppIcons.value = iconPackStore.loadCachedIconMap(resolved)
 
@@ -951,6 +983,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     applyAndLoadIconPackLocked(resolved)
                 }
             }
+        }
+    }
+
+    private fun loadIconPackCatalogForCustomizer(packPackage: String?) {
+        iconPackCatalogJob?.cancel()
+        if (packPackage.isNullOrBlank()) {
+            _iconPackIcons.value = emptyList()
+            _iconPackIconsLoading.value = false
+            return
+        }
+        _iconPackIconsLoading.value = true
+        iconPackCatalogJob = viewModelScope.launch {
+            val catalog = runCatching {
+                IconPackManager.icons(getApplication(), packPackage)
+            }.getOrDefault(emptyList())
+            if (_selectedIconPack.value == packPackage && _editingItem.value?.isGame == false) {
+                _iconPackIcons.value = catalog
+            }
+            _iconPackIconsLoading.value = false
         }
     }
 
@@ -1021,7 +1072,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val itemsToUpdate = mutableListOf<GameItem>()
         for (item in dbNonGames) {
             val rememberedUrl = defaultCustomUrls[item.id]
-            val targetUrl = rememberedUrl ?: baseIconUrlFor(item)
+            val targetUrl = rememberedUrl ?: when {
+                item.type == GameType.INSTALLED_APP &&
+                    !item.iconUrl.isNullOrBlank() &&
+                    !hasCustomAppIconUrl(item.iconUrl) -> item.iconUrl
+                else -> baseIconUrlFor(item)
+            }
             val shouldUpdateRoom = when {
                 targetUrl != null -> targetUrl != item.iconUrl
                 item.type != GameType.INSTALLED_APP && item.iconUrl != null -> true
@@ -1055,22 +1111,32 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     /**
      * Resolves themed icons (including remembered per-app pack drawable overrides, pack
-     * custom photo/URL overrides, and hidden apps) and loads the pack's picker catalog.
+     * custom photo/URL overrides, and hidden apps). The picker catalog is loaded lazily
+     * when [openEditCustomizer] opens for a non-game item.
      */
     private suspend fun applyAndLoadIconPackLocked(packPackage: String) {
         iconPackStore.hasMigratedDefaultThemeIcons = true
         val context = getApplication<Application>()
-        val installed = runCatching { installedAppsManager.getInstalledApps() }
-            .getOrDefault(emptyList())
         val dbNonGames = runCatching {
             repository.getAllItemsSnapshot().filter { !it.isGame && !it.isDeleted }
         }.getOrDefault(emptyList())
+        val installed = if (dbNonGames.isEmpty()) {
+            runCatching { installedAppsManager.getInstalledApps() }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
 
         val packUrlOverrides = iconPackStore.getCustomUrlOverrides(packPackage)
         val itemsToUpdate = mutableListOf<GameItem>()
         for (item in dbNonGames) {
             iconPackStore.saveBaseIconUrlIfUnset(item.id, item.iconUrl)
-            val targetUrl = packUrlOverrides[item.id] ?: baseIconUrlFor(item)
+            val overrideUrl = packUrlOverrides[item.id]
+            val targetUrl = overrideUrl ?: when {
+                item.type == GameType.INSTALLED_APP &&
+                    !item.iconUrl.isNullOrBlank() &&
+                    !hasCustomAppIconUrl(item.iconUrl) -> item.iconUrl
+                else -> baseIconUrlFor(item)
+            }
             val shouldUpdateRoom = when {
                 targetUrl != null -> targetUrl != item.iconUrl
                 item.type != GameType.INSTALLED_APP && item.iconUrl != null -> true
@@ -1087,8 +1153,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             repository.updateItemsBatch(itemsToUpdate)
         }
 
-        val mergedById = LinkedHashMap<String, GameItem>()
-        installed.forEach { mergedById[it.id] = it }
+        val mergedById = LinkedHashMap<String, GameItem>(dbNonGames.size + installed.size)
+        installed.forEach { if (!it.isGame) mergedById[it.id] = it }
         dbNonGames.forEach { mergedById[it.id] = it }
 
         val drawableOverrides = iconPackStore.getOverridesForPack(packPackage)
@@ -1109,16 +1175,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
         }
 
-        val packCatalog = runCatching {
-            IconPackManager.icons(context, packPackage)
-        }.getOrDefault(emptyList())
-
         if (_selectedIconPack.value == packPackage) {
             _selectedPackOverrides.value = drawableOverrides
             _selectedCustomUrlOverrides.value = packUrlOverrides
             _themedAppIcons.value = resolvedMap
-            _iconPackIcons.value = packCatalog
             iconPackStore.saveCachedIconMap(packPackage, resolvedMap)
+            if (_editingItem.value?.isGame == false) {
+                loadIconPackCatalogForCustomizer(packPackage)
+            }
         }
     }
 
@@ -1320,7 +1384,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun openSettingsModal() {
         refreshLibrarySyncState()
         refreshWeatherApps()
-        refreshIconPacks()
+        refreshIconPacks(includePackIcons = true)
         _showSettingsModal.value = true
     }
 
@@ -1401,10 +1465,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     /** Refresh the installed weather apps shown in Settings and used by the shortcut. */
     fun refreshWeatherApps() {
+        lastWeatherAppsRefresh = SystemClock.elapsedRealtime()
         viewModelScope.launch {
             _weatherApps.value = runCatching { installedAppsManager.getWeatherApps() }
                 .getOrDefault(emptyList())
         }
+    }
+
+    fun refreshWeatherAppsIfStale(minIntervalMs: Long = RESUME_FALLBACK_SCAN_INTERVAL_MS) {
+        val now = SystemClock.elapsedRealtime()
+        if (lastWeatherAppsRefresh != 0L && now - lastWeatherAppsRefresh < minIntervalMs) return
+        refreshWeatherApps()
     }
 
     fun setWeatherAppPackage(packageName: String) {
@@ -2024,11 +2095,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
      * repeat the package scan.
      */
     private var lastInstalledAppRefresh = 0L
+    private var lastWeatherAppsRefresh = 0L
     private var lastResumeLibrarySyncMs = 0L
 
-    fun refreshInstalledApps() {
+    fun refreshInstalledApps(minIntervalMs: Long = 1_500L) {
         val now = SystemClock.elapsedRealtime()
-        if (now - lastInstalledAppRefresh < 1_500L) return
+        if (lastInstalledAppRefresh != 0L && now - lastInstalledAppRefresh < minIntervalMs) return
         lastInstalledAppRefresh = now
         viewModelScope.launch {
             repository.syncInstalledApps()
@@ -2360,6 +2432,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         const val MAX_APP_GRID_COLUMNS = 8
         private const val DEFAULT_APPS_OPACITY = 0.6f
         private const val RESUME_SYNC_INTERVAL_MS = 15_000L
+        const val RESUME_FALLBACK_SCAN_INTERVAL_MS = 60_000L
         private const val QUICK_AUTH_ABORT_THRESHOLD_MS = 1_500L
         private const val MAX_CONSECUTIVE_POLL_NETWORK_ERRORS = 6
         private const val TV_WALLPAPER_DIR = "tv_wallpapers"
@@ -2370,4 +2443,31 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         private const val KEY_TV_WALLPAPER_URL = "tv_wallpaper_url"
         private const val KEY_APP_GRID_COLUMNS = "app_grid_columns"
     }
+}
+
+private fun List<GameItem>.sortedByTitleCaseInsensitive(): List<GameItem> {
+    if (size <= 1) return this
+    return map { it to it.title.lowercase() }
+        .sortedBy { it.second }
+        .map { it.first }
+}
+
+private fun List<GameItem>.sortedNonGamesForDrawer(): List<GameItem> {
+    if (size <= 1) return this
+    val nonFolders = ArrayList<Pair<GameItem, String>>(size)
+    val folders = ArrayList<Pair<GameItem, String>>()
+    for (item in this) {
+        val entry = item to item.title.lowercase()
+        if (item.type == GameType.FOLDER) {
+            folders += entry
+        } else {
+            nonFolders += entry
+        }
+    }
+    nonFolders.sortBy { it.second }
+    folders.sortBy { it.second }
+    val sorted = ArrayList<GameItem>(size)
+    nonFolders.forEach { sorted += it.first }
+    folders.forEach { sorted += it.first }
+    return sorted
 }

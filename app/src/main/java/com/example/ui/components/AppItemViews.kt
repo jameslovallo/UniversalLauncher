@@ -249,41 +249,50 @@ fun AppTvCard(
     modifier: Modifier = Modifier,
     onFocus: (() -> Unit)? = null,
 ) {
-    val focusSource = if (showFocusEffects) remember { MutableInteractionSource() } else null
-    val isFocusedByCompose = if (focusSource != null) focusSource.collectIsFocusedAsState().value else false
-    val focused = showFocusEffects && (isFocused || isFocusedByCompose)
-    val scale by animateFloatAsState(
-        targetValue = if (focused) 1.05f else 1.0f,
-        animationSpec = tween(150),
-        label = "tv_app_card_scale"
-    )
-
-    val borderColor = if (focused) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
-    }
-    val topBackdrop = if (focused) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f)
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.88f)
-    }
-    val bottomBackdrop = if (focused) {
-        MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.96f)
-    } else {
-        MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f)
-    }
-
-    BoxWithConstraints(
-        modifier = modifier
-            .fillMaxWidth()
-            .aspectRatio(16f / 9f)
+    val interactionSource: MutableInteractionSource?
+    val focused: Boolean
+    val focusModifier: Modifier
+    if (showFocusEffects) {
+        val focusSource = remember { MutableInteractionSource() }
+        val isFocusedByCompose by focusSource.collectIsFocusedAsState()
+        focused = isFocused || isFocusedByCompose
+        val scale by animateFloatAsState(
+            targetValue = if (focused) 1.05f else 1.0f,
+            animationSpec = tween(150),
+            label = "tv_app_card_scale"
+        )
+        interactionSource = focusSource
+        focusModifier = Modifier
             .graphicsLayer {
                 if (scale != 1f) {
                     scaleX = scale
                     scaleY = scale
                 }
             }
+            .then(
+                if (onFocus != null) {
+                    Modifier.onFocusChanged { if (it.isFocused) onFocus() }
+                } else {
+                    Modifier
+                }
+            )
+    } else {
+        interactionSource = null
+        focused = false
+        focusModifier = Modifier
+    }
+
+    val borderColor = if (focused) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+    }
+
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .aspectRatio(16f / 9f)
+            .then(focusModifier)
             .then(
                 if (focused) {
                     Modifier.shadow(elevation = 8.dp, shape = TvCardShape, clip = false)
@@ -292,25 +301,17 @@ fun AppTvCard(
                 }
             )
             .clip(TvCardShape)
-            .background(Brush.verticalGradient(listOf(topBackdrop, bottomBackdrop)))
             .border(
                 width = if (focused) 2.5.dp else 1.dp,
                 color = borderColor,
                 shape = TvCardShape
             )
-            .then(
-                if (onFocus != null) {
-                    Modifier.onFocusChanged { if (it.isFocused) onFocus() }
-                } else {
-                    Modifier
-                }
-            )
             .tvClickableWithLongPress(
-                interactionSource = focusSource,
+                interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick,
                 onLongClick = onLongClick,
-                hasIndicationParam = focusSource != null
+                hasIndicationParam = interactionSource != null
             )
             .testTag(testTag),
         contentAlignment = Alignment.Center
@@ -350,10 +351,21 @@ fun AppTvCard(
                     .testTag("tv_card_banner_${app.id}")
             )
         } else {
+            val topBackdrop = if (focused) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f)
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.88f)
+            }
+            val bottomBackdrop = if (focused) {
+                MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.96f)
+            } else {
+                MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f)
+            }
             val iconSize = minOf(44.dp, maxHeight * 0.44f).coerceAtLeast(24.dp)
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(Brush.verticalGradient(listOf(topBackdrop, bottomBackdrop)))
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally

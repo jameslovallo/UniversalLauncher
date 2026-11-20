@@ -139,6 +139,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.imageLoader
 import coil.request.ImageRequest
+import coil.size.Precision
 import androidx.compose.ui.layout.ContentScale
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
@@ -266,9 +267,7 @@ fun DashboardScreen(
     val canDeleteContextMenuItem by viewModel.canDeleteContextMenuItem.collectAsStateWithLifecycle()
     val editingItem by viewModel.editingItem.collectAsStateWithLifecycle()
     val showAddModal by viewModel.showAddModal.collectAsStateWithLifecycle()
-    val addModalSubView by viewModel.addModalSubView.collectAsStateWithLifecycle()
     val showSettingsModal by viewModel.showSettingsModal.collectAsStateWithLifecycle()
-    val hiddenItems by viewModel.hiddenItems.collectAsStateWithLifecycle()
     val favoriteActionItem by viewModel.favoriteActionItem.collectAsStateWithLifecycle()
     val showFavoritesEditor by viewModel.showFavoritesEditor.collectAsStateWithLifecycle()
     val foldersList by viewModel.foldersList.collectAsStateWithLifecycle()
@@ -278,13 +277,7 @@ fun DashboardScreen(
     val manageFolderId by viewModel.manageFolderId.collectAsStateWithLifecycle()
 
     val favoritesLayout by viewModel.favoritesLayout.collectAsStateWithLifecycle()
-    val steamGridDbApiKey by viewModel.steamGridDbApiKey.collectAsStateWithLifecycle()
     val steamGridDbIncludeNsfw by viewModel.steamGridDbIncludeNsfw.collectAsStateWithLifecycle()
-    val installedIconPacks by viewModel.installedIconPacks.collectAsStateWithLifecycle()
-    val selectedIconPack by viewModel.selectedIconPack.collectAsStateWithLifecycle()
-    val iconPackIcons by viewModel.iconPackIcons.collectAsStateWithLifecycle()
-    val selectedPackOverrides by viewModel.selectedPackOverrides.collectAsStateWithLifecycle()
-    val selectedCustomUrlOverrides by viewModel.selectedCustomUrlOverrides.collectAsStateWithLifecycle()
     val themedAppIcons by viewModel.themedAppIcons.collectAsStateWithLifecycle()
 
     val controllerState by viewModel.controllerManager.controllerState.collectAsStateWithLifecycle()
@@ -292,26 +285,10 @@ fun DashboardScreen(
     val appsBackgroundOpacity by viewModel.appsBackgroundOpacity.collectAsStateWithLifecycle()
     val tvWallpaperUrl by viewModel.tvWallpaperUrl.collectAsStateWithLifecycle()
     val appGridColumns by viewModel.appGridColumns.collectAsStateWithLifecycle()
-    val themeStyle by viewModel.themeStyle.collectAsStateWithLifecycle()
     val weatherEnabled by viewModel.weatherEnabled.collectAsStateWithLifecycle()
-    val weatherMode by viewModel.weatherMode.collectAsStateWithLifecycle()
-    val weatherZip by viewModel.weatherZip.collectAsStateWithLifecycle()
     val weatherInfo by viewModel.weatherInfo.collectAsStateWithLifecycle()
-    val weatherError by viewModel.weatherError.collectAsStateWithLifecycle()
     val temperatureUnit by viewModel.temperatureUnit.collectAsStateWithLifecycle()
-    val weatherApps by viewModel.weatherApps.collectAsStateWithLifecycle()
-    val weatherAppPackage by viewModel.weatherAppPackage.collectAsStateWithLifecycle()
     val weatherAppChooser by viewModel.weatherAppChooser.collectAsStateWithLifecycle()
-    val librarySyncBusy by viewModel.librarySyncBusy.collectAsStateWithLifecycle()
-    val librarySyncStatus by viewModel.librarySyncStatus.collectAsStateWithLifecycle()
-    val librarySyncConfigured by viewModel.librarySyncConfigured.collectAsStateWithLifecycle()
-    val librarySyncMode by viewModel.librarySyncMode.collectAsStateWithLifecycle()
-    val librarySyncTarget by viewModel.librarySyncTarget.collectAsStateWithLifecycle()
-    val librarySyncLastSyncedAt by viewModel.librarySyncLastSyncedAt.collectAsStateWithLifecycle()
-    val librarySyncNeedsReauth by viewModel.librarySyncNeedsReauth.collectAsStateWithLifecycle()
-    val pendingDriveAuthIntent by viewModel.pendingDriveAuthIntent.collectAsStateWithLifecycle()
-    val pendingDriveFallbackIntent by viewModel.pendingDriveFallbackIntent.collectAsStateWithLifecycle()
-    val pendingDriveDeviceSession by viewModel.pendingDriveDeviceSession.collectAsStateWithLifecycle()
     val gamesRefreshing by viewModel.gamesRefreshing.collectAsStateWithLifecycle()
     val gamesRefreshFeedback by viewModel.gamesRefreshFeedback.collectAsStateWithLifecycle()
 
@@ -336,14 +313,20 @@ fun DashboardScreen(
     var isLauncherActive by remember {
         mutableStateOf(viewModel.isDefaultLauncher() || viewModel.isHomeOverrideEnabled())
     }
+    // Skip the very first ON_RESUME on cold start so it does not defeat onHomeScreenReady()
+    // or duplicate LauncherViewModel.init's initial app scan. Live package installs/removals
+    // are handled via LauncherApps.Callback; subsequent resumes only run a 60s fallback check.
+    var hasCompletedInitialResume by remember { mutableStateOf(false) }
 
-    // Re-scan installed apps whenever the launcher comes back to the foreground, so a
-    // freshly installed app appears without restarting.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         isLauncherActive = viewModel.isDefaultLauncher() || viewModel.isHomeOverrideEnabled()
-        viewModel.refreshInstalledApps()
-        viewModel.refreshWeather()
-        viewModel.refreshWeatherApps()
+        if (hasCompletedInitialResume) {
+            viewModel.refreshInstalledApps(LauncherViewModel.RESUME_FALLBACK_SCAN_INTERVAL_MS)
+            viewModel.refreshWeather()
+            viewModel.refreshWeatherAppsIfStale()
+        } else {
+            hasCompletedInitialResume = true
+        }
     }
 
     // Phones held sideways get a compact horizontal poster row instead of a grid; TVs keep
@@ -699,19 +682,53 @@ fun DashboardScreen(
     // status-bar strip joins the bar instead of showing the wallpaper above it.
     var topBarBottomPx by remember { mutableStateOf(0f) }
 
+    val isGamesInView by remember {
+        derivedStateOf {
+            pagerState.currentPage == 1 ||
+                (pagerState.currentPage == 0 && pagerState.currentPageOffsetFraction > 0f)
+        }
+    }
+    val isAppDrawerInView by remember {
+        derivedStateOf {
+            (pagerState.currentPage == 0 ||
+                (pagerState.currentPage == 1 && pagerState.currentPageOffsetFraction < 0f)) &&
+                (appsPagerState.currentPage == 1 ||
+                    (appsPagerState.currentPage == 0 && appsPagerState.currentPageOffsetFraction > 0f))
+        }
+    }
+
     CompositionLocalProvider(
         LocalThemedAppIcons provides themedAppIcons,
         LocalFolderPreviewItems provides folderMembersMap
     ) {
-        Box(
+        BoxWithConstraints(
             modifier = modifier.fillMaxSize()
         ) {
             if (isTelevision && !tvWallpaperUrl.isNullOrBlank()) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
+                val context = LocalContext.current
+                val density = LocalDensity.current
+                val wallpaperWidthPx = remember(density, maxWidth) {
+                    with(density) { maxWidth.roundToPx().coerceAtLeast(1) }
+                }
+                val wallpaperHeightPx = remember(density, maxHeight) {
+                    with(density) { maxHeight.roundToPx().coerceAtLeast(1) }
+                }
+                val wallpaperRequest = remember(
+                    context,
+                    tvWallpaperUrl,
+                    wallpaperWidthPx,
+                    wallpaperHeightPx
+                ) {
+                    ImageRequest.Builder(context)
                         .data(tvWallpaperUrl)
-                        .crossfade(true)
-                        .build(),
+                        .size(wallpaperWidthPx, wallpaperHeightPx)
+                        .precision(Precision.INEXACT)
+                        .allowRgb565(true)
+                        .crossfade(false)
+                        .build()
+                }
+                AsyncImage(
+                    model = wallpaperRequest,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -928,6 +945,7 @@ fun DashboardScreen(
                                                     focusedItemId = focusedItemId,
                                                     showFocusEffects = showFocusEffects,
                                                     showNsfwPoster = steamGridDbIncludeNsfw,
+                                                    prefetchEnabled = isGamesInView,
                                                     firstItemFocusRequester = gamesFirstFocusRequester,
                                                     itemFocusRequester = gamesItemFocusRequester,
                                                     focusEnabled = gamesCanFocus,
@@ -1082,6 +1100,7 @@ fun DashboardScreen(
                                                                     focusedItemId = focusedItemId,
                                                                     layout = effectiveFavoritesLayout,
                                                                     showFocusEffects = showFocusEffects,
+                                                                    prefetchEnabled = isAppDrawerInView,
                                                                     listState = appsListState,
                                                                     gridState = appsGridState,
                                                                     firstItemFocusRequester = appsListFirstFocusRequester,
@@ -1237,48 +1256,11 @@ fun DashboardScreen(
             }
 
             // Customize Name & Artwork Dialog
-            if (editingItem != null) {
-                val item = editingItem!!
-                val selectedPackDrawable = if (!item.isGame && selectedIconPack != null) {
-                    selectedPackOverrides[item.id]
-                } else {
-                    null
-                }
-                val canResetIcon = !item.isGame && (
-                    selectedPackDrawable != null ||
-                        selectedCustomUrlOverrides.containsKey(item.id) ||
-                        hasCustomAppIconUrl(item.iconUrl)
-                    )
-                CustomizeItemDialog(
+            editingItem?.let { item ->
+                DashboardCustomizeOverlay(
+                    viewModel = viewModel,
                     item = item,
-                    steamGridDbApiKey = steamGridDbApiKey,
-                    includeNsfw = steamGridDbIncludeNsfw,
-                    iconPack = installedIconPacks.firstOrNull {
-                        it.packageName == selectedIconPack
-                    },
-                    activeThemeKey = IconPackOverridesStore.themeKey(selectedIconPack),
-                    iconPackIcons = iconPackIcons,
-                    selectedPackDrawable = selectedPackDrawable,
-                    canResetIcon = canResetIcon,
-                    onApplyTitle = { id, newTitle ->
-                        viewModel.applyItemTitle(id, newTitle)
-                    },
-                    onApplyPoster = { id, newTitle, isNsfwSlot, artworkUrl ->
-                        viewModel.applyItemPoster(id, newTitle, isNsfwSlot, artworkUrl)
-                    },
-                    onSetOverlayLogo = { id, newTitle, isNsfwSlot, enabled ->
-                        viewModel.setItemLogoOverlay(id, newTitle, isNsfwSlot, enabled)
-                    },
-                    onUpdateLogoUrl = { id, isNsfwSlot, logoUrl ->
-                        viewModel.updateItemLogoUrl(id, isNsfwSlot, logoUrl)
-                    },
-                    onSelectIconPackIcon = { id, newTitle, drawableName ->
-                        viewModel.applyItemIconFromPack(id, newTitle, drawableName)
-                    },
-                    onResetIcon = { id ->
-                        viewModel.resetItemIcon(id)
-                    },
-                    onDismiss = { viewModel.closeEditCustomizer() }
+                    includeNsfw = steamGridDbIncludeNsfw
                 )
             }
 
@@ -1288,6 +1270,7 @@ fun DashboardScreen(
                 enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it }),
                 exit = fadeOut() + slideOutHorizontally(targetOffsetX = { -it })
             ) {
+                val addModalSubView by viewModel.addModalSubView.collectAsStateWithLifecycle()
                 AddContentModal(
                     subView = addModalSubView,
                     onNavigateSubView = { viewModel.setAddModalSubView(it) },
@@ -1306,71 +1289,17 @@ fun DashboardScreen(
                 enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
                 exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it })
             ) {
-                SettingsModal(
+                DashboardSettingsOverlay(
+                    viewModel = viewModel,
                     favoritesLayout = favoritesLayout,
-                    steamGridDbApiKey = steamGridDbApiKey,
                     steamGridDbIncludeNsfw = steamGridDbIncludeNsfw,
-                    iconPacks = installedIconPacks,
-                    selectedIconPack = selectedIconPack,
-                    hiddenItems = hiddenItems,
                     appsBackgroundOpacity = appsBackgroundOpacity,
-                    themeStyle = themeStyle,
                     weatherEnabled = weatherEnabled,
-                    weatherMode = weatherMode,
-                    weatherZip = weatherZip,
                     weatherInfo = weatherInfo,
-                    weatherError = weatherError,
                     temperatureUnit = temperatureUnit,
-                    weatherApps = weatherApps,
-                    weatherAppPackage = weatherAppPackage,
-                    librarySyncBusy = librarySyncBusy,
-                    librarySyncStatus = librarySyncStatus,
-                    librarySyncConfigured = librarySyncConfigured,
-                    librarySyncMode = librarySyncMode,
-                    librarySyncTarget = librarySyncTarget,
-                    librarySyncLastSyncedAt = librarySyncLastSyncedAt,
-                    librarySyncNeedsReauth = librarySyncNeedsReauth,
-                    pendingDriveAuthIntent = pendingDriveAuthIntent,
-                    pendingDriveFallbackIntent = pendingDriveFallbackIntent,
-                    pendingDriveDeviceSession = pendingDriveDeviceSession,
-                    isDefaultLauncher = { viewModel.isDefaultLauncher() },
-                    isHomeOverrideEnabled = { viewModel.isHomeOverrideEnabled() },
-                    onSelectFavoritesLayout = { viewModel.setFavoritesLayout(it) },
-                    onSaveApiKey = { viewModel.saveSteamGridDbApiKey(it) },
-                    onSteamGridDbIncludeNsfwChange = { viewModel.setSteamGridDbIncludeNsfw(it) },
-                    onSelectIconPack = { viewModel.setIconPack(it) },
-                    onSetDefaultLauncher = { viewModel.openDefaultLauncherSettings() },
-                    onSetAppsBackgroundOpacity = { viewModel.setAppsBackgroundOpacity(it) },
-                    onSelectThemeStyle = { viewModel.setThemeStyle(it) },
-                    onUnhideItem = { viewModel.unhideItem(it) },
-                    onOpenHiddenItem = { viewModel.launchItem(it) },
-                    onWeatherEnabledChange = { viewModel.setWeatherEnabled(it) },
-                    onWeatherModeChange = { viewModel.setWeatherMode(it) },
-                    onWeatherZipChange = { viewModel.setWeatherZip(it) },
-                    onTemperatureUnitChange = { viewModel.setTemperatureUnit(it) },
-                    onSelectWeatherApp = { viewModel.setWeatherAppPackage(it) },
-                    onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() },
-                    onChooseSyncFolder = { viewModel.chooseSyncFolder(it) },
-                    onConnectGoogleDrive = { viewModel.connectGoogleDrive() },
-                    onGoogleDriveAuthorizationResult = { code, data ->
-                        viewModel.onGoogleDriveAuthorizationResult(code, data)
-                    },
-                    onGoogleDriveFallbackResult = { code, data, email, isPicker ->
-                        viewModel.onGoogleDriveFallbackResult(code, data, email, isPicker)
-                    },
-                    onConsumePendingDriveAuthIntent = { viewModel.consumePendingDriveAuthIntent() },
-                    onConsumePendingDriveFallbackIntent = { viewModel.consumePendingDriveFallbackIntent() },
-                    onMarkDriveAuthLaunched = { viewModel.markDriveAuthLaunched() },
-                    onCancelDriveDeviceAuthorization = { viewModel.cancelGoogleDriveDeviceAuthorization() },
-                    onSyncLibraryNow = { viewModel.syncLibraryNow() },
-                    onDisconnectLibrarySync = { viewModel.disconnectLibrarySync() },
-                    onDismiss = { viewModel.closeSettingsModal() },
                     isTelevision = isTelevision,
                     tvWallpaperUrl = tvWallpaperUrl,
-                    appGridColumns = appGridColumns,
-                    onSetTvWallpaper = { viewModel.setTvWallpaper(it) },
-                    onClearTvWallpaper = { viewModel.clearTvWallpaper() },
-                    onSetAppGridColumns = { viewModel.setAppGridColumns(it) }
+                    appGridColumns = appGridColumns
                 )
             }
 
@@ -1590,6 +1519,166 @@ private fun FocusedItemState(
     content(focusedItemId.takeUnless { suppressFocus })
 }
 
+@Composable
+private fun DashboardCustomizeOverlay(
+    viewModel: LauncherViewModel,
+    item: GameItem,
+    includeNsfw: Boolean
+) {
+    val steamGridDbApiKey by viewModel.steamGridDbApiKey.collectAsStateWithLifecycle()
+    val installedIconPacks by viewModel.installedIconPacks.collectAsStateWithLifecycle()
+    val selectedIconPack by viewModel.selectedIconPack.collectAsStateWithLifecycle()
+    val iconPackIcons by viewModel.iconPackIcons.collectAsStateWithLifecycle()
+    val isLoadingIconPackIcons by viewModel.iconPackIconsLoading.collectAsStateWithLifecycle()
+    val selectedPackOverrides by viewModel.selectedPackOverrides.collectAsStateWithLifecycle()
+    val selectedCustomUrlOverrides by viewModel.selectedCustomUrlOverrides.collectAsStateWithLifecycle()
+
+    val selectedPackDrawable = if (!item.isGame && selectedIconPack != null) {
+        selectedPackOverrides[item.id]
+    } else {
+        null
+    }
+    val canResetIcon = !item.isGame && (
+        selectedPackDrawable != null ||
+            selectedCustomUrlOverrides.containsKey(item.id) ||
+            hasCustomAppIconUrl(item.iconUrl)
+        )
+    CustomizeItemDialog(
+        item = item,
+        steamGridDbApiKey = steamGridDbApiKey,
+        includeNsfw = includeNsfw,
+        iconPack = installedIconPacks.firstOrNull {
+            it.packageName == selectedIconPack
+        },
+        activeThemeKey = IconPackOverridesStore.themeKey(selectedIconPack),
+        iconPackIcons = iconPackIcons,
+        isLoadingIconPackIcons = isLoadingIconPackIcons,
+        selectedPackDrawable = selectedPackDrawable,
+        canResetIcon = canResetIcon,
+        onApplyTitle = { id, newTitle ->
+            viewModel.applyItemTitle(id, newTitle)
+        },
+        onApplyPoster = { id, newTitle, isNsfwSlot, artworkUrl ->
+            viewModel.applyItemPoster(id, newTitle, isNsfwSlot, artworkUrl)
+        },
+        onSetOverlayLogo = { id, newTitle, isNsfwSlot, enabled ->
+            viewModel.setItemLogoOverlay(id, newTitle, isNsfwSlot, enabled)
+        },
+        onUpdateLogoUrl = { id, isNsfwSlot, logoUrl ->
+            viewModel.updateItemLogoUrl(id, isNsfwSlot, logoUrl)
+        },
+        onSelectIconPackIcon = { id, newTitle, drawableName ->
+            viewModel.applyItemIconFromPack(id, newTitle, drawableName)
+        },
+        onResetIcon = { id ->
+            viewModel.resetItemIcon(id)
+        },
+        onDismiss = { viewModel.closeEditCustomizer() }
+    )
+}
+
+@Composable
+private fun DashboardSettingsOverlay(
+    viewModel: LauncherViewModel,
+    favoritesLayout: FavoritesLayout,
+    steamGridDbIncludeNsfw: Boolean,
+    appsBackgroundOpacity: Float,
+    weatherEnabled: Boolean,
+    weatherInfo: com.example.data.service.WeatherInfo?,
+    temperatureUnit: com.example.data.service.TemperatureUnit,
+    isTelevision: Boolean,
+    tvWallpaperUrl: String?,
+    appGridColumns: Int
+) {
+    val steamGridDbApiKey by viewModel.steamGridDbApiKey.collectAsStateWithLifecycle()
+    val installedIconPacks by viewModel.installedIconPacks.collectAsStateWithLifecycle()
+    val selectedIconPack by viewModel.selectedIconPack.collectAsStateWithLifecycle()
+    val hiddenItems by viewModel.hiddenItems.collectAsStateWithLifecycle()
+    val themeStyle by viewModel.themeStyle.collectAsStateWithLifecycle()
+    val weatherMode by viewModel.weatherMode.collectAsStateWithLifecycle()
+    val weatherZip by viewModel.weatherZip.collectAsStateWithLifecycle()
+    val weatherError by viewModel.weatherError.collectAsStateWithLifecycle()
+    val weatherApps by viewModel.weatherApps.collectAsStateWithLifecycle()
+    val weatherAppPackage by viewModel.weatherAppPackage.collectAsStateWithLifecycle()
+    val librarySyncBusy by viewModel.librarySyncBusy.collectAsStateWithLifecycle()
+    val librarySyncStatus by viewModel.librarySyncStatus.collectAsStateWithLifecycle()
+    val librarySyncConfigured by viewModel.librarySyncConfigured.collectAsStateWithLifecycle()
+    val librarySyncMode by viewModel.librarySyncMode.collectAsStateWithLifecycle()
+    val librarySyncTarget by viewModel.librarySyncTarget.collectAsStateWithLifecycle()
+    val librarySyncLastSyncedAt by viewModel.librarySyncLastSyncedAt.collectAsStateWithLifecycle()
+    val librarySyncNeedsReauth by viewModel.librarySyncNeedsReauth.collectAsStateWithLifecycle()
+    val pendingDriveAuthIntent by viewModel.pendingDriveAuthIntent.collectAsStateWithLifecycle()
+    val pendingDriveFallbackIntent by viewModel.pendingDriveFallbackIntent.collectAsStateWithLifecycle()
+    val pendingDriveDeviceSession by viewModel.pendingDriveDeviceSession.collectAsStateWithLifecycle()
+
+    SettingsModal(
+        favoritesLayout = favoritesLayout,
+        steamGridDbApiKey = steamGridDbApiKey,
+        steamGridDbIncludeNsfw = steamGridDbIncludeNsfw,
+        iconPacks = installedIconPacks,
+        selectedIconPack = selectedIconPack,
+        hiddenItems = hiddenItems,
+        appsBackgroundOpacity = appsBackgroundOpacity,
+        themeStyle = themeStyle,
+        weatherEnabled = weatherEnabled,
+        weatherMode = weatherMode,
+        weatherZip = weatherZip,
+        weatherInfo = weatherInfo,
+        weatherError = weatherError,
+        temperatureUnit = temperatureUnit,
+        weatherApps = weatherApps,
+        weatherAppPackage = weatherAppPackage,
+        librarySyncBusy = librarySyncBusy,
+        librarySyncStatus = librarySyncStatus,
+        librarySyncConfigured = librarySyncConfigured,
+        librarySyncMode = librarySyncMode,
+        librarySyncTarget = librarySyncTarget,
+        librarySyncLastSyncedAt = librarySyncLastSyncedAt,
+        librarySyncNeedsReauth = librarySyncNeedsReauth,
+        pendingDriveAuthIntent = pendingDriveAuthIntent,
+        pendingDriveFallbackIntent = pendingDriveFallbackIntent,
+        pendingDriveDeviceSession = pendingDriveDeviceSession,
+        isDefaultLauncher = { viewModel.isDefaultLauncher() },
+        isHomeOverrideEnabled = { viewModel.isHomeOverrideEnabled() },
+        onSelectFavoritesLayout = { viewModel.setFavoritesLayout(it) },
+        onSaveApiKey = { viewModel.saveSteamGridDbApiKey(it) },
+        onSteamGridDbIncludeNsfwChange = { viewModel.setSteamGridDbIncludeNsfw(it) },
+        onSelectIconPack = { viewModel.setIconPack(it) },
+        onSetDefaultLauncher = { viewModel.openDefaultLauncherSettings() },
+        onSetAppsBackgroundOpacity = { viewModel.setAppsBackgroundOpacity(it) },
+        onSelectThemeStyle = { viewModel.setThemeStyle(it) },
+        onUnhideItem = { viewModel.unhideItem(it) },
+        onOpenHiddenItem = { viewModel.launchItem(it) },
+        onWeatherEnabledChange = { viewModel.setWeatherEnabled(it) },
+        onWeatherModeChange = { viewModel.setWeatherMode(it) },
+        onWeatherZipChange = { viewModel.setWeatherZip(it) },
+        onTemperatureUnitChange = { viewModel.setTemperatureUnit(it) },
+        onSelectWeatherApp = { viewModel.setWeatherAppPackage(it) },
+        onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() },
+        onChooseSyncFolder = { viewModel.chooseSyncFolder(it) },
+        onConnectGoogleDrive = { viewModel.connectGoogleDrive() },
+        onGoogleDriveAuthorizationResult = { code, data ->
+            viewModel.onGoogleDriveAuthorizationResult(code, data)
+        },
+        onGoogleDriveFallbackResult = { code, data, email, isPicker ->
+            viewModel.onGoogleDriveFallbackResult(code, data, email, isPicker)
+        },
+        onConsumePendingDriveAuthIntent = { viewModel.consumePendingDriveAuthIntent() },
+        onConsumePendingDriveFallbackIntent = { viewModel.consumePendingDriveFallbackIntent() },
+        onMarkDriveAuthLaunched = { viewModel.markDriveAuthLaunched() },
+        onCancelDriveDeviceAuthorization = { viewModel.cancelGoogleDriveDeviceAuthorization() },
+        onSyncLibraryNow = { viewModel.syncLibraryNow() },
+        onDisconnectLibrarySync = { viewModel.disconnectLibrarySync() },
+        onDismiss = { viewModel.closeSettingsModal() },
+        isTelevision = isTelevision,
+        tvWallpaperUrl = tvWallpaperUrl,
+        appGridColumns = appGridColumns,
+        onSetTvWallpaper = { viewModel.setTvWallpaper(it) },
+        onClearTvWallpaper = { viewModel.clearTvWallpaper() },
+        onSetAppGridColumns = { viewModel.setAppGridColumns(it) }
+    )
+}
+
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun GamesPosterGrid(
@@ -1597,6 +1686,7 @@ private fun GamesPosterGrid(
     focusedItemId: String?,
     showFocusEffects: Boolean,
     showNsfwPoster: Boolean,
+    prefetchEnabled: Boolean = true,
     firstItemFocusRequester: FocusRequester? = null,
     itemFocusRequester: ((String) -> FocusRequester)? = null,
     focusEnabled: Boolean = true,
@@ -1738,6 +1828,7 @@ private fun GamesPosterGrid(
                 showNsfwPoster = showNsfwPoster,
                 posterWidthPx = compactPosterWidthPx,
                 posterHeightPx = compactPosterHeightPx,
+                enabled = prefetchEnabled,
                 visibleRangeProvider = {
                     val info = rowState.layoutInfo.visibleItemsInfo
                     val first = info.firstOrNull()?.index ?: -1
@@ -1821,13 +1912,16 @@ private fun GamesPosterGrid(
         val posterWidthPx = with(density) { cellWidthDp.roundToPx().coerceAtLeast(1) }
         val posterHeightPx = (posterWidthPx * 1.5f).roundToInt().coerceAtLeast(1)
         val posterScope = rememberCoroutineScope()
-        val gameFocusRequesters = remember(games.size) { List(games.size) { FocusRequester() } }
+        val gameFocusRequesters = remember(showFocusEffects, games.size) {
+            if (showFocusEffects) List(games.size) { FocusRequester() } else emptyList()
+        }
 
         PrefetchPosterImages(
             games = games,
             showNsfwPoster = showNsfwPoster,
             posterWidthPx = posterWidthPx,
             posterHeightPx = posterHeightPx,
+            enabled = prefetchEnabled,
             visibleRangeProvider = {
                 val info = gridState.layoutInfo.visibleItemsInfo
                 val first = info.firstOrNull()?.index ?: -1
@@ -1865,6 +1959,20 @@ private fun GamesPosterGrid(
                     } else {
                         Modifier
                     }
+                    val focusGridModifier = if (showFocusEffects && gameFocusRequesters.isNotEmpty()) {
+                        Modifier
+                            .focusRequester(gameFocusRequesters[index])
+                            .flatGridDownNextRowFallback(
+                                index = index,
+                                columns = columnCount,
+                                itemCount = games.size,
+                                gridState = gridState,
+                                requesters = gameFocusRequesters,
+                                scope = posterScope
+                            )
+                    } else {
+                        Modifier
+                    }
                     val handleClick = remember(game, onGameClick) { { onGameClick(game) } }
                     val handleLongClick = remember(game, onGameLongClick) { { onGameLongClick(game) } }
                     val handleFocus = remember(game, onGameFocus) { { onGameFocus(game) } }
@@ -1881,18 +1989,10 @@ private fun GamesPosterGrid(
                         onFocus = handleFocus,
                         modifier = Modifier
                             .focusProperties { canFocus = focusEnabled }
-                            .focusRequester(gameFocusRequesters[index])
+                            .then(focusGridModifier)
                             .then(firstItemModifier)
                             .then(itemRequesterModifier(game.id))
                             .then(if (isLeftmost) Modifier.focusProperties { left = FocusRequester.Cancel } else Modifier)
-                            .flatGridDownNextRowFallback(
-                                index = index,
-                                columns = columnCount,
-                                itemCount = games.size,
-                                gridState = gridState,
-                                requesters = gameFocusRequesters,
-                                scope = posterScope
-                            )
                             .navigateUpToNavFromTopRow(index < columnCount, onNavigateUpToNav)
                     )
                 }
@@ -1907,11 +2007,12 @@ private fun PrefetchPosterImages(
     showNsfwPoster: Boolean,
     posterWidthPx: Int,
     posterHeightPx: Int,
+    enabled: Boolean,
     visibleRangeProvider: () -> Pair<Int, Int>,
 ) {
     val context = LocalContext.current
-    LaunchedEffect(games, showNsfwPoster, posterWidthPx, posterHeightPx) {
-        if (games.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(enabled, games, showNsfwPoster, posterWidthPx, posterHeightPx) {
+        if (!enabled || games.isEmpty()) return@LaunchedEffect
         val loader = context.imageLoader
         val enqueuedUrls = HashSet<String>()
         snapshotFlow(visibleRangeProvider)
@@ -2039,6 +2140,7 @@ internal fun AppsAlphabeticalList(
     showFocusEffects: Boolean,
     listState: LazyListState,
     gridState: LazyGridState,
+    prefetchEnabled: Boolean = true,
     firstItemFocusRequester: FocusRequester? = null,
     focusEnabled: Boolean = true,
     configuredColumns: Int = 0,
@@ -2072,7 +2174,8 @@ internal fun AppsAlphabeticalList(
         layout = layout,
         configuredColumns = configuredColumns,
         listState = listState,
-        gridState = gridState
+        gridState = gridState,
+        enabled = prefetchEnabled
     )
 
     fun downNavigationModifier(
@@ -2545,6 +2648,7 @@ private fun PrefetchAppIcons(
     configuredColumns: Int,
     listState: LazyListState,
     gridState: LazyGridState,
+    enabled: Boolean,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -2561,8 +2665,8 @@ private fun PrefetchAppIcons(
     val miniIconSizePx = remember(iconSizePx) {
         (iconSizePx * 0.30f).roundToInt().coerceAtLeast(1)
     }
-    LaunchedEffect(entries, layout, configuredColumns, themedIcons, folderMembers, iconSizePx) {
-        if (entries.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(enabled, entries, layout, configuredColumns, themedIcons, folderMembers, iconSizePx) {
+        if (!enabled || entries.isEmpty()) return@LaunchedEffect
         val loader = context.imageLoader
         val enqueuedUrls = HashSet<String>()
         val usesGrid = layout != FavoritesLayout.TEXT || configuredColumns > 1

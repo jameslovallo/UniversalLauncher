@@ -63,6 +63,8 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -170,8 +172,8 @@ fun FavoritesHome(
     // Stable requesters for row-to-row D-pad movement. The implicit 2D focus search used to
     // escape the favorites page (and scroll the apps pager open), so vertical moves inside the
     // grid are wired explicitly instead.
-    val rowFocusRequesters = remember(favorites.size) {
-        List(favorites.size) { FocusRequester() }
+    val rowFocusRequesters = remember(showFocusEffects, favorites.size) {
+        if (showFocusEffects) List(favorites.size) { FocusRequester() } else emptyList()
     }
     // The TV favorites grid is laid out as explicit balanced rows, so it scrolls a list of
     // rows rather than a uniform grid.
@@ -395,19 +397,12 @@ fun FavoritesHome(
                             repeat(rowSize) { offset ->
                                 val index = rowStart + offset
                                 val app = favorites[index]
-                                AppTvCard(
-                                    app = app,
-                                    isFocused = app.id == focusedItemId,
-                                    showFocusEffects = showFocusEffects,
-                                    testTag = "favorite_app_${app.id}",
-                                    onClick = { onLaunchFavorite(app) },
-                                    onLongClick = { onLongPressFavorite(app) },
-                                    onFocus = { onFocusFavorite(app) },
-                                    modifier = Modifier
-                                        .width(cardWidth)
-                                        .focusProperties { canFocus = focusEnabled }
+                                val handleClick = remember(app, onLaunchFavorite) { { onLaunchFavorite(app) } }
+                                val handleLongClick = remember(app, onLongPressFavorite) { { onLongPressFavorite(app) } }
+                                val handleFocus = remember(app, onFocusFavorite) { { onFocusFavorite(app) } }
+                                val focusNavModifier = if (showFocusEffects && rowFocusRequesters.isNotEmpty()) {
+                                    Modifier
                                         .focusRequester(rowFocusRequesters[index])
-                                        .then(itemRequesterModifier(app.id))
                                         .favoriteRowDpadNavigation(
                                             index = index,
                                             rowIndex = rowIndexByItem[index],
@@ -417,6 +412,22 @@ fun FavoritesHome(
                                             requesters = rowFocusRequesters,
                                             onNavigateDownToAppList = onNavigateDownToAppList
                                         )
+                                } else {
+                                    Modifier
+                                }
+                                AppTvCard(
+                                    app = app,
+                                    isFocused = app.id == focusedItemId,
+                                    showFocusEffects = showFocusEffects,
+                                    testTag = "favorite_app_${app.id}",
+                                    onClick = handleClick,
+                                    onLongClick = handleLongClick,
+                                    onFocus = handleFocus,
+                                    modifier = Modifier
+                                        .width(cardWidth)
+                                        .focusProperties { canFocus = focusEnabled }
+                                        .then(itemRequesterModifier(app.id))
+                                        .then(focusNavModifier)
                                         .then(
                                             if (index == 0) {
                                                 firstItemFocusRequester?.let {
@@ -686,15 +697,22 @@ private fun FavoritesClockAndDate(
 ) {
     val context = LocalContext.current
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    var is24Hour by remember(context) { mutableStateOf(DateFormat.is24HourFormat(context)) }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        now = System.currentTimeMillis()
+        is24Hour = DateFormat.is24HourFormat(context)
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
-            now = System.currentTimeMillis()
-            delay(1_000L)
+            val current = System.currentTimeMillis()
+            now = current
+            val delayMs = (60_000L - (current % 60_000L)).coerceIn(500L, 60_000L)
+            delay(delayMs)
         }
     }
 
-    val is24Hour = remember(context) { DateFormat.is24HourFormat(context) }
     // On TV the clock, date and weather are display-only: D-pad Up from the favorites grid
     // goes straight to the top navigation bar instead of stepping through them. The one
     // exception is an empty favorites page, where the date row is the only target on the
@@ -710,12 +728,24 @@ private fun FavoritesClockAndDate(
     }
     val nowDate = remember(now) { Date(now) }
 
-    val clockInteraction = remember { MutableInteractionSource() }
-    val clockFocused = showFocusEffects && clockInteraction.collectIsFocusedAsState().value
-    val dateInteraction = remember { MutableInteractionSource() }
-    val dateFocused = showFocusEffects && dateInteraction.collectIsFocusedAsState().value
-    val weatherInteraction = remember { MutableInteractionSource() }
-    val weatherFocused = showFocusEffects && weatherInteraction.collectIsFocusedAsState().value
+    val clockInteraction = if (showFocusEffects && clockCanFocus) {
+        remember { MutableInteractionSource() }
+    } else {
+        null
+    }
+    val clockFocused = clockInteraction != null && clockInteraction.collectIsFocusedAsState().value
+    val dateInteraction = if (showFocusEffects && dateRowCanFocus) {
+        remember { MutableInteractionSource() }
+    } else {
+        null
+    }
+    val dateFocused = dateInteraction != null && dateInteraction.collectIsFocusedAsState().value
+    val weatherInteraction = if (showFocusEffects && clockCanFocus) {
+        remember { MutableInteractionSource() }
+    } else {
+        null
+    }
+    val weatherFocused = weatherInteraction != null && weatherInteraction.collectIsFocusedAsState().value
 
     Text(
         text = timeFormatter.format(nowDate),
