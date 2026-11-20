@@ -2061,11 +2061,6 @@ internal fun AppsAlphabeticalList(
     val firstAppId = remember(entries) {
         entries.filterIsInstance<AppListEntry.App>().firstOrNull()?.item?.id
     }
-    val activeLetter = remember(entries, focusedItemId) {
-        entries.filterIsInstance<AppListEntry.App>()
-            .firstOrNull { it.item.id == focusedItemId }
-            ?.let { sectionFor(it.item) }
-    }
 
     // Draw edge to edge behind the navigation bar / app-switcher drag handle. The bar
     // inset moves into each list's scrollable content padding instead, so rows can pass
@@ -2521,7 +2516,6 @@ internal fun AppsAlphabeticalList(
             if (railVisible) {
                 AlphabetRail(
                     letters = letters,
-                    activeLetter = activeLetter,
                     onLetterSelected = onLetterSelected
                 )
             }
@@ -2676,16 +2670,13 @@ private fun AppLetterHeader(letter: String) {
 @Composable
 private fun AlphabetRail(
     letters: List<String>,
-    activeLetter: String?,
     onLetterSelected: (String) -> Unit
 ) {
     // Measure the rail and the packed letter column inside it, so a touch maps onto the
     // letters the user can actually see (the column is bottom-aligned, not full height).
     var railHeight by remember { mutableIntStateOf(0) }
     var lettersHeight by remember { mutableIntStateOf(0) }
-    var draggedLetter by remember { mutableStateOf<String?>(null) }
     val haptics = LocalHapticFeedback.current
-    val highlightedLetter = draggedLetter ?: activeLetter
 
     // Letters sit in a tightly packed column with a little breathing room between
     // them, lifted off the bottom edge by roughly five letter heights so the rail does
@@ -2725,7 +2716,6 @@ private fun AlphabetRail(
                     fun report(letter: String?) {
                         if (letter == null || letter == lastReported) return
                         lastReported = letter
-                        draggedLetter = letter
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onLetterSelected(letter)
                     }
@@ -2738,7 +2728,6 @@ private fun AlphabetRail(
                         change.consume()
                         report(letterAt(change.position.y))
                     }
-                    draggedLetter = null
                 }
             }
             .testTag("apps_alphabet_rail"),
@@ -2754,7 +2743,6 @@ private fun AlphabetRail(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 letters.forEach { letter ->
-                    val isActive = letter == highlightedLetter
                     if (letter == SECTION_FOLDERS) {
                         Box(
                             modifier = Modifier
@@ -2766,8 +2754,7 @@ private fun AlphabetRail(
                             Icon(
                                 imageVector = Icons.Default.Folder,
                                 contentDescription = "Folders",
-                                tint = if (isActive) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(11.dp)
                             )
                         }
@@ -2776,9 +2763,8 @@ private fun AlphabetRail(
                             text = letter,
                             fontSize = 10.sp,
                             lineHeight = 13.sp,
-                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isActive) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Normal,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
                                 .padding(horizontal = 4.dp)
                                 .testTag("alphabet_rail_letter_$letter")

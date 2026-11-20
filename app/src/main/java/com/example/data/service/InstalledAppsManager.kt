@@ -76,39 +76,76 @@ class InstalledAppsManager(private val context: Context) {
         // One snapshot for the whole scan keeps icon/banner cleanup linear in package count.
         val iconCache = AppIconStore.snapshot(context)
 
-        resolveInfos.filter { it.activityInfo.packageName != myPackageName }.map { resolveInfo ->
-            val pkg = resolveInfo.activityInfo.packageName
-            val label = resolveInfo.loadLabel(packageManager).toString()
-            val activityName = resolveInfo.activityInfo.name
-            val appInfo = resolveInfo.activityInfo.applicationInfo
-            val systemIsGame = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                appInfo.category == ApplicationInfo.CATEGORY_GAME
-            } else {
-                @Suppress("DEPRECATION")
-                (appInfo.flags and ApplicationInfo.FLAG_IS_GAME) != 0
-            }
-            val isGameApp = resolveInstalledAppIsGame(pkg, systemIsGame)
+        resolveInfos
+            .filter { it.activityInfo.packageName != myPackageName }
+            .map { buildInstalledAppItem(it, iconCache) }
+            .sortedBy { it.title.lowercase() }
+    }
 
-            // Render the app icon (and 16:9 TV banner when declared) to cached PNGs.
-            val versionStamp = packageVersionStamp(pkg)
-            val iconUri = AppIconStore.iconUrl(context, pkg, versionStamp, iconCache)
-            val bannerUri = AppIconStore.bannerUrl(context, pkg, versionStamp, activityName, iconCache)
+    /**
+     * Query launch metadata for a single [packageName] without scanning every package on
+     * the device. Returns null when the package is uninstalled, disabled, or has no
+     * launchable activity.
+     */
+    suspend fun getInstalledApp(packageName: String): GameItem? = withContext(Dispatchers.IO) {
+        if (packageName.isBlank() || packageName == context.packageName) return@withContext null
+        val preferLeanback = isTelevisionConfiguration(context.resources.configuration, context)
+        val launcherIntent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            setPackage(packageName)
+        }
+        val leanbackIntent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
+            setPackage(packageName)
+        }
+        val primary = queryIntentActivitiesCompat(if (preferLeanback) leanbackIntent else launcherIntent)
+        val resolveInfo = primary.firstOrNull()
+            ?: queryIntentActivitiesCompat(if (preferLeanback) launcherIntent else leanbackIntent)
+                .firstOrNull()
+            ?: return@withContext null
+        buildInstalledAppItem(resolveInfo, iconCache = null)
+    }
 
-            GameItem(
-                id = "app_$pkg",
-                title = label,
-                type = GameType.INSTALLED_APP,
-                isGame = isGameApp,
-                packageName = pkg,
-                activityName = activityName,
-                heroBannerUrl = bannerUri,
-                iconUrl = iconUri,
-                genre = if (isGameApp) "Installed Game" else "Installed Application",
-                publisher = pkg,
-                description = "Installed Android app ($label)",
-                tags = if (isGameApp) "Installed,Game,Android" else "Installed,Android,App"
-            )
-        }.sortedBy { it.title.lowercase() }
+    suspend fun evictPackageCache(packageName: String) {
+        if (packageName.isBlank()) return
+        AppIconStore.evictPackage(context, packageName)
+    }
+
+    private suspend fun buildInstalledAppItem(
+        resolveInfo: ResolveInfo,
+        iconCache: AppIconStore.DirectorySnapshot?
+    ): GameItem {
+        val pkg = resolveInfo.activityInfo.packageName
+        val label = resolveInfo.loadLabel(packageManager).toString()
+        val activityName = resolveInfo.activityInfo.name
+        val appInfo = resolveInfo.activityInfo.applicationInfo
+        val systemIsGame = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            appInfo.category == ApplicationInfo.CATEGORY_GAME
+        } else {
+            @Suppress("DEPRECATION")
+            (appInfo.flags and ApplicationInfo.FLAG_IS_GAME) != 0
+        }
+        val isGameApp = resolveInstalledAppIsGame(pkg, systemIsGame)
+
+        // Render the app icon (and 16:9 TV banner when declared) to cached PNGs.
+        val versionStamp = packageVersionStamp(pkg)
+        val iconUri = AppIconStore.iconUrl(context, pkg, versionStamp, iconCache)
+        val bannerUri = AppIconStore.bannerUrl(context, pkg, versionStamp, activityName, iconCache)
+
+        return GameItem(
+            id = "app_$pkg",
+            title = label,
+            type = GameType.INSTALLED_APP,
+            isGame = isGameApp,
+            packageName = pkg,
+            activityName = activityName,
+            heroBannerUrl = bannerUri,
+            iconUrl = iconUri,
+            genre = if (isGameApp) "Installed Game" else "Installed Application",
+            publisher = pkg,
+            description = "Installed Android app ($label)",
+            tags = if (isGameApp) "Installed,Game,Android" else "Installed,Android,App"
+        )
     }
 
     /** Resolves and caches the default launcher icon URL for an installed package. */

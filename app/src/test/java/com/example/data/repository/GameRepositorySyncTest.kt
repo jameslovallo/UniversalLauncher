@@ -217,4 +217,106 @@ class GameRepositorySyncTest {
         assertEquals("Installed,Android,App", byId.getValue("app_com.nvidia.geforcenow").tags)
         assertEquals(true, byId.getValue("moonlight_portal2").isGame)
     }
+
+    @Test
+    fun `syncInstalledApps removes uninstalled non-tombstone installed app`(): Unit = runBlocking {
+        repository.syncInstalledApps()
+        dao.insertGame(
+            GameItem(
+                id = "app_com.uninstalled.liveapp",
+                title = "Uninstalled App",
+                type = GameType.INSTALLED_APP,
+                isGame = false,
+                packageName = "com.uninstalled.liveapp",
+                isDeleted = false
+            )
+        )
+
+        repository.syncInstalledApps()
+
+        val allIds = dao.getAllItemsNow().map { it.id }
+        assertEquals(listOf("app_com.example.demoapp"), allIds)
+    }
+
+    @Test
+    fun `removeUninstalledPackage immediately deletes app and its pinned shortcuts without touching synced shortcuts`(): Unit = runBlocking {
+        val pkg = "com.example.demoapp"
+        repository.syncInstalledApps()
+        dao.insertGames(
+            listOf(
+                GameItem(
+                    id = "pinned_${pkg}_s1",
+                    title = "Pinned Shortcut",
+                    type = GameType.SHORTCUT,
+                    isGame = false,
+                    packageName = pkg,
+                    activityName = "s1",
+                    isPinned = true
+                ),
+                GameItem(
+                    id = "pinned_${pkg}_synced",
+                    title = "Synced Shortcut",
+                    type = GameType.SHORTCUT,
+                    isGame = true,
+                    packageName = pkg,
+                    activityName = "synced",
+                    isPinned = false
+                )
+            )
+        )
+
+        val removed = repository.removeUninstalledPackage(pkg)
+
+        assertEquals(true, removed)
+        val remaining = dao.getAllItemsNow()
+        assertEquals(listOf("pinned_${pkg}_synced"), remaining.map { it.id })
+
+        // Unrelated package removal does not trigger Room invalidations.
+        var extraEmission: List<GameItem>? = null
+        val collectorJob = launch(Dispatchers.IO) {
+            extraEmission = withTimeoutOrNull(250L) {
+                repository.allGames.drop(1).first()
+            }
+        }
+        val unrelatedRemoved = repository.removeUninstalledPackage("com.never.existed")
+        collectorJob.join()
+        assertEquals(false, unrelatedRemoved)
+        assertNull(extraEmission)
+    }
+
+    @Test
+    fun `syncInstalledPackage upserts newly installed single package without full scan`(): Unit = runBlocking {
+        repository.syncInstalledApps()
+        val shadowPm = shadowOf(app.packageManager)
+        val newPkg = "com.example.freshinstall"
+        val packageInfo = PackageInfo().apply {
+            packageName = newPkg
+            lastUpdateTime = 3000L
+            applicationInfo = ApplicationInfo().apply {
+                packageName = newPkg
+            }
+        }
+        shadowPm.installPackage(packageInfo)
+        val resolveInfo = ResolveInfo().apply {
+            activityInfo = ActivityInfo().apply {
+                packageName = newPkg
+                name = "$newPkg.MainActivity"
+                applicationInfo = packageInfo.applicationInfo
+            }
+            nonLocalizedLabel = "Fresh Install"
+        }
+        @Suppress("DEPRECATION")
+        shadowPm.addResolveInfoForIntent(
+            Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                setPackage(newPkg)
+            },
+            resolveInfo
+        )
+
+        val added = repository.syncInstalledPackage(newPkg)
+        requireNotNull(added)
+        assertEquals("Fresh Install", added.title)
+        assertEquals(true, dao.getGameById("app_$newPkg") != null)
+    }
 }

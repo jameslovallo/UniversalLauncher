@@ -122,4 +122,22 @@ class LauncherViewModelFavoritesSnapshotTest {
         assertEquals(listOf(second), FavoritesSnapshotStore.restore(prefs))
         assertTrue(viewModel.favoriteApps.value.map { it.id } == listOf(second.id))
     }
+
+    @Test
+    fun `package removal event removes deleted app from favorites and snapshot immediately`() = runBlocking {
+        val first = favorite("app_com.removed.pkg", "Removed", 0)
+        val second = favorite("app_com.kept.pkg", "Kept", 1)
+        withContext(Dispatchers.IO) { dao.insertGames(listOf(first, second)) }
+
+        val viewModel = LauncherViewModel(app).also { createdViewModel = it }
+        subscribeToFavorites(viewModel)
+
+        awaitCondition { viewModel.favoriteApps.value.size == 2 }
+
+        viewModel.handlePackageRemoved("com.removed.pkg")
+
+        awaitCondition { viewModel.favoriteApps.value.map { it.id } == listOf(second.id) }
+        assertEquals(listOf(second), FavoritesSnapshotStore.restore(prefs))
+        assertEquals(null, withContext(Dispatchers.IO) { dao.getGameById(first.id) })
+    }
 }

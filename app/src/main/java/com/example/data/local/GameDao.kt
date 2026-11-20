@@ -49,6 +49,9 @@ interface GameDao {
     @Query("SELECT * FROM games WHERE id = :id LIMIT 1")
     suspend fun getGameById(id: String): GameItem?
 
+    @Query("SELECT * FROM games WHERE packageName = :packageName")
+    suspend fun getGamesByPackageNameNow(packageName: String): List<GameItem>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertGames(games: List<GameItem>)
 

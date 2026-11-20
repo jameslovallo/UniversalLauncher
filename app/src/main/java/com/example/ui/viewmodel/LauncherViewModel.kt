@@ -3,12 +3,20 @@ package com.example.ui.viewmodel
 import android.app.Activity
 import android.app.Application
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.LauncherApps
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
+import android.os.UserHandle
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.GameItem
@@ -299,6 +307,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private var driveDevicePollJob: Job? = null
     private var isInteractiveDriveAuthActive = false
     private var lastDriveAuthLaunchElapsedMs = 0L
+    private var launcherAppsMonitor: Pair<LauncherApps, LauncherApps.Callback>? = null
+    private var packageBroadcastReceiver: BroadcastReceiver? = null
 
     private val _gamesRefreshing = MutableStateFlow(false)
     val gamesRefreshing: StateFlow<Boolean> = _gamesRefreshing.asStateFlow()
@@ -412,6 +422,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         // pack re-scan can stay here: it only refreshes the installed-pack list and
         // re-applies remembered overrides.
         refreshIconPacks()
+        registerPackageMonitor()
     }
 
     /**
@@ -2029,6 +2040,146 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 loadDefaultThemeIcons()
             }
         }
+    }
+
+    private fun registerPackageMonitor() {
+        val appContext = getApplication<Application>()
+        val launcherApps = appContext.getSystemService(LauncherApps::class.java)
+        if (launcherApps != null) {
+            val callback = object : LauncherApps.Callback() {
+                override fun onPackageRemoved(packageName: String, user: UserHandle) {
+                    if (user != Process.myUserHandle()) return
+                    handlePackageRemoved(packageName)
+                }
+
+                override fun onPackageAdded(packageName: String, user: UserHandle) {
+                    if (user != Process.myUserHandle()) return
+                    handlePackageAddedOrChanged(packageName)
+                }
+
+                override fun onPackageChanged(packageName: String, user: UserHandle) {
+                    if (user != Process.myUserHandle()) return
+                    handlePackageAddedOrChanged(packageName)
+                }
+
+                override fun onPackagesAvailable(
+                    packageNames: Array<out String>,
+                    user: UserHandle,
+                    replacing: Boolean
+                ) {
+                    if (user != Process.myUserHandle()) return
+                    packageNames.forEach(::handlePackageAddedOrChanged)
+                }
+
+                override fun onPackagesUnavailable(
+                    packageNames: Array<out String>,
+                    user: UserHandle,
+                    replacing: Boolean
+                ) {
+                    if (replacing || user != Process.myUserHandle()) return
+                    packageNames.forEach(::handlePackageRemoved)
+                }
+            }
+            launcherApps.registerCallback(callback, Handler(Looper.getMainLooper()))
+            launcherAppsMonitor = launcherApps to callback
+            return
+        }
+
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_FULLY_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_CHANGED)
+            addDataScheme("package")
+        }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val pkg = intent?.data?.schemeSpecificPart ?: return
+                when (intent.action) {
+                    Intent.ACTION_PACKAGE_FULLY_REMOVED -> handlePackageRemoved(pkg)
+                    Intent.ACTION_PACKAGE_REMOVED -> {
+                        if (!intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) {
+                            handlePackageRemoved(pkg)
+                        }
+                    }
+                    Intent.ACTION_PACKAGE_ADDED,
+                    Intent.ACTION_PACKAGE_CHANGED -> handlePackageAddedOrChanged(pkg)
+                }
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            appContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            appContext.registerReceiver(receiver, filter)
+        }
+        packageBroadcastReceiver = receiver
+    }
+
+    internal fun handlePackageRemoved(packageName: String) {
+        val selfPkg = getApplication<Application>().packageName
+        if (packageName.isBlank() || packageName == selfPkg) return
+        if (_focusedItemId.value == "app_$packageName") {
+            _focusedItemId.value = null
+        }
+        if (_contextMenuItem.value?.let { it.type == GameType.INSTALLED_APP && it.packageName == packageName } == true) {
+            _contextMenuItem.value = null
+        }
+        if (_favoriteActionItem.value?.let { it.type == GameType.INSTALLED_APP && it.packageName == packageName } == true) {
+            _favoriteActionItem.value = null
+        }
+        if (_editingItem.value?.let { it.type == GameType.INSTALLED_APP && it.packageName == packageName } == true) {
+            _editingItem.value = null
+        }
+        viewModelScope.launch {
+            val removed = repository.removeUninstalledPackage(packageName)
+            val activePack = _selectedIconPack.value
+            if (removed && activePack != null) {
+                loadIconPack(activePack)
+            }
+            if (packageName == activePack ||
+                _installedIconPacks.value.any { it.packageName == packageName }
+            ) {
+                refreshIconPacks()
+            }
+            if (_weatherApps.value.any { it.packageName == packageName }) {
+                refreshWeatherApps()
+            }
+        }
+    }
+
+    internal fun handlePackageAddedOrChanged(packageName: String) {
+        val selfPkg = getApplication<Application>().packageName
+        if (packageName.isBlank() || packageName == selfPkg) return
+        viewModelScope.launch {
+            val upserted = repository.syncInstalledPackage(packageName)
+            if (upserted != null) {
+                if (upserted.isGame) {
+                    repository.ensureAutoPoster(upserted)
+                }
+                val activePack = _selectedIconPack.value
+                if (activePack != null) {
+                    loadIconPack(activePack)
+                } else {
+                    loadDefaultThemeIcons()
+                }
+            }
+            if (packageName == _selectedIconPack.value) {
+                refreshIconPacks()
+            }
+        }
+    }
+
+    override fun onCleared() {
+        launcherAppsMonitor?.let { (service, callback) ->
+            runCatching { service.unregisterCallback(callback) }
+        }
+        launcherAppsMonitor = null
+        packageBroadcastReceiver?.let { receiver ->
+            runCatching { getApplication<Application>().unregisterReceiver(receiver) }
+        }
+        packageBroadcastReceiver = null
+        super.onCleared()
     }
 
     /**

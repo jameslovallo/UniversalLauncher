@@ -125,23 +125,75 @@ class GameRepository(
         val existingApps = gameDao.getGamesByTypeNow(GameType.INSTALLED_APP)
         val existingById = existingApps.associateBy { it.id }
 
-        // A tombstone whose package is gone entirely can be dropped: if the user ever
-        // reinstalls it, the app should show up in the library again from scratch.
+        // Drop any INSTALLED_APP row whose package is no longer installed (both live apps
+        // uninstalled outside the launcher and tombstones so a reinstall starts fresh).
+        // Keep live rows when the package query came back completely empty so a transient
+        // pre-unlock PackageManager state (or unit test without mocked apps) cannot wipe data.
+        val hasInstalledApps = installedIds.isNotEmpty()
         val toDeleteIds = existingApps
-            .filter { it.isDeleted && it.id !in installedIds }
+            .filter { (hasInstalledApps || it.isDeleted) && it.id !in installedIds }
             .map { it.id }
 
         val toUpsert = mutableListOf<GameItem>()
         for (app in installed) {
             val existing = existingById[app.id] ?: gameDao.getGameById(app.id)
-            if (existing == null) {
-                toUpsert += app
-            } else if (!existing.isDeleted) {
+            mergeInstalledAppUpdate(app, existing)?.let { toUpsert += it }
+        }
+
+        if (toUpsert.isNotEmpty() || toDeleteIds.isNotEmpty()) {
+            gameDao.syncInstalledAppChanges(toUpsert, toDeleteIds)
+        }
+    }
+
+    /**
+     * Removes the Room row(s) and cached icon/banner files for [packageName] in O(1) when
+     * the system reports the package has been uninstalled, avoiding a full-device scan.
+     */
+    suspend fun removeUninstalledPackage(packageName: String): Boolean {
+        if (packageName.isBlank()) return false
+        val appId = "app_$packageName"
+        val existingApp = gameDao.getGameById(appId)
+        val pinnedShortcuts = gameDao.getGamesByPackageNameNow(packageName)
+            .filter { it.type == GameType.SHORTCUT && it.isPinned }
+        val toDeleteIds = buildList {
+            if (existingApp != null) add(existingApp.id)
+            pinnedShortcuts.forEach { add(it.id) }
+        }.distinct()
+
+        if (toDeleteIds.isNotEmpty()) {
+            gameDao.deleteGamesByIds(toDeleteIds)
+        }
+        installedAppsManager.evictPackageCache(packageName)
+        return toDeleteIds.isNotEmpty()
+    }
+
+    /**
+     * Syncs a single installed/updated [packageName] in O(1) without rescanning every app
+     * on the device. Removes its entry if the package no longer exposes a launcher activity.
+     */
+    suspend fun syncInstalledPackage(packageName: String): GameItem? {
+        if (packageName.isBlank()) return null
+        val app = installedAppsManager.getInstalledApp(packageName)
+        if (app == null) {
+            removeUninstalledPackage(packageName)
+            return null
+        }
+        val existing = gameDao.getGameById(app.id)
+        val updated = mergeInstalledAppUpdate(app, existing) ?: return null
+        gameDao.insertGame(updated)
+        return updated
+    }
+
+    private fun mergeInstalledAppUpdate(app: GameItem, existing: GameItem?): GameItem? =
+        when {
+            existing == null -> app
+            existing.isDeleted -> null
+            else -> {
                 // A customized item keeps its user-chosen name, icon and artwork; only the
                 // launch target is refreshed from the package.
                 val keepCustomIcon = !existing.iconUrl.isNullOrBlank() &&
                     !existing.iconUrl.contains("/app_icons/")
-                val updated = if (existing.isCustomized) {
+                val merged = if (existing.isCustomized) {
                     existing.copy(
                         packageName = app.packageName,
                         activityName = app.activityName,
@@ -157,16 +209,9 @@ class GameRepository(
                         heroBannerUrl = app.heroBannerUrl
                     )
                 }
-                if (updated != existing) {
-                    toUpsert += updated
-                }
+                merged.takeIf { it != existing }
             }
         }
-
-        if (toUpsert.isNotEmpty() || toDeleteIds.isNotEmpty()) {
-            gameDao.syncInstalledAppChanges(toUpsert, toDeleteIds)
-        }
-    }
 
     /**
      * One-time migration for existing databases that previously categorized installed

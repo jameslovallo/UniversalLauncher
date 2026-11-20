@@ -32,6 +32,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.down
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -41,8 +42,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.printToString
+import androidx.compose.ui.test.up
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.example.R
@@ -1492,5 +1495,46 @@ class TvSupportAndLayoutTest {
         composeRule.waitForIdle()
         assertEquals(1, cancelCalls)
         composeRule.onNodeWithTag("drive_device_auth_dialog").assertDoesNotExist()
+    }
+
+    @Test
+    fun `AppsAlphabeticalList letter rail shows no focus styling and still jumps to selected letter`() {
+        val selected = mutableListOf<String>()
+        val apps = listOf(
+            sampleApp("app_a", "Alpha"),
+            sampleApp("app_b", "Bravo")
+        )
+
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.size(width = 400.dp, height = 600.dp)) {
+                    AppsAlphabeticalList(
+                        entries = buildAppListEntries(apps),
+                        focusedItemId = "app_a",
+                        layout = FavoritesLayout.TEXT,
+                        showFocusEffects = true,
+                        listState = rememberLazyListState(),
+                        gridState = rememberLazyGridState(),
+                        showAlphabetRail = true,
+                        onAppClick = {},
+                        onAppLongClick = {},
+                        onLetterSelected = { selected += it }
+                    )
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("apps_alphabet_rail").assertIsDisplayed()
+        composeRule.onNodeWithTag("alphabet_rail_letter_A").assertIsDisplayed()
+        composeRule.onNodeWithTag("alphabet_rail_letter_B").assertIsDisplayed()
+
+        // Verify clicking on B in the rail triggers selection cleanly without crashing or focusing rail letters.
+        composeRule.onNodeWithTag("alphabet_rail_letter_B").performTouchInput {
+            down(center)
+            up()
+        }
+        composeRule.waitForIdle()
+        assertTrue(selected.isNotEmpty())
     }
 }

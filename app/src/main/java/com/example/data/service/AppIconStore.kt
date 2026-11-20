@@ -177,6 +177,19 @@ object AppIconStore {
         return runCatching { packageManager.getApplicationBanner(packageName) }.getOrNull()
     }
 
+    /** Deletes any cached icon and banner PNGs belonging to [packageName]. */
+    suspend fun evictPackage(context: Context, packageName: String) = withContext(Dispatchers.IO) {
+        val safePrefix = "${sanitize(packageName)}-"
+        runCatching {
+            File(context.filesDir, DIR)
+                .listFiles { _, name -> name.startsWith(safePrefix) }
+                ?.forEach { it.delete() }
+            File(context.filesDir, BANNERS_DIR)
+                .listFiles { _, name -> name.startsWith(safePrefix) }
+                ?.forEach { it.delete() }
+        }
+    }
+
     private fun sanitize(value: String): String =
         value.replace(Regex("[^A-Za-z0-9._-]"), "_")
 }
