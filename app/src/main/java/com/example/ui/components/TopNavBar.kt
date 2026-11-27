@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,6 +43,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -336,12 +338,10 @@ private fun DateWeatherHeader(
                     .testTag("topbar_weather"),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = weatherIcon(weather.weatherCode),
+                Image(
+                    painter = painterResource(weatherIconRes(weather.weatherCode, weather.isDay)),
                     contentDescription = weatherDescription(weather.weatherCode),
-                    tint = if (highlightWeather) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(22.dp)
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(

@@ -23,18 +23,23 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -84,7 +89,6 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -101,6 +105,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -154,6 +159,9 @@ fun AddContentModal(
 
     BackHandler(onBack = handleBack)
 
+    val bottomContentPadding =
+        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 24.dp
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -164,7 +172,7 @@ fun AddContentModal(
                 .fillMaxSize()
                 .statusBarsPadding()
                 .displayCutoutPadding()
-                .navigationBarsPadding(),
+                .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal)),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Column(
@@ -172,7 +180,6 @@ fun AddContentModal(
                     .fillMaxSize()
                     .widthIn(max = 760.dp)
                     .padding(horizontal = 24.dp)
-                    .padding(bottom = 24.dp)
             ) {
                 val primaryFocusRequesters = remember {
                     AddModalSubView.entries.associateWith { FocusRequester() }
@@ -241,6 +248,7 @@ fun AddContentModal(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
+                        .testTag("add_modal_content_container")
                 ) { targetView ->
                     val targetPrimaryFocusRequester = primaryFocusRequesters.getValue(targetView)
                     Box(
@@ -261,24 +269,28 @@ fun AddContentModal(
                                         selectedShortcutAppPackage = null
                                         onNavigateSubView(AddModalSubView.ADD_SYSTEM_SHORTCUT)
                                     },
+                                    bottomContentPadding = bottomContentPadding,
                                     firstOptionFocusRequester = targetPrimaryFocusRequester
                                 )
                             }
                             AddModalSubView.ADD_WEB_URL -> {
                                 AddShortcutFormView(
                                     onAddShortcut = onAddShortcut,
+                                    bottomContentPadding = bottomContentPadding,
                                     titleFocusRequester = targetPrimaryFocusRequester
                                 )
                             }
                             AddModalSubView.ADD_GFN -> {
                                 AddGfnSearchView(
                                     onGameSelected = onAddGfnGame,
+                                    bottomContentPadding = bottomContentPadding,
                                     searchFocusRequester = targetPrimaryFocusRequester
                                 )
                             }
                             AddModalSubView.ADD_LUNA -> {
                                 AddLunaSearchView(
                                     onGameSelected = onAddLunaGame,
+                                    bottomContentPadding = bottomContentPadding,
                                     searchFocusRequester = targetPrimaryFocusRequester
                                 )
                             }
@@ -289,6 +301,7 @@ fun AddContentModal(
                                     onAddLauncherShortcut = onAddSystemLauncherShortcut,
                                     onCreateShortcutResult = onCreateSystemShortcutResult,
                                     onOpenHomeSettings = onOpenHomeSettings,
+                                    bottomContentPadding = bottomContentPadding,
                                     searchFocusRequester = targetPrimaryFocusRequester
                                 )
                             }
@@ -307,7 +320,6 @@ private data class DiscoverOption(
     val icon: ImageVector,
     val title: String,
     val testTag: String,
-    val materialYouTonalBadge: Boolean = false,
     val onClick: () -> Unit
 )
 
@@ -373,6 +385,7 @@ internal fun OptionsSelectView(
     onSelectMoonlight: () -> Unit,
     onSelectWebUrl: () -> Unit,
     onSelectSystemShortcut: () -> Unit = {},
+    bottomContentPadding: Dp = 24.dp,
     firstOptionFocusRequester: FocusRequester = remember { FocusRequester() },
     iconResolver: suspend (Context, Map<String, String>) -> Map<String, String> = { ctx, themed ->
         resolveDiscoverOptionIcons(ctx, themed)
@@ -422,7 +435,6 @@ internal fun OptionsSelectView(
             icon = Icons.Default.Android,
             title = "System Shortcut",
             testTag = "option_add_system_shortcut",
-            materialYouTonalBadge = true,
             onClick = onSelectSystemShortcut
         )
     )
@@ -445,7 +457,7 @@ internal fun OptionsSelectView(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = viewportHeight)
-                    .padding(vertical = 12.dp),
+                    .padding(top = 12.dp, bottom = bottomContentPadding),
                 verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -460,7 +472,6 @@ internal fun OptionsSelectView(
                                     icon = option.icon,
                                     appIconUrl = resolvedIcons[option.testTag],
                                     title = option.title,
-                                    materialYouTonalBadge = option.materialYouTonalBadge,
                                     onClick = option.onClick,
                                     testTag = option.testTag,
                                     modifier = Modifier
@@ -485,7 +496,6 @@ internal fun OptionsSelectView(
                             icon = option.icon,
                             appIconUrl = resolvedIcons[option.testTag],
                             title = option.title,
-                            materialYouTonalBadge = option.materialYouTonalBadge,
                             onClick = option.onClick,
                             testTag = option.testTag,
                             modifier = Modifier
@@ -504,7 +514,6 @@ private fun OptionCard(
     icon: ImageVector,
     appIconUrl: String?,
     title: String,
-    materialYouTonalBadge: Boolean = false,
     onClick: () -> Unit,
     testTag: String,
     modifier: Modifier = Modifier
@@ -559,38 +568,19 @@ private fun OptionCard(
                         .testTag("${testTag}_app_icon")
                 )
             } else {
-                val badgeModifier = if (materialYouTonalBadge) {
-                    Modifier
-                        .size(54.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.primaryContainer,
-                                    MaterialTheme.colorScheme.tertiaryContainer
-                                )
-                            )
-                        )
-                        .border(
-                            width = 1.dp,
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
-                            shape = RoundedCornerShape(16.dp)
-                        )
-                } else {
-                    Modifier
+                Box(
+                    modifier = Modifier
                         .size(54.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.primaryContainer)
-                }
-                Box(
-                    modifier = badgeModifier.testTag("${testTag}_symbolic_icon"),
+                        .testTag("${testTag}_symbolic_icon"),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(if (materialYouTonalBadge) 30.dp else 28.dp)
+                        modifier = Modifier.size(28.dp)
                     )
                 }
             }
@@ -611,6 +601,7 @@ private fun OptionCard(
 @Composable
 private fun AddShortcutFormView(
     onAddShortcut: (title: String, url: String, posterUrl: String?) -> Unit,
+    bottomContentPadding: Dp = 24.dp,
     titleFocusRequester: FocusRequester = remember { FocusRequester() }
 ) {
     var title by remember { mutableStateOf("") }
@@ -654,7 +645,8 @@ private fun AddShortcutFormView(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = viewportHeight),
+                    .heightIn(min = viewportHeight)
+                    .padding(bottom = bottomContentPadding),
                 verticalArrangement = Arrangement.Center
             ) {
                 OutlinedTextField(
@@ -725,6 +717,7 @@ private fun AddShortcutFormView(
 @Composable
 internal fun AddGfnSearchView(
     onGameSelected: (GameItem) -> Unit,
+    bottomContentPadding: Dp = 24.dp,
     searchFocusRequester: FocusRequester = remember { FocusRequester() },
     catalogLoader: suspend (String) -> GeForceNowService.GfnBrowseResult = { query ->
         GeForceNowService.browseOrSearchCatalog(query)
@@ -907,7 +900,7 @@ internal fun AddGfnSearchView(
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(columns),
                     state = gridState,
-                    contentPadding = PaddingValues(vertical = 4.dp),
+                    contentPadding = PaddingValues(top = 4.dp, bottom = bottomContentPadding),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     horizontalArrangement = Arrangement.spacedBy(spacing),
                     modifier = Modifier.fillMaxSize().testTag("gfn_poster_grid")
@@ -994,6 +987,7 @@ internal fun AddGfnSearchView(
 @Composable
 internal fun AddLunaSearchView(
     onGameSelected: (GameItem) -> Unit,
+    bottomContentPadding: Dp = 24.dp,
     searchFocusRequester: FocusRequester = remember { FocusRequester() },
     catalogLoader: suspend (String) -> Result<List<GameItem>> = { query ->
         AmazonLunaService.searchCatalog(query)
@@ -1227,7 +1221,7 @@ internal fun AddLunaSearchView(
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(columns),
                     state = gridState,
-                    contentPadding = PaddingValues(vertical = 4.dp),
+                    contentPadding = PaddingValues(top = 4.dp, bottom = bottomContentPadding),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     horizontalArrangement = Arrangement.spacedBy(spacing),
                     modifier = Modifier

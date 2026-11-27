@@ -78,6 +78,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -96,6 +97,7 @@ internal fun AddSystemShortcutView(
     onAddLauncherShortcut: (SystemShortcutEntry) -> Unit,
     onCreateShortcutResult: (providerEntry: SystemShortcutEntry, resultIntent: Intent, onInvalid: () -> Unit) -> Unit,
     onOpenHomeSettings: (() -> Unit)? = null,
+    bottomContentPadding: Dp = 24.dp,
     searchFocusRequester: FocusRequester = remember { FocusRequester() },
     catalogLoader: suspend (Context) -> SystemShortcutCatalog = { ctx ->
         SystemShortcutService.loadCatalog(ctx)
@@ -317,7 +319,7 @@ internal fun AddSystemShortcutView(
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
                     LazyColumn(
-                        contentPadding = PaddingValues(vertical = 4.dp),
+                        contentPadding = PaddingValues(top = 4.dp, bottom = bottomContentPadding),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier
                             .fillMaxSize()
@@ -399,7 +401,7 @@ internal fun AddSystemShortcutView(
                 }
 
                 LazyColumn(
-                    contentPadding = PaddingValues(vertical = 4.dp),
+                    contentPadding = PaddingValues(top = 4.dp, bottom = bottomContentPadding),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier
                         .fillMaxSize()
@@ -486,7 +488,7 @@ internal fun AddSystemShortcutView(
                 )
 
                 LazyColumn(
-                    contentPadding = PaddingValues(vertical = 4.dp),
+                    contentPadding = PaddingValues(top = 4.dp, bottom = bottomContentPadding),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier
                         .fillMaxSize()

@@ -11,6 +11,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -188,5 +189,29 @@ class AddSystemShortcutViewTest {
         }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("add_modal_close_button").assertIsFocused()
+    }
+
+    @Test
+    fun `Discover subview content extends to bottom edge without bottom container inset clipping`() {
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.size(width = 411.dp, height = 800.dp)) {
+                    AddContentModal(
+                        subView = AddModalSubView.ADD_SYSTEM_SHORTCUT,
+                        onNavigateSubView = {},
+                        onOpenPlayStore = {},
+                        onOpenMoonlight = {},
+                        onAddShortcut = { _, _, _ -> },
+                        onAddGfnGame = {},
+                        onAddLunaGame = {},
+                        onDismiss = {}
+                    )
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        val contentBounds = composeRule.onNodeWithTag("add_modal_content_container").getUnclippedBoundsInRoot()
+        assertEquals(800f, contentBounds.bottom.value, 0.5f)
     }
 }

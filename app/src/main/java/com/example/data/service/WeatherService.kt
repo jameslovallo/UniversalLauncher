@@ -51,7 +51,8 @@ enum class TemperatureUnit(val label: String, val chipLabel: String) {
 data class WeatherInfo(
     val temperatureC: Double,
     val weatherCode: Int,
-    val locationLabel: String
+    val locationLabel: String,
+    val isDay: Boolean = true
 )
 
 private val FAHRENHEIT_COUNTRIES = setOf(
@@ -148,12 +149,13 @@ class WeatherService(private val context: Context) {
     private fun fetchCurrent(latitude: Double, longitude: Double, label: String): WeatherInfo {
         val url = "https://api.open-meteo.com/v1/forecast" +
             "?latitude=$latitude&longitude=$longitude" +
-            "&current=temperature_2m,weather_code&timezone=auto"
+            "&current=temperature_2m,weather_code,is_day&timezone=auto"
         val current = getJson(url).getJSONObject("current")
         return WeatherInfo(
             temperatureC = current.getDouble("temperature_2m"),
             weatherCode = current.optInt("weather_code", 0),
-            locationLabel = label
+            locationLabel = label,
+            isDay = current.optInt("is_day", 1) == 1
         )
     }
 

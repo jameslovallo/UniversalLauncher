@@ -2,6 +2,8 @@ package com.example.ui.components
 
 import android.content.res.Configuration
 import android.text.format.DateFormat
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,18 +36,13 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.Grain
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -84,12 +81,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.example.R
 import com.example.data.model.GameItem
 import com.example.data.model.GameType
 import com.example.data.service.TemperatureUnit
@@ -854,12 +853,10 @@ private fun FavoritesClockAndDate(
                     .testTag("favorites_weather"),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = weatherIcon(weather.weatherCode),
+                Image(
+                    painter = painterResource(weatherIconRes(weather.weatherCode, weather.isDay)),
                     contentDescription = weatherDescription(weather.weatherCode),
-                    tint = if (weatherFocused) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
@@ -1270,16 +1267,26 @@ private fun FavoriteActionRow(
     }
 }
 
-/** Material icon matching an Open-Meteo WMO weather code. */
-internal fun weatherIcon(code: Int) = when (code) {
-    0, 1 -> Icons.Default.WbSunny
-    2, 3 -> Icons.Default.Cloud
-    45, 48 -> Icons.Default.Cloud
-    51, 53, 55, 56, 57 -> Icons.Default.Grain
-    61, 63, 65, 66, 67, 80, 81, 82 -> Icons.Default.Grain
-    71, 73, 75, 77, 85, 86 -> Icons.Default.AcUnit
-    95, 96, 99 -> Icons.Default.FlashOn
-    else -> Icons.Default.Cloud
+/** Google Weather Filled (set-4) drawable matching an Open-Meteo WMO weather code. */
+@DrawableRes
+internal fun weatherIconRes(code: Int, isDay: Boolean = true): Int = when (code) {
+    0 -> if (isDay) R.drawable.ic_weather_clear_day else R.drawable.ic_weather_clear_night
+    1 -> if (isDay) R.drawable.ic_weather_mostly_clear_day else R.drawable.ic_weather_mostly_clear_night
+    2 -> if (isDay) R.drawable.ic_weather_partly_cloudy_day else R.drawable.ic_weather_partly_cloudy_night
+    3 -> R.drawable.ic_weather_cloudy
+    45, 48 -> R.drawable.ic_weather_fog
+    51, 53, 55, 56, 57 -> R.drawable.ic_weather_drizzle
+    61, 63 -> R.drawable.ic_weather_rain
+    65, 82 -> R.drawable.ic_weather_heavy_rain
+    66, 67 -> R.drawable.ic_weather_sleet_mixed
+    71, 77 -> R.drawable.ic_weather_flurries
+    73 -> R.drawable.ic_weather_snow
+    75 -> R.drawable.ic_weather_heavy_snow
+    80, 81 -> if (isDay) R.drawable.ic_weather_scattered_showers_day else R.drawable.ic_weather_scattered_showers_night
+    85, 86 -> if (isDay) R.drawable.ic_weather_scattered_snow_day else R.drawable.ic_weather_scattered_snow_night
+    95 -> if (isDay) R.drawable.ic_weather_thunderstorm_day else R.drawable.ic_weather_thunderstorm_night
+    96, 99 -> R.drawable.ic_weather_strong_thunderstorm
+    else -> R.drawable.ic_weather_cloudy
 }
 
 /** Short spoken description of an Open-Meteo WMO weather code. */
