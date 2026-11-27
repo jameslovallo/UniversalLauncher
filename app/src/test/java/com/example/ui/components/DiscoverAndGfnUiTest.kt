@@ -189,7 +189,8 @@ class DiscoverAndGfnUiTest {
             "option_add_gfn",
             "option_add_moonlight",
             "option_play_store",
-            "option_add_web_url"
+            "option_add_web_url",
+            "option_add_system_shortcut"
         )
         val tops = orderedTags.map { tag ->
             composeRule.onNodeWithTag(tag).assertIsDisplayed()
@@ -204,6 +205,7 @@ class DiscoverAndGfnUiTest {
         composeRule.onNodeWithTag("option_add_moonlight_app_icon", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("option_play_store_app_icon", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("option_add_web_url_symbolic_icon", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("option_add_system_shortcut_symbolic_icon", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test

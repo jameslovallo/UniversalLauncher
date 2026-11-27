@@ -26,6 +26,10 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.HOME" />
         </intent>
+        <!-- System & app shortcut creators for Discover -> System Shortcut. -->
+        <intent>
+            <action android:name="android.intent.action.CREATE_SHORTCUT" />
+        </intent>
         <!-- Installed icon packs. Each pack advertises one of the launcher theme actions
              below; without these queries Android 11+ hides them from the launcher. -->
         <intent>

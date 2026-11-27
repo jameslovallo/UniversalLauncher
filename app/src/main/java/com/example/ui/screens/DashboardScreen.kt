@@ -1279,6 +1279,11 @@ fun DashboardScreen(
                     onAddShortcut = { title, url, poster -> viewModel.addCustomShortcutToApps(title, url, poster) },
                     onAddGfnGame = { viewModel.addGfnGameToGames(it) },
                     onAddLunaGame = { viewModel.addLunaGameToGames(it) },
+                    onAddSystemLauncherShortcut = { viewModel.addSystemLauncherShortcut(it) },
+                    onCreateSystemShortcutResult = { provider, resultIntent, onInvalid ->
+                        viewModel.addCreatedSystemShortcut(provider, resultIntent, onInvalid)
+                    },
+                    onOpenHomeSettings = { viewModel.openDefaultLauncherSettings() },
                     onDismiss = { viewModel.closeAddModal() }
                 )
             }

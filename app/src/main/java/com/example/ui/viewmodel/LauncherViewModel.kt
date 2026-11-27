@@ -42,6 +42,8 @@ import com.example.data.service.LibrarySyncService
 import com.example.data.service.MOONLIGHT_PACKAGES
 import com.example.data.service.STREAMING_CLIENT_APP_PACKAGES
 import com.example.data.service.SteamGridDbService
+import com.example.data.service.SystemShortcutEntry
+import com.example.data.service.SystemShortcutService
 import com.example.data.service.TemperatureUnit
 import com.example.data.service.WeatherApp
 import com.example.data.service.WeatherInfo
@@ -81,7 +83,8 @@ enum class AddModalSubView {
     OPTIONS,
     ADD_GFN,
     ADD_LUNA,
-    ADD_WEB_URL
+    ADD_WEB_URL,
+    ADD_SYSTEM_SHORTCUT
 }
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
@@ -510,9 +513,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 when {
-                    // Locally pinned shortcut: let the system launch it with the
-                    // publisher's identity, which also works for non-exported targets.
-                    item.isPinned && pkg != null && shortcutId != null &&
+                    // Locally pinned or Discover-added LauncherApps shortcut: let the system
+                    // launch it with the publisher's identity (works for non-exported targets).
+                    (item.isPinned || item.id.startsWith(SystemShortcutService.SYSTEM_SHORTCUT_ID_PREFIX)) &&
+                        pkg != null && shortcutId != null &&
                         installedAppsManager.launchPinnedShortcut(pkg, shortcutId) -> Unit
 
                     // Moonlight games restored from another device are not pinned here.
@@ -1378,6 +1382,47 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             closeAddModal()
             _currentTab.value = MainLibraryTab.GAMES
         }
+    }
+
+    fun addSystemLauncherShortcut(entry: SystemShortcutEntry) {
+        viewModelScope.launch {
+            val item = SystemShortcutService.createGameItemFromLauncherShortcut(
+                getApplication(),
+                entry
+            )
+            saveAddedSystemShortcut(item)
+        }
+    }
+
+    fun addCreatedSystemShortcut(
+        providerEntry: SystemShortcutEntry,
+        resultIntent: Intent,
+        onInvalidResult: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val item = SystemShortcutService.createGameItemFromCreateShortcutResult(
+                getApplication(),
+                providerEntry,
+                resultIntent
+            )
+            if (item == null) {
+                onInvalidResult()
+                return@launch
+            }
+            saveAddedSystemShortcut(item)
+        }
+    }
+
+    private suspend fun saveAddedSystemShortcut(item: GameItem) {
+        if (!item.isGame) {
+            iconPackStore.saveBaseIconUrlIfUnset(item.id, item.iconUrl)
+        }
+        repository.insertUserGame(item)
+        if (item.isGame) {
+            repository.ensureAutoPoster(item)
+        }
+        closeAddModal()
+        _currentTab.value = if (item.isGame) MainLibraryTab.GAMES else MainLibraryTab.APPS
     }
 
     // Settings Modal

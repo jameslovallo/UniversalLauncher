@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.BackHandler
@@ -47,6 +48,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Link
@@ -82,6 +84,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -109,6 +112,7 @@ import com.example.data.service.AppIconStore
 import com.example.data.service.GeForceNowService
 import com.example.data.service.InstalledAppsManager
 import com.example.data.service.MOONLIGHT_PACKAGES
+import com.example.data.service.SystemShortcutEntry
 import com.example.ui.viewmodel.AddModalSubView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -123,13 +127,28 @@ fun AddContentModal(
     onAddShortcut: (title: String, url: String, posterUrl: String?) -> Unit,
     onAddGfnGame: (GameItem) -> Unit,
     onAddLunaGame: (GameItem) -> Unit = {},
+    onAddSystemLauncherShortcut: (SystemShortcutEntry) -> Unit = {},
+    onCreateSystemShortcutResult: (SystemShortcutEntry, Intent, () -> Unit) -> Unit = { _, _, _ -> },
+    onOpenHomeSettings: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
+    var selectedShortcutAppPackage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(subView) {
+        if (subView != AddModalSubView.ADD_SYSTEM_SHORTCUT) {
+            selectedShortcutAppPackage = null
+        }
+    }
+
     val handleBack: () -> Unit = {
-        if (subView != AddModalSubView.OPTIONS) {
-            onNavigateSubView(AddModalSubView.OPTIONS)
-        } else {
-            onDismiss()
+        when {
+            subView == AddModalSubView.ADD_SYSTEM_SHORTCUT && selectedShortcutAppPackage != null -> {
+                selectedShortcutAppPackage = null
+            }
+            subView != AddModalSubView.OPTIONS -> {
+                onNavigateSubView(AddModalSubView.OPTIONS)
+            }
+            else -> onDismiss()
         }
     }
 
@@ -204,6 +223,7 @@ fun AddContentModal(
                             AddModalSubView.ADD_GFN -> "Add GeForce Now Game"
                             AddModalSubView.ADD_LUNA -> "Add Amazon Luna Game"
                             AddModalSubView.ADD_WEB_URL -> "Add Web URL"
+                            AddModalSubView.ADD_SYSTEM_SHORTCUT -> "Add System Shortcut"
                         },
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Bold,
@@ -237,6 +257,10 @@ fun AddContentModal(
                                     onSelectLuna = { onNavigateSubView(AddModalSubView.ADD_LUNA) },
                                     onSelectMoonlight = onOpenMoonlight,
                                     onSelectWebUrl = { onNavigateSubView(AddModalSubView.ADD_WEB_URL) },
+                                    onSelectSystemShortcut = {
+                                        selectedShortcutAppPackage = null
+                                        onNavigateSubView(AddModalSubView.ADD_SYSTEM_SHORTCUT)
+                                    },
                                     firstOptionFocusRequester = targetPrimaryFocusRequester
                                 )
                             }
@@ -258,6 +282,16 @@ fun AddContentModal(
                                     searchFocusRequester = targetPrimaryFocusRequester
                                 )
                             }
+                            AddModalSubView.ADD_SYSTEM_SHORTCUT -> {
+                                AddSystemShortcutView(
+                                    selectedAppPackage = selectedShortcutAppPackage,
+                                    onSelectAppPackage = { selectedShortcutAppPackage = it },
+                                    onAddLauncherShortcut = onAddSystemLauncherShortcut,
+                                    onCreateShortcutResult = onCreateSystemShortcutResult,
+                                    onOpenHomeSettings = onOpenHomeSettings,
+                                    searchFocusRequester = targetPrimaryFocusRequester
+                                )
+                            }
                         }
                     }
                 }
@@ -273,6 +307,7 @@ private data class DiscoverOption(
     val icon: ImageVector,
     val title: String,
     val testTag: String,
+    val materialYouTonalBadge: Boolean = false,
     val onClick: () -> Unit
 )
 
@@ -337,6 +372,7 @@ internal fun OptionsSelectView(
     onSelectLuna: () -> Unit,
     onSelectMoonlight: () -> Unit,
     onSelectWebUrl: () -> Unit,
+    onSelectSystemShortcut: () -> Unit = {},
     firstOptionFocusRequester: FocusRequester = remember { FocusRequester() },
     iconResolver: suspend (Context, Map<String, String>) -> Map<String, String> = { ctx, themed ->
         resolveDiscoverOptionIcons(ctx, themed)
@@ -381,6 +417,13 @@ internal fun OptionsSelectView(
             title = "Web URL",
             testTag = "option_add_web_url",
             onClick = onSelectWebUrl
+        ),
+        DiscoverOption(
+            icon = Icons.Default.Android,
+            title = "System Shortcut",
+            testTag = "option_add_system_shortcut",
+            materialYouTonalBadge = true,
+            onClick = onSelectSystemShortcut
         )
     )
 
@@ -417,6 +460,7 @@ internal fun OptionsSelectView(
                                     icon = option.icon,
                                     appIconUrl = resolvedIcons[option.testTag],
                                     title = option.title,
+                                    materialYouTonalBadge = option.materialYouTonalBadge,
                                     onClick = option.onClick,
                                     testTag = option.testTag,
                                     modifier = Modifier
@@ -441,6 +485,7 @@ internal fun OptionsSelectView(
                             icon = option.icon,
                             appIconUrl = resolvedIcons[option.testTag],
                             title = option.title,
+                            materialYouTonalBadge = option.materialYouTonalBadge,
                             onClick = option.onClick,
                             testTag = option.testTag,
                             modifier = Modifier
@@ -459,6 +504,7 @@ private fun OptionCard(
     icon: ImageVector,
     appIconUrl: String?,
     title: String,
+    materialYouTonalBadge: Boolean = false,
     onClick: () -> Unit,
     testTag: String,
     modifier: Modifier = Modifier
@@ -513,19 +559,38 @@ private fun OptionCard(
                         .testTag("${testTag}_app_icon")
                 )
             } else {
-                Box(
-                    modifier = Modifier
+                val badgeModifier = if (materialYouTonalBadge) {
+                    Modifier
+                        .size(54.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.primaryContainer,
+                                    MaterialTheme.colorScheme.tertiaryContainer
+                                )
+                            )
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                } else {
+                    Modifier
                         .size(54.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.primaryContainer)
-                        .testTag("${testTag}_symbolic_icon"),
+                }
+                Box(
+                    modifier = badgeModifier.testTag("${testTag}_symbolic_icon"),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier.size(if (materialYouTonalBadge) 30.dp else 28.dp)
                     )
                 }
             }
