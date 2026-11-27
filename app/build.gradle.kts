@@ -5,6 +5,32 @@ plugins {
   alias(libs.plugins.secrets)
 }
 
+val semverName =
+  providers
+    .gradleProperty("appVersionName")
+    .orElse(providers.environmentVariable("APP_VERSION_NAME"))
+    .orElse("1.0.76")
+    .get()
+    .removePrefix("v")
+    .trim()
+val semverCoreParts = semverName.substringBefore("-").substringBefore("+").split(".")
+require(semverCoreParts.size == 3 && semverCoreParts.all { it.toIntOrNull() != null }) {
+  "Expected semantic version MAJOR.MINOR.PATCH (e.g. 1.0.76), got '$semverName'"
+}
+val (semverMajor, semverMinor, semverPatch) = semverCoreParts.map { it.toInt() }
+require(semverMajor >= 0 && semverMinor in 0..999 && semverPatch in 0..999) {
+  "Semantic version components out of range for Play Store versionCode: '$semverName'"
+}
+// Android and Google Play require an integer versionCode; derive it monotonically from
+// MAJOR.MINOR.PATCH (e.g. 1.0.76 -> 1000076, 1.0.77 -> 1000077).
+val computedVersionCode = semverMajor * 1_000_000 + semverMinor * 1_000 + semverPatch
+val explicitVersionCode =
+  providers
+    .gradleProperty("appVersionCode")
+    .orElse(providers.environmentVariable("APP_VERSION_CODE"))
+    .orNull
+    ?.toIntOrNull()
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -13,8 +39,8 @@ android {
     applicationId = "com.aistudio.nexuslauncher.vrtx"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2
-    versionName = "2.0"
+    versionCode = explicitVersionCode ?: computedVersionCode
+    versionName = semverName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

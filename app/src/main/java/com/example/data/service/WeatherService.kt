@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import androidx.core.content.ContextCompat
+import com.example.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -334,7 +335,8 @@ class WeatherService internal constructor(
     companion object {
         private const val MAX_NWS_STATIONS_TO_PROBE = 4
         private const val MAX_POINT_CACHE_ENTRIES = 16
-        private const val NWS_USER_AGENT = "NexusLauncher/2.0 (Android launcher weather widget)"
+        private val NWS_USER_AGENT =
+            "NexusLauncher/${BuildConfig.VERSION_NAME} (Android launcher weather widget)"
 
         private fun defaultClient(): OkHttpClient = HttpClients.shared.newBuilder()
             .connectTimeout(10, TimeUnit.SECONDS)

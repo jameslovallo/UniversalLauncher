@@ -57,9 +57,37 @@ jobs:
           printf 'GOOGLE_TV_OAUTH_CLIENT_SECRET=%s\n' "$GOOGLE_TV_OAUTH_CLIENT_SECRET" >> .env
         fi
 
+    # Determine the semantic version for this build before Gradle runs so BuildConfig
+    # and AndroidManifest embed the exact version matching the release tag.
+    - name: Compute Semantic Version
+      run: |
+        LATEST_TAG=$(git tag -l "v*.*.*" | sort -V | tail -n 1)
+        if [ -z "$LATEST_TAG" ]; then
+          BASE_VER=$(sed -nE 's/.*orElse\("([0-9]+\.[0-9]+\.[0-9]+)"\).*/\1/p' app/build.gradle.kts | head -n 1)
+          BASE_VER=${BASE_VER:-1.0.76}
+          LATEST_TAG="v${BASE_VER}"
+        fi
+
+        CLEAN_TAG="${LATEST_TAG#v}"
+        if [ "${{ github.event_name }}" = "push" ] && { [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.ref }}" = "refs/heads/master" ]; }; then
+          MAJOR=$(echo "$CLEAN_TAG" | cut -d. -f1)
+          MINOR=$(echo "$CLEAN_TAG" | cut -d. -f2)
+          PATCH=$(echo "$CLEAN_TAG" | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEXT_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+          NEW_TAG="v${NEXT_VERSION}"
+        else
+          NEXT_VERSION="$CLEAN_TAG"
+          NEW_TAG="$LATEST_TAG"
+        fi
+
+        echo "Computed semantic version: $NEXT_VERSION (tag: $NEW_TAG)"
+        echo "APP_VERSION_NAME=$NEXT_VERSION" >> "$GITHUB_ENV"
+        echo "NEW_TAG=$NEW_TAG" >> "$GITHUB_ENV"
+
     # Execute the build directly using the Gradle installed by setup-gradle
     - name: Build with Gradle
-      run: gradle -Djava.awt.headless=true assembleDebug
+      run: gradle -Djava.awt.headless=true assembleDebug -PappVersionName="$APP_VERSION_NAME"
 
     - name: Clean Build Secrets
       if: always()
@@ -77,22 +105,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # Find latest semver tag vX.Y.Z
-        LATEST_TAG=$(git tag -l "v*.*.*" | sort -V | tail -n 1)
-        if [ -z "$LATEST_TAG" ]; then
-          # Fallback to the app's initial version
-          NEW_TAG="v1.0.1"
-        else
-          # Extract major, minor, patch
-          CLEAN_TAG="${LATEST_TAG#v}"
-          MAJOR=$(echo "$CLEAN_TAG" | cut -d. -f1)
-          MINOR=$(echo "$CLEAN_TAG" | cut -d. -f2)
-          PATCH=$(echo "$CLEAN_TAG" | cut -d. -f3)
-          NEW_PATCH=$((PATCH + 1))
-          NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
-        fi
-
-        echo "Computed next release tag: $NEW_TAG"
+        echo "Publishing release tag: $NEW_TAG (version $APP_VERSION_NAME)"
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git tag -a "$NEW_TAG" -m "Release $NEW_TAG"

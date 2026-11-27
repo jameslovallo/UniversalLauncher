@@ -42,7 +42,9 @@ class WeatherServiceTest {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val client = mockClient { url, request ->
             requestedUrls.add(url)
-            assertTrue(request.header("User-Agent")?.isNotBlank() == true)
+            val userAgent = request.header("User-Agent").orEmpty()
+            assertTrue(userAgent.contains("NexusLauncher/${com.example.BuildConfig.VERSION_NAME}"))
+            assertTrue(com.example.BuildConfig.VERSION_NAME.matches(Regex("""\d+\.\d+\.\d+""")))
             when {
                 url == "https://api.weather.gov/points/47.6062,-122.3321" -> 200 to """
                     {
